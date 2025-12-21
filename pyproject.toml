@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "deep-agents"
 version = "0.1.0"
@@ -15,5 +19,10 @@ dependencies = [
     "langgraph>=1.0.4",
     "mlflow>=3.7.0",
     "pandas>=2.3.3",
+    "pydantic>=2.12.5",
+    "pyyaml>=6.0",
     "torch>=2.9.1",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

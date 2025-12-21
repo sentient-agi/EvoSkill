@@ -608,7 +608,7 @@ wheels = [
 [[package]]
 name = "deep-agents"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "claude-agent-sdk" },
     { name = "datasets" },
@@ -620,6 +620,7 @@ dependencies = [
     { name = "langgraph" },
     { name = "mlflow" },
     { name = "pandas" },
+    { name = "pydantic" },
     { name = "torch" },
 ]
 
@@ -635,6 +636,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.0.4" },
     { name = "mlflow", specifier = ">=3.7.0" },
     { name = "pandas", specifier = ">=2.3.3" },
+    { name = "pydantic", specifier = ">=2.12.5" },
     { name = "torch", specifier = ">=2.9.1" },
 ]
 
