@@ -42,6 +42,7 @@ def get_base_agent_options() -> ClaudeAgentOptions:
         permission_mode='acceptEdits',
         add_dirs=[file_path],
         cwd=get_project_root(),
+        max_buffer_size=10 * 1024 * 1024,  # 10MB buffer (default is 1MB)
     )
 
 
