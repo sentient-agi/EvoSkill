@@ -23,6 +23,12 @@ def _log(phase: str, message: str = "", indent: int = 0) -> None:
         print(f"{prefix}{message}")
 
 
+def _score_multi_tolerance(predicted: str, ground_truth: str) -> float:
+    """Score answer using multiple tolerance levels and return average."""
+    scores = [score_answer(predicted, ground_truth, tol) for tol in TOLERANCE_LEVELS]
+    return sum(scores) / len(scores)
+
+
 from src.agent_profiles.base_agent import get_base_agent_options
 from src.agent_profiles.skill_generator import get_project_root
 from src.evaluation import score_answer, evaluate_agent_parallel
@@ -46,6 +52,8 @@ from .helpers import (
 
 
 T = TypeVar("T")
+
+TOLERANCE_LEVELS = [0.05, 0.01, 0.1, 0.0, 0.025]
 
 
 @dataclass
@@ -156,13 +164,12 @@ class SelfImprovingLoop:
                 trace.output.final_answer if trace.output else "[PARSE FAILED]"
             )
 
-            # Check if correct
-            is_correct = score_answer(
+            # Check if correct (average across multiple tolerance levels)
+            avg_score = _score_multi_tolerance(
                 agent_answer.strip().lower(),
                 answer.strip().lower(),
-                tolerance=self.config.tolerance,
             )
-            if is_correct:
+            if avg_score == 1.0:
                 _log("", f"  \u2713 Correct")
                 continue
 
@@ -259,10 +266,9 @@ class SelfImprovingLoop:
 
         score = 0.0
         for result in results:
-            score += score_answer(
+            score += _score_multi_tolerance(
                 result.trace.output.final_answer,
                 result.ground_truth,
-                tolerance=self.config.tolerance,
             )
         return score / len(results)
 

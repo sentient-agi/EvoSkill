@@ -17,6 +17,7 @@ results/
 .venv
 .env
 .DS_Store
+.dataset/
 
 # Cache
 .cache/
