@@ -155,8 +155,15 @@ class SelfImprovingLoop:
             self._iteration_offset = self._get_highest_iteration()
             _log("CONTINUE", f"Resuming from iteration {self._iteration_offset}")
 
-        # 1. Create and evaluate base program if needed
-        await self._ensure_base_program()
+        # 1. Create and evaluate base program if needed (skip in continue mode with existing frontier)
+        if self.config.continue_mode and self.manager.get_frontier():
+            # Continue mode: use existing frontier, switch to best program
+            best = self._get_best_parent()
+            self.manager.switch_to(best)
+            frontier_str = ", ".join(f"{n}:{s:.2f}" for n, s in self.manager.get_frontier_with_scores())
+            _log("CONTINUE", f"Using existing frontier: [{frontier_str}]")
+        else:
+            await self._ensure_base_program()
 
         # 2. Main loop
         no_improvement_count = 0
