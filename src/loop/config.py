@@ -38,6 +38,9 @@ class LoopConfig:
     # Helps identify patterns rather than overfitting to single failures
     failure_sample_count: int = 3
 
+    # Sample selection seed: None = sequential sampling, int = random with seed
+    sample_seed: int | None = None
+
     # Feedback configuration
     reset_feedback: bool = True
 

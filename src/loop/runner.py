@@ -1,6 +1,7 @@
 """Self-improving agent loop runner."""
 
 import asyncio
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Generic, TypeVar
@@ -144,6 +145,7 @@ class SelfImprovingLoop:
         Returns:
             LoopResult with frontier, best program, and iteration count.
         """
+<<<<<<< Updated upstream
         # 0. Handle feedback and iteration offset based on mode
         if not self.config.continue_mode:
             # Start fresh: reset feedback if configured, reset iteration numbering
@@ -155,6 +157,25 @@ class SelfImprovingLoop:
             self._iteration_offset = self._get_highest_iteration()
             _log("CONTINUE", f"Resuming from iteration {self._iteration_offset}")
 
+=======
+        # 0. Handle continue mode and feedback reset
+        if not self.config.continue_mode:
+            # Start fresh: reset feedback if configured
+            if self.config.reset_feedback and self._feedback_path.exists():
+                self._feedback_path.unlink()
+            iteration_offset = 0
+        else:
+            # Continue mode: keep feedback, find highest iteration number
+            iteration_offset = self._get_highest_iteration()
+            _log("CONTINUE", f"Resuming from iteration {iteration_offset}")
+
+        # Initialize random generator for sample selection if seed provided
+        if self.config.sample_seed is not None:
+            sample_rng = random.Random(self.config.sample_seed)
+        else:
+            sample_rng = None
+
+>>>>>>> Stashed changes
         # 1. Create and evaluate base program if needed (skip in continue mode with existing frontier)
         if self.config.continue_mode and self.manager.get_frontier():
             # Continue mode: use existing frontier, switch to best program
@@ -168,7 +189,7 @@ class SelfImprovingLoop:
         # 2. Main loop
         no_improvement_count = 0
         iteration_count = 0
-        sample_offset = 0  # Track which samples we've used
+        sample_offset = 0  # Track which samples we've used (for sequential mode)
 
         for i in range(self.config.max_iterations):
             iteration_count = i + 1
@@ -180,11 +201,16 @@ class SelfImprovingLoop:
 
             # Test multiple samples in parallel and collect failures
             samples_to_test = min(self.config.failure_sample_count, len(self.train_data))
-            test_samples = [
-                self.train_data[(sample_offset + j) % len(self.train_data)]
-                for j in range(samples_to_test)
-            ]
-            sample_offset += samples_to_test
+            if sample_rng is not None:
+                # Random sampling with seed
+                test_samples = sample_rng.sample(self.train_data, samples_to_test)
+            else:
+                # Sequential sampling
+                test_samples = [
+                    self.train_data[(sample_offset + j) % len(self.train_data)]
+                    for j in range(samples_to_test)
+                ]
+                sample_offset += samples_to_test
 
             _log("", f"  Testing {samples_to_test} samples in parallel...")
 
@@ -221,8 +247,9 @@ class SelfImprovingLoop:
                 0.0
             )
 
-            # Run proposer with all failures
-            mutation_result = await self._mutate(parent, failures, iteration_count)
+            # Run proposer with all failures (use actual iteration number with offset)
+            actual_iteration = iteration_count + iteration_offset
+            mutation_result = await self._mutate(parent, failures, actual_iteration)
 
             if mutation_result is None:
                 no_improvement_count += 1
@@ -433,7 +460,11 @@ class SelfImprovingLoop:
         programs = self.manager.list_programs()
         max_iter = 0
         for p in programs:
+<<<<<<< Updated upstream
             # Match iter-skill-N or iter-prompt-N or iter-N
+=======
+            # Match iter-N pattern
+>>>>>>> Stashed changes
             if p.startswith("iter-"):
                 parts = p.split("-")
                 try:
