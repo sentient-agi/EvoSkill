@@ -93,32 +93,13 @@ Before execution, articulate the plan:
 
 ### Phase 6: Pre-Output Verification (MANDATORY)
 
-Before outputting any final answer, verify:
+Before outputting, check:
+1. Units/dimensions correct for question type?
+2. Value in reasonable magnitude range?
+3. Formula actually computed (not just numerator)?
+4. Answer addresses exactly what was asked?
 
-1. **Dimensionality check**: Does my answer have the correct units/dimensions?
-   - If question asks for a "ratio" or "normalized" value → answer should be dimensionless
-   - If question asks for "in billions" → answer should be a number representing billions
-   - If question asks for "percentage" → answer should be between 0-100 (or 0-1 depending on context)
-
-2. **Magnitude sanity check**: Is the answer in a reasonable range?
-   - Compare against intermediate values - does the answer make sense?
-
-3. **Formula-to-answer match**: Does my calculated value match what the formula produces?
-   - Re-check: If I calculated both numerator and denominator, did I actually DIVIDE?
-   - CRITICAL: Do not output the numerator when the question asks for a ratio
-
-4. **Question-to-answer match**: Re-read the question and verify the answer addresses EXACTLY what was asked
-
-**Verification output format:**
-```
-## Pre-Output Verification
-Question asks for: [exact phrase from question]
-Formula used: [formula with values substituted]
-My calculation produces: [value with units]
-Expected output type: [ratio/percentage/absolute value/etc.]
-Dimensionality: [correct/incorrect]
-Final answer: [value]
-```
+If ANY check fails → re-verify inputs and calculation.
 
 ## Remember
 
