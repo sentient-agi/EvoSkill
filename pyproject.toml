@@ -24,6 +24,7 @@ dependencies = [
     "plotly>=6.5.2",
     "pydantic>=2.12.5",
     "pyyaml>=6.0",
+    "seaborn>=0.13.2",
     "torch>=2.9.1",
 ]
 
