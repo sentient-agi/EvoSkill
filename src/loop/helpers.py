@@ -13,6 +13,7 @@ def build_proposer_query(
     feedback_history: str,
     evolution_mode: str = "skill_only",
     truncation_level: int = 0,
+    query_footer: str | None = None,
 ) -> str:
     """Build the query for the proposer agent from multiple failure traces.
 
@@ -82,6 +83,13 @@ Ground Truth: {ground_truth}
 
     failures_text = "\n".join(failure_sections)
 
+    default_footer = """## Your Task
+1. Check if any EXISTING skill should have handled these failures
+2. If yes → propose EDITING that skill (action="edit", target_skill="skill-name")
+3. If no → propose a NEW skill (action="create")
+4. Reference any related DISCARDED iterations and explain how your proposal differs
+5. Identify what COMMON pattern or capability gap caused these failures across categories"""
+
     return f"""## Existing Skills (check before proposing new ones)
 {skills_list}
 
@@ -94,12 +102,7 @@ Analyze the patterns across these failures to identify a GENERAL improvement, no
 
 {failures_text}
 
-## Your Task
-1. Check if any EXISTING skill should have handled these failures
-2. If yes → propose EDITING that skill (action="edit", target_skill="skill-name")
-3. If no → propose a NEW skill (action="create")
-4. Reference any related DISCARDED iterations and explain how your proposal differs
-5. Identify what COMMON pattern or capability gap caused these failures across categories"""
+{query_footer or default_footer}"""
 
 
 def build_skill_query(proposer_trace: "AgentTrace[ProposerResponse]") -> str:
