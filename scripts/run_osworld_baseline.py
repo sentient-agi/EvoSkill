@@ -84,9 +84,16 @@ def save_task_result(result_dir: Path, task: "OSWorldTask", trace_data: dict, sc
     with open(task_dir / "result.txt", "w") as f:
         f.write(f"{score}\n")
     try:
+        # Save conversation as separate JSONL for easy streaming/parsing
+        conversation = trace_data.get("conversation", [])
+        if conversation:
+            with open(task_dir / "conversation.jsonl", "w", encoding="utf-8") as f:
+                for msg in conversation:
+                    f.write(json.dumps(msg, default=str) + "\n")
+
         serializable = {
             k: v for k, v in trace_data.items()
-            if k not in ("messages", "output", "raw_structured_output")
+            if k not in ("messages", "output", "raw_structured_output", "conversation")
         }
         if output:
             serializable["output"] = output.model_dump()
@@ -125,6 +132,10 @@ def load_completed_tasks(result_dir: Path) -> dict[str, dict]:
                         output = trace.get("output")
                         entry["status"] = output.get("status", "unknown") if output else "unknown"
                         entry["is_error"] = trace.get("is_error", False)
+                    # Skip errored tasks so they get re-run
+                    if entry["is_error"]:
+                        logger.info(f"Will retry errored task {task_dir.name}")
+                        continue
                     completed[task_dir.name] = entry
                 except (ValueError, json.JSONDecodeError) as e:
                     logger.warning(f"Skipping corrupt result {task_dir}: {e}")
