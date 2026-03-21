@@ -281,9 +281,21 @@ class SelfImprovingLoop:
 
             _log("", f"  Testing {len(test_samples)} samples from categories: {', '.join(sampled_cats)}...")
 
-            # Run all samples concurrently
+            # NOTE: Original unbounded gather commented out due to consistent
+            # corruption of the claude.json file when too many agents run at once.
+            # traces = await asyncio.gather(*[
+            #     self.agents.base.run(question) for question, _, _ in test_samples
+            # ])
+
+            # Run samples with concurrency limit to prevent claude.json corruption
+            semaphore = asyncio.Semaphore(self.config.concurrency)
+
+            async def run_one(question: str) -> AgentTrace:
+                async with semaphore:
+                    return await self.agents.base.run(question)
+
             traces = await asyncio.gather(*[
-                self.agents.base.run(question) for question, _, _ in test_samples
+                run_one(question) for question, _, _ in test_samples
             ])
 
             # Collect failures
