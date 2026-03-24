@@ -290,7 +290,7 @@ class SelfImprovingLoop:
             # Run samples with concurrency limit to prevent claude.json corruption
             semaphore = asyncio.Semaphore(self.config.concurrency)
 
-            async def run_one(question: str) -> AgentTrace | None:
+            async def run_with_limit(question: str) -> AgentTrace | None:
                 async with semaphore:
                     try:
                         return await self.agents.base.run(question)
@@ -300,7 +300,7 @@ class SelfImprovingLoop:
                         return None
 
             traces = await asyncio.gather(*[
-                run_one(question) for question, _, _ in test_samples
+                run_with_limit(question) for question, _, _ in test_samples
             ])
 
             # Collect failures
