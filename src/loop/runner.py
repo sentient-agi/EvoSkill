@@ -290,9 +290,14 @@ class SelfImprovingLoop:
             # Run samples with concurrency limit to prevent claude.json corruption
             semaphore = asyncio.Semaphore(self.config.concurrency)
 
-            async def run_one(question: str) -> AgentTrace:
+            async def run_one(question: str) -> AgentTrace | None:
                 async with semaphore:
-                    return await self.agents.base.run(question)
+                    try:
+                        return await self.agents.base.run(question)
+                    except Exception as e:
+                        _log("", f"    [ERROR] {question[:40]}... ({type(e).__name__})")
+                        self._save_error_trace(actual_iteration, question, e)
+                        return None
 
             traces = await asyncio.gather(*[
                 run_one(question) for question, _, _ in test_samples
@@ -301,6 +306,8 @@ class SelfImprovingLoop:
             # Collect failures
             failures: list[tuple[AgentTrace, str, str, str]] = []  # (trace, agent_answer, ground_truth, category)
             for trace, (question, answer, category) in zip(traces, test_samples):
+                if trace is None:
+                    continue
                 agent_answer = (
                     trace.output.final_answer if trace.output else "[PARSE FAILED]"
                 )
@@ -391,6 +398,27 @@ class SelfImprovingLoop:
             best_program=best or "base",
             best_score=best_score,
             iterations_completed=iteration_count,
+        )
+
+    def _save_error_trace(self, iteration: int, question: str, error: Exception) -> None:
+        """Save error trace to disk for debugging timeouts and crashes."""
+        trace_dir = self._project_root / ".claude" / "traces" / f"iter_{iteration:03d}"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+
+        existing = list(trace_dir.glob("error_*.json"))
+        idx = len(existing)
+
+        record = {
+            "question": question,
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+            "status": "ERROR",
+        }
+
+        filename = f"error_{idx:02d}_{type(error).__name__}.json"
+        (trace_dir / filename).write_text(
+            json.dumps(record, indent=2, ensure_ascii=False),
+            encoding="utf-8",
         )
 
     async def _ensure_base_program(self) -> None:
