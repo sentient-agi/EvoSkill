@@ -129,7 +129,8 @@ class EvoSkill:
     ) -> tuple[dict[str, list[tuple[str, str]]], list[tuple[str, str, str]]]:
         """Load dataset and split into train/val."""
         data = load_dataset(self._dataset_path, self._task_config)
-        return stratified_split(data, self._train_ratio, self._val_ratio)
+        train_pools, val_data, _test_data = stratified_split(data, self._train_ratio, self._val_ratio)
+        return train_pools, val_data
 
     @property
     def dataset_info(self) -> dict:
