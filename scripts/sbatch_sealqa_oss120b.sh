@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --job-name=sealqa-gemini
+#SBATCH --job-name=eval-comb
 #SBATCH --account=llms-lab
 #SBATCH --time=04:00:00
 #SBATCH --partition=normal_q
-#SBATCH --output=job-outputs/sealqa-%j.out
-#SBATCH --error=job-outputs/sealqa-%j.err
+#SBATCH --output=job-outputs/evalcomb-%j.out
+#SBATCH --error=job-outputs/evalcomb-%j.err
 #SBATCH --mem=16G
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=kuzoto@vt.edu
@@ -27,7 +27,7 @@ if [ ! -f ".dataset/seal-0.csv" ]; then
     exit 1
 fi
 
-echo "Running SEAL-QA evaluation with Gemini 3.1 Flash..."
-~/.local/bin/uv run scripts/run_sealqa_opencode.py "$@"
+echo "Running single evaluation entry..."
+~/.local/bin/uv run scripts/run_eval_comb.py "$@"
 
 echo "Job complete."
