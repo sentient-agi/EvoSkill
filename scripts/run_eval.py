@@ -18,6 +18,7 @@ from src.agent_profiles import (
     make_base_agent_options,
     set_sdk,
 )
+from src.api.data_utils import stratified_split
 from src.evaluation.eval_full import evaluate_full, load_results
 from src.schemas import AgentResponse
 
@@ -52,6 +53,16 @@ class EvalSettings(BaseSettings):
         default="claude",
         description="SDK to use: 'claude' or 'opencode'",
     )
+    held_out: bool = Field(
+        default=False,
+        description="Evaluate only on the held-out test set (excludes train/val samples)",
+    )
+    train_ratio: float = Field(
+        default=0.18, description="Train ratio for stratified split"
+    )
+    val_ratio: float = Field(
+        default=0.12, description="Val ratio for stratified split"
+    )
 
 
 async def main(settings: EvalSettings):
@@ -59,6 +70,15 @@ async def main(settings: EvalSettings):
 
     # Load dataset
     data = pd.read_csv(settings.dataset_path)
+
+    if settings.held_out:
+        data.rename(columns={"answer": "ground_truth", "difficulty": "category"}, inplace=True)
+        _train, _val, test_data = stratified_split(data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio)
+        # Rebuild dataframe from held-out tuples
+        data = pd.DataFrame(test_data, columns=["question", "answer", "difficulty"])
+        print(f"Held-out test set: {len(data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
+    else:
+        print(f"Full dataset: {len(data)} samples")
 
     # Filter by difficulty if requested
     if settings.difficulty != "all":
@@ -68,7 +88,7 @@ async def main(settings: EvalSettings):
     if settings.num_samples is not None:
         data = data.head(settings.num_samples)
 
-    print(f"Dataset: {len(data)} samples ({settings.difficulty})")
+    print(f"Evaluating: {len(data)} samples (difficulty={settings.difficulty})")
 
     # Prepare items with index
     items = [
