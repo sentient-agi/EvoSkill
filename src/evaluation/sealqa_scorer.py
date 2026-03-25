@@ -79,12 +79,14 @@ def score_sealqa(question: str, ground_truth: str, predicted: str) -> float:
     """Score a SEAL-QA answer. Returns 0.0 or 1.0."""
     import os
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if api_key:
-        lm = dspy.LM("gemini/gemini-2.5-flash", api_key=api_key)
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
+    arc_key = os.environ.get("ARC_LLM_API_KEY")
+    if openrouter_key:
+        lm = dspy.LM("openrouter/google/gemini-2.5-flash", api_key=openrouter_key)
+    elif arc_key:
+        lm = dspy.LM("openai/gpt-oss-120b", api_key=arc_key, api_base="https://llm-api.arc.vt.edu/api/v1")
     else:
-        # Fall back to local opencode server
-        lm = dspy.LM("openai/gpt-oss-120b", api_base="http://127.0.0.1:4096")
+        raise RuntimeError("No scorer API key found. Set OPENROUTER_API_KEY or ARC_LLM_API_KEY in .env")
 
     system_prompt = GRADER_TEMPLATE.format(
         question=question, target=ground_truth, predicted_answer=predicted

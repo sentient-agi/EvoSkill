@@ -10,6 +10,7 @@ from src.loop import SelfImprovingLoop, LoopConfig, LoopAgents
 from src.agent_profiles import (
     Agent,
     set_sdk,
+    make_sealqa_agent_options,
     skill_proposer_options,
     prompt_proposer_options,
     skill_generator_options,
@@ -125,35 +126,35 @@ def parse_args() -> argparse.Namespace:
         help="Path to SEAL-QA CSV (default: .dataset/seal-0.csv)",
     )
     parser.add_argument(
-        "--train-count",
-        type=int,
-        default=8,
-        help="Number of questions for training (default: 8, positional from start)",
+        "--train-ratio",
+        type=float,
+        default=0.13,
+        help="Fraction of each category for training (default: 0.13 -> 14 samples)",
     )
     parser.add_argument(
-        "--val-count",
-        type=int,
-        default=3,
-        help="Number of questions for validation (default: 3, positional after train)",
+        "--val-ratio",
+        type=float,
+        default=0.13,
+        help="Fraction of each category for validation (default: 0.13 -> 14 samples)",
     )
     parser.add_argument(
         "--model",
         type=str,
-        default="gemini-3.1-flash-lite-preview",
-        help="Model for base agent (default: gemini-3.1-flash-lite-preview)",
+        default="claude-opus-4-5-20251101",
+        help="Model for base agent (default: claude-opus-4-5-20251101)",
     )
     parser.add_argument(
         "--provider",
         type=str,
-        default="gemini",
-        help="Provider ID for base agent (default: gemini)",
+        default=None,
+        help="Provider ID for opencode SDK (e.g., gemini, arc)",
     )
     parser.add_argument(
         "--sdk",
         type=str,
         choices=["opencode", "claude"],
-        default="opencode",
-        help="SDK for base agent: 'opencode' or 'claude' (default: opencode)",
+        default="claude",
+        help="SDK for base agent: 'opencode' or 'claude' (default: claude)",
     )
     return parser.parse_args()
 
@@ -172,12 +173,14 @@ async def main(args: argparse.Namespace):
     total_train = sum(len(pool) for pool in train_pools.values())
     categories = list(train_pools.keys())
     print(f"Dataset: {args.dataset}")
-    print(f"Split: train[0:{args.train_count}] ({total_train}), val[{args.train_count}:{args.train_count + args.val_count}] ({len(val_data)})")
-    print(f"Train categories ({len(categories)}): {', '.join(f'{cat}: {len(pool)}' for cat, pool in train_pools.items())}")
-    print(f"Val samples: {len(val_data)}")
+    print(f"Categories ({len(categories)}): {', '.join(categories)}")
+    print(f"Training pools: {', '.join(f'{cat}: {len(pool)}' for cat, pool in train_pools.items())}")
+    print(f"Total training samples: {total_train}")
+    print(f"Validation samples: {len(val_data)} ({args.val_ratio:.0%} per category, min 1 each)")
+    print(f"Split ratios: train={args.train_ratio:.0%}, val={args.val_ratio:.0%} (remaining {1-args.train_ratio-args.val_ratio:.0%} unused)")
 
     # Build base agent options
-    base_options = get_sealqa_agent_options(model=args.model, provider=args.provider)
+    base_options = make_sealqa_agent_options(model=args.model, provider=args.provider)
 
     agents = LoopAgents(
         base=Agent(base_options, AgentResponse),
@@ -208,8 +211,8 @@ async def main(args: argparse.Namespace):
         capture_output=True, text=True, cwd=get_project_root(),
     ).stdout.strip()
 
-    print(f"Running loop: sdk={args.sdk}, model={args.model}, provider={args.provider}, mode={args.mode}")
-    print(f"Config: max_iter={args.max_iterations}, cats_per_batch=2, samples_per_cat=1 (~1.5 epochs)")
+    model_info = f", model={args.model}" if args.model else ""
+    print(f"Running loop with evolution_mode={args.mode}, sdk={args.sdk}{model_info}")
     loop = SelfImprovingLoop(config, agents, manager, train_pools, val_data, scorer=_sealqa_scorer)
     result = await loop.run()
 

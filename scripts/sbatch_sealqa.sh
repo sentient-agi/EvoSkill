@@ -13,6 +13,7 @@ if [ -f .env ]; then
     set -a; source .env; set +a
 fi
 
+export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.opencode/bin:$PATH"
 export PYTHONPATH=$PYTHONPATH:$SLURM_SUBMIT_DIR
 export PYTHONUNBUFFERED=1
 
