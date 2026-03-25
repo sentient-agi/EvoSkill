@@ -10,7 +10,7 @@ from src.api.data_utils import stratified_split
 from src.loop import SelfImprovingLoop, LoopConfig, LoopAgents
 from src.agent_profiles import (
     Agent,
-    sealqa_agent_options,
+    set_sdk,
     make_sealqa_agent_options,
     skill_proposer_options,
     prompt_proposer_options,
@@ -99,26 +99,41 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--train-ratio",
         type=float,
-        default=0.18,
-        help="Fraction of each category for training (default: 0.18)",
+        default=0.13,
+        help="Fraction of each category for training (default: 0.13 -> 14 samples)",
     )
     parser.add_argument(
         "--val-ratio",
         type=float,
-        default=0.12,
-        help="Fraction of each category for validation (default: 0.12)",
+        default=0.13,
+        help="Fraction of each category for validation (default: 0.13 -> 14 samples)",
     )
     parser.add_argument(
         "--model",
         type=str,
-        choices=["opus", "sonnet", "haiku"],
         default="claude-opus-4-5-20251101",
-        help="Model for base agent (default: opus via SDK default)",
+        help="Model for base agent (default: claude-opus-4-5-20251101)",
+    )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        default=None,
+        help="Provider ID for opencode SDK (e.g., gemini, arc)",
+    )
+    parser.add_argument(
+        "--sdk",
+        type=str,
+        choices=["opencode", "claude"],
+        default="claude",
+        help="SDK for base agent: 'opencode' or 'claude' (default: claude)",
     )
     return parser.parse_args()
 
 
 async def main(args: argparse.Namespace):
+    # Set SDK for base agent
+    set_sdk(args.sdk)
+
     data = pd.read_csv(args.dataset)
 
     # Rename SEAL-QA columns to match stratified_split expectations
@@ -137,8 +152,8 @@ async def main(args: argparse.Namespace):
     print(f"Validation samples: {len(val_data)} ({args.val_ratio:.0%} per category, min 1 each)")
     print(f"Split ratios: train={args.train_ratio:.0%}, val={args.val_ratio:.0%} (remaining {1-args.train_ratio-args.val_ratio:.0%} unused)")
 
-    # Use custom model for sealqa agent if specified
-    base_options = make_sealqa_agent_options(model=args.model) if args.model else sealqa_agent_options
+    # Build base agent options
+    base_options = make_sealqa_agent_options(model=args.model, provider=args.provider)
 
     agents = LoopAgents(
         base=Agent(base_options, AgentResponse),
@@ -162,13 +177,26 @@ async def main(args: argparse.Namespace):
         continue_mode=args.continue_loop,
     )
 
+    # Remember the starting branch so we can export skills back to it
+    import subprocess
+    starting_branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True, cwd=get_project_root(),
+    ).stdout.strip()
+
     model_info = f", model={args.model}" if args.model else ""
-    print(f"Running loop with evolution_mode={args.mode}{model_info}")
+    print(f"Running loop with evolution_mode={args.mode}, sdk={args.sdk}{model_info}")
     loop = SelfImprovingLoop(config, agents, manager, train_pools, val_data, scorer=_sealqa_scorer)
     result = await loop.run()
 
     print(f"Best: {result.best_program} ({result.best_score:.2%})")
     print(f"Frontier: {result.frontier}")
+
+    # Export best skills back to the starting branch so eval scripts can use them
+    if result.best_program != "base" and args.mode == "skill_only":
+        exported = loop.export_best_skills(target_branch=starting_branch)
+        if exported:
+            print(f"Exported skills to {starting_branch}: {exported}")
 
 
 if __name__ == "__main__":

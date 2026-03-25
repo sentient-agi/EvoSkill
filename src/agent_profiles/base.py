@@ -11,6 +11,15 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
+
+class OpenCodeMessage:
+    """Simple container for opencode CLI JSON output, pickleable."""
+
+    def __init__(self):
+        self.parts = []
+        self.info = {}
+        self.session_id = None
+
 # Import ClaudeAgentOptions at module level for type hints only
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeAgentOptions as ClaudeAgentOptionsType
@@ -128,7 +137,12 @@ class Agent(Generic[T]):
         """Execute a single query attempt."""
         options = self._get_options()
 
-        if is_claude_sdk():
+        # Determine SDK per-agent: use Claude SDK if options is ClaudeAgentOptions,
+        # opencode if options is dict. Global setting is the fallback.
+        from claude_agent_sdk import ClaudeAgentOptions as _CAO
+        use_claude = isinstance(options, _CAO) or (is_claude_sdk() and not isinstance(options, dict))
+
+        if use_claude:
             # Claude SDK path
             from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
@@ -151,52 +165,77 @@ class Agent(Generic[T]):
                 await client.query(query)
                 return [msg async for msg in client.receive_response()]
         else:
-            # OpenCode SDK path
-            from opencode_ai import AsyncOpencode
+            # OpenCode CLI path — uses `opencode run` for full agentic loop
+            # (including web search, tool use, multi-turn reasoning)
+            import subprocess
+            import os
 
             if not isinstance(options, dict):
                 raise TypeError(
                     f"OpenCode SDK requires dict options, got {type(options)}"
                 )
 
-            # Start opencode server if needed
-            import subprocess
-            import time
+            model = options.get("model_id")
+            provider = options.get("provider_id")
+            model_flag = f"{provider}/{model}" if provider and model else model
 
-            try:
-                # Quick check if server is running
-                client = AsyncOpencode(base_url="http://127.0.0.1:4096")
-                await client.session.create(extra_body={})
-            except Exception:
-                # Start server
-                subprocess.Popen(
-                    ["opencode", "serve", "--port", "4096", "--hostname", "127.0.0.1"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-                time.sleep(2)
-                client = AsyncOpencode(base_url="http://127.0.0.1:4096")
+            cmd = ["opencode", "run", "--format", "json"]
+            if model_flag:
+                cmd.extend(["-m", model_flag])
 
-            session = await client.session.create(extra_body={})
-
-            extra_body = {}
-            if "format" in options:
-                extra_body["format"] = options["format"]
-
-            message = await client.session.chat(
-                id=session.id,
-                model_id=options.get("model_id", "zai-org/GLM-5"),
-                provider_id=options.get("provider_id", "togetherai"),
-                parts=[{"type": "text", "text": query}],
-                system=options.get("system"),
-                mode=options.get("mode", "build"),
-                tools=options.get("tools", {}),
-                extra_body=extra_body if extra_body else None,
+            # Isolate each opencode process with its own data dir
+            # to avoid SQLite WAL conflicts from concurrent runs
+            import uuid as _uuid
+            run_id = _uuid.uuid4().hex[:8]
+            env = {**os.environ}
+            env["XDG_DATA_HOME"] = os.path.join(
+                os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")),
+                f"opencode-run-{run_id}",
             )
 
-            # Return as single-item list for consistency with Claude SDK
-            return [message]
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, query,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"opencode run failed (exit {proc.returncode}): {stderr.decode()[:500]}"
+                )
+
+            # Parse JSON lines output from opencode run
+            import json as _json
+
+            parts = []
+            info = {}
+            for line in stdout.decode().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                etype = event.get("type")
+                if etype == "text":
+                    parts.append(event.get("part", {}))
+                elif etype == "tool_use":
+                    parts.append(event.get("part", {}))
+                elif etype == "step_start":
+                    parts.append(event.get("part", {}))
+                elif etype == "step_finish":
+                    parts.append(event.get("part", {}))
+                elif etype == "assistant":
+                    info = event.get("message", event)
+
+            msg = OpenCodeMessage()
+            msg.parts = parts
+            msg.info = info
+            msg.session_id = info.get("sessionID")
+            return [msg]
 
     async def _run_with_retry(self, query: str) -> list[Any]:
         """Execute query with timeout and exponential backoff retry."""
@@ -229,7 +268,12 @@ class Agent(Generic[T]):
     async def run(self, query: str) -> AgentTrace[T]:
         messages = await self._run_with_retry(query)
 
-        if is_claude_sdk():
+        # Detect which SDK was used based on the options type (same logic as _execute_query)
+        options = self._get_options()
+        from claude_agent_sdk import ClaudeAgentOptions as _CAO
+        use_claude = isinstance(options, _CAO) or (is_claude_sdk() and not isinstance(options, dict))
+
+        if use_claude:
             # Claude SDK: messages list with SystemMessage, AssistantMessage, ResultMessage
             first = messages[0]
             last = messages[-1]
@@ -266,16 +310,29 @@ class Agent(Generic[T]):
                 messages=messages,
             )
         else:
-            # OpenCode SDK: single AssistantMessage with extra fields
+            # OpenCode CLI: parse parts from `opencode run --format json`
             message = messages[0]
 
-            # Extract structured output from info dict (extra field)
+            # Extract structured output from tool parts or info
             output = None
             parse_error = None
             raw_structured_output = None
 
-            if hasattr(message, "info") and message.info:
-                raw_structured_output = message.info.get("structured")
+            # Check StructuredOutput tool part first
+            if hasattr(message, "parts"):
+                for part in message.parts:
+                    if isinstance(part, dict) and part.get("tool") == "StructuredOutput":
+                        state = part.get("state", {})
+                        inp = state.get("input")
+                        if inp:
+                            raw_structured_output = inp
+                            break
+
+            # Fall back to info.structured
+            if raw_structured_output is None:
+                info_dict = message.info if hasattr(message, "info") else {}
+                if isinstance(info_dict, dict):
+                    raw_structured_output = info_dict.get("structured")
 
             if raw_structured_output is not None:
                 try:
@@ -287,17 +344,30 @@ class Agent(Generic[T]):
                     "No structured output returned (context limit likely exceeded)"
                 )
 
-            # Extract text from parts (extra field)
+            # Extract text from parts
             result_text = ""
+            tools_used = []
+            total_cost = 0.0
+            total_tokens = {}
+            num_turns = 0
             if hasattr(message, "parts"):
                 for part in message.parts:
-                    if isinstance(part, dict) and part.get("type") == "text":
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "text":
                         result_text += part.get("text", "")
+                    elif part.get("type") == "tool":
+                        tools_used.append(part.get("tool", ""))
+                    elif part.get("type") == "step-finish":
+                        num_turns += 1
+                        total_cost += part.get("cost", 0.0)
+                        tokens = part.get("tokens", {})
+                        for k, v in tokens.items():
+                            if isinstance(v, (int, float)):
+                                total_tokens[k] = total_tokens.get(k, 0) + v
 
-            # Get metadata from info dict
-            info = message.info if hasattr(message, "info") else {}
-            usage = info.get("tokens", {}) if info else {}
-            cost = info.get("cost", 0.0) if info else 0.0
+            usage = total_tokens
+            cost = total_cost
 
             options = self._get_options()
             model_name = (
@@ -305,20 +375,15 @@ class Agent(Generic[T]):
                 if isinstance(options, dict)
                 else "unknown"
             )
-            tools = (
-                list(options.get("tools", {}).keys())
-                if isinstance(options, dict) and options.get("tools")
-                else []
-            )
 
             return AgentTrace(
                 uuid=message.session_id or "unknown",
                 session_id=message.session_id or "unknown",
                 model=model_name,
-                tools=tools,
+                tools=tools_used,
                 duration_ms=0,
                 total_cost_usd=cost,
-                num_turns=1,
+                num_turns=num_turns,
                 usage=usage,
                 result=result_text,
                 is_error=parse_error is not None,
