@@ -111,7 +111,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         type=str,
-        choices=["opus", "sonnet", "haiku"],
         default="claude-opus-4-5-20251101",
         help="Model for base agent (default: opus via SDK default)",
     )
