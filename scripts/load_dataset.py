@@ -52,9 +52,15 @@ def prepare_run_dir(session_name: str, include_skills: bool) -> Path:
         shutil.rmtree(str(run_skills))
 
     if include_skills and SKILLS_DIR.exists():
+        # Copy all skills (meta + evolved)
         shutil.copytree(str(SKILLS_DIR), str(run_skills))
     else:
+        # Baseline: only copy meta-skills (skill-creator, etc.)
         run_skills.mkdir(parents=True, exist_ok=True)
+        if SKILLS_DIR.exists():
+            for skill_dir in SKILLS_DIR.iterdir():
+                if skill_dir.is_dir() and skill_dir.name in META_SKILLS:
+                    shutil.copytree(str(skill_dir), str(run_skills / skill_dir.name))
 
     return run_dir
 
