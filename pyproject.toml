@@ -26,6 +26,7 @@ dependencies = [
     "torch>=2.9.1",
     "datasets>=4.6.0",
     "llm-sandbox[docker]>=0.3.36",
+    "serpapi>=1.0.2",
 ]
 
 [tool.hatch.build.targets.wheel]
