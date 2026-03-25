@@ -107,12 +107,12 @@ async def main():
         help="Evaluate only on the held-out test set (excludes train/val samples)",
     )
     parser.add_argument(
-        "--train-ratio", type=float, default=0.13,
-        help="Train ratio for stratified split (default: 0.13 -> 14 samples)",
+        "--train-ratio", type=float, default=0.12,
+        help="Train ratio for stratified split (default: 0.12 -> 14 samples)",
     )
     parser.add_argument(
-        "--val-ratio", type=float, default=0.13,
-        help="Val ratio for stratified split (default: 0.13 -> 14 samples)",
+        "--val-ratio", type=float, default=0.12,
+        help="Val ratio for stratified split (default: 0.12 -> 14 samples)",
     )
     parser.add_argument(
         "--no-skills", action="store_true",
