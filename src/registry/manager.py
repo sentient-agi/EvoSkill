@@ -415,19 +415,25 @@ class ProgramManager:
 
     def _git_checkout(self, branch: str) -> None:
         """Checkout a branch, auto-stashing any uncommitted changes."""
-        # Check for uncommitted changes
-        result = self._run_git(["status", "--porcelain"], check=False)
+        # Check for uncommitted changes (only tracked files, ignore untracked)
+        result = self._run_git(["status", "--porcelain", "-uno"], check=False)
         has_changes = bool(result.stdout.strip())
 
-        # Stash if dirty
+        # Stash if dirty (only tracked changes)
+        stashed = False
         if has_changes:
-            self._run_git(["stash", "push", "-m", "auto-stash before checkout"])
+            stash_result = self._run_git(
+                ["stash", "push", "-m", "auto-stash before checkout"], check=False
+            )
+            stashed = stash_result.returncode == 0
 
-        # Perform checkout
-        self._run_git(["checkout", branch])
+        # Perform checkout (force if normal checkout fails)
+        checkout_result = self._run_git(["checkout", branch], check=False)
+        if checkout_result.returncode != 0:
+            self._run_git(["checkout", "--force", branch])
 
         # Pop stash if we stashed
-        if has_changes:
+        if stashed:
             self._run_git(["stash", "pop"], check=False)
 
     def _git_checkout_new(self, branch: str) -> None:

@@ -6,17 +6,16 @@ import asyncio
 
 import pandas as pd
 
-from src.api.data_utils import stratified_split
 from src.loop import SelfImprovingLoop, LoopConfig, LoopAgents
 from src.agent_profiles import (
     Agent,
-    sealqa_agent_options,
-    make_sealqa_agent_options,
+    set_sdk,
     skill_proposer_options,
     prompt_proposer_options,
     skill_generator_options,
     prompt_generator_options,
 )
+from src.agent_profiles.sealqa_agent import get_sealqa_agent_options
 from src.agent_profiles.skill_generator import get_project_root
 from src.evaluation.sealqa_scorer import score_sealqa
 from src.registry import ProgramManager
@@ -29,10 +28,45 @@ from src.schemas import (
 )
 
 
-
 def _sealqa_scorer(question: str, predicted: str, ground_truth: str) -> float:
     """Wrapper around score_sealqa matching the runner's (question, predicted, ground_truth) signature."""
     return score_sealqa(question, ground_truth, predicted)
+
+
+def positional_split(
+    data: pd.DataFrame,
+    train_end: int,
+    val_end: int,
+) -> tuple[dict[str, list[tuple[str, str]]], list[tuple[str, str, str]]]:
+    """Split data by positional indices instead of stratified sampling.
+
+    Args:
+        data: DataFrame with 'question', 'ground_truth', 'category' columns.
+        train_end: Index of last training row (exclusive).
+        val_end: Index of last validation row (exclusive).
+
+    Returns:
+        train_pools: Dict mapping category -> list of (question, answer) tuples.
+        val_data: List of (question, answer, category) tuples.
+    """
+    train_df = data.iloc[:train_end]
+    val_df = data.iloc[train_end:val_end]
+
+    # Build train_pools grouped by category
+    train_pools: dict[str, list[tuple[str, str]]] = {}
+    for _, row in train_df.iterrows():
+        cat = row["category"]
+        if cat not in train_pools:
+            train_pools[cat] = []
+        train_pools[cat].append((row["question"], row["ground_truth"]))
+
+    # Build val_data
+    val_data = [
+        (row["question"], row["ground_truth"], row["category"])
+        for _, row in val_df.iterrows()
+    ]
+
+    return train_pools, val_data
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,8 +81,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-iterations",
         type=int,
-        default=20,
-        help="Maximum number of improvement iterations (default: 20)",
+        default=6,
+        help="Maximum number of improvement iterations (default: 6)",
     )
     parser.add_argument(
         "--frontier-size",
@@ -59,20 +93,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-improvement-limit",
         type=int,
-        default=5,
-        help="Stop after this many iterations without improvement (default: 5)",
+        default=7,
+        help="Stop after this many iterations without improvement (default: 7)",
     )
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=4,
-        help="Number of concurrent evaluations (default: 4)",
-    )
-    parser.add_argument(
-        "--failure-samples",
-        type=int,
-        default=3,
-        help="Number of samples to test per iteration for pattern detection (default: 3)",
+        default=1,
+        help="Number of concurrent evaluations (default: 1)",
     )
     parser.add_argument(
         "--no-cache",
@@ -97,48 +125,61 @@ def parse_args() -> argparse.Namespace:
         help="Path to SEAL-QA CSV (default: .dataset/seal-0.csv)",
     )
     parser.add_argument(
-        "--train-ratio",
-        type=float,
-        default=0.18,
-        help="Fraction of each category for training (default: 0.18)",
+        "--train-count",
+        type=int,
+        default=8,
+        help="Number of questions for training (default: 8, positional from start)",
     )
     parser.add_argument(
-        "--val-ratio",
-        type=float,
-        default=0.12,
-        help="Fraction of each category for validation (default: 0.12)",
+        "--val-count",
+        type=int,
+        default=3,
+        help="Number of questions for validation (default: 3, positional after train)",
     )
     parser.add_argument(
         "--model",
         type=str,
-        choices=["opus", "sonnet", "haiku"],
-        default="claude-opus-4-5-20251101",
-        help="Model for base agent (default: opus via SDK default)",
+        default="gemini-3.1-flash-lite-preview",
+        help="Model for base agent (default: gemini-3.1-flash-lite-preview)",
+    )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        default="gemini",
+        help="Provider ID for base agent (default: gemini)",
+    )
+    parser.add_argument(
+        "--sdk",
+        type=str,
+        choices=["opencode", "claude"],
+        default="opencode",
+        help="SDK for base agent: 'opencode' or 'claude' (default: opencode)",
     )
     return parser.parse_args()
 
 
 async def main(args: argparse.Namespace):
-    data = pd.read_csv(args.dataset)
+    # Set SDK for base agent
+    set_sdk(args.sdk)
 
-    # Rename SEAL-QA columns to match stratified_split expectations
+    data = pd.read_csv(args.dataset)
     data.rename(columns={"topic": "category", "answer": "ground_truth"}, inplace=True)
 
-    # Stratified split by category
-    train_pools, val_data, _test_data = stratified_split(data, train_ratio=args.train_ratio, val_ratio=args.val_ratio)
+    # Positional split: first N train, next M val
+    train_pools, val_data = positional_split(data, args.train_count, args.train_count + args.val_count)
 
-    # Print category distribution
-    categories = list(train_pools.keys())
+    # Print split info
     total_train = sum(len(pool) for pool in train_pools.values())
+    categories = list(train_pools.keys())
     print(f"Dataset: {args.dataset}")
-    print(f"Categories ({len(categories)}): {', '.join(categories)}")
-    print(f"Training pools: {', '.join(f'{cat}: {len(pool)}' for cat, pool in train_pools.items())}")
-    print(f"Total training samples: {total_train}")
-    print(f"Validation samples: {len(val_data)} ({args.val_ratio:.0%} per category, min 1 each)")
-    print(f"Split ratios: train={args.train_ratio:.0%}, val={args.val_ratio:.0%} (remaining {1-args.train_ratio-args.val_ratio:.0%} unused)")
+    print(f"Split: train[0:{args.train_count}] ({total_train}), val[{args.train_count}:{args.train_count + args.val_count}] ({len(val_data)})")
+    print(f"Train categories ({len(categories)}): {', '.join(f'{cat}: {len(pool)}' for cat, pool in train_pools.items())}")
+    print(f"Val samples: {len(val_data)}")
 
-    # Use custom model for sealqa agent if specified
-    base_options = make_sealqa_agent_options(model=args.model) if args.model else sealqa_agent_options
+    # Build base agent options
+    base_options = get_sealqa_agent_options(model=args.model)
+    if isinstance(base_options, dict):
+        base_options["provider_id"] = args.provider
 
     agents = LoopAgents(
         base=Agent(base_options, AgentResponse),
@@ -155,15 +196,15 @@ async def main(args: argparse.Namespace):
         no_improvement_limit=args.no_improvement_limit,
         concurrency=args.concurrency,
         evolution_mode=args.mode,
-        failure_sample_count=args.failure_samples,
-        categories_per_batch=args.failure_samples,
+        categories_per_batch=2,
+        samples_per_category=1,
         cache_enabled=not args.no_cache,
         reset_feedback=not args.no_reset_feedback,
         continue_mode=args.continue_loop,
     )
 
-    model_info = f", model={args.model}" if args.model else ""
-    print(f"Running loop with evolution_mode={args.mode}{model_info}")
+    print(f"Running loop: sdk={args.sdk}, model={args.model}, provider={args.provider}, mode={args.mode}")
+    print(f"Config: max_iter={args.max_iterations}, cats_per_batch=2, samples_per_cat=1 (~1.5 epochs)")
     loop = SelfImprovingLoop(config, agents, manager, train_pools, val_data, scorer=_sealqa_scorer)
     result = await loop.run()
 
@@ -173,4 +214,10 @@ async def main(args: argparse.Namespace):
 
 if __name__ == "__main__":
     args = parse_args()
-    asyncio.run(main(args))
+    try:
+        asyncio.run(main(args))
+    except Exception as e:
+        import traceback
+        print(f"\n[FATAL] Loop crashed: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        raise

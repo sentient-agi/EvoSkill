@@ -27,3 +27,6 @@ DABstep-data/
 output.txt
 tests/
 scratch/
+
+# Ignore loose Python scripts in repo root
+/*.py

@@ -245,6 +245,7 @@ class SelfImprovingLoop:
         n_cats = len(categories)
 
         for i in range(self.config.max_iterations):
+          try:
             iteration_count = i + 1
             actual_iteration = iteration_count + self._iteration_offset
 
@@ -309,13 +310,19 @@ class SelfImprovingLoop:
                 if trace is None:
                     continue
                 agent_answer = (
-                    trace.output.final_answer if trace.output else "[PARSE FAILED]"
+                    trace.output.final_answer if trace.output
+                    else trace.result if trace.result
+                    else "[PARSE FAILED]"
                 )
-                avg_score = self.scorer(
-                    question,
-                    agent_answer.strip().lower(),
-                    answer.strip().lower(),
-                )
+                try:
+                    avg_score = self.scorer(
+                        question,
+                        agent_answer.strip().lower(),
+                        answer.strip().lower(),
+                    )
+                except Exception as e:
+                    _log("", f"    [SCORER ERROR] {question[:40]}... ({type(e).__name__}: {e})")
+                    avg_score = 0.0
                 status = "[OK]" if avg_score >= 0.8 else "[FAIL]"
                 _log("", f"    {status} [{category}] {question[:40]}...")
                 if avg_score < 0.8:
@@ -385,6 +392,16 @@ class SelfImprovingLoop:
 
             # Save checkpoint at end of each successful iteration
             self._save_checkpoint(actual_iteration)
+
+          except Exception as e:
+            import traceback
+            _log("ERROR", f"Iteration {i+1} failed: {type(e).__name__}: {e}")
+            traceback.print_exc()
+            no_improvement_count += 1
+            if no_improvement_count >= self.config.no_improvement_limit:
+                _log("STOP", f"Too many failures, stopping")
+                break
+            continue
 
         # 3. Return results
         frontier = self.manager.get_frontier_with_scores()
@@ -468,11 +485,19 @@ class SelfImprovingLoop:
 
         score = 0.0
         for result in results:
-            if result.trace is None or result.trace.output is None:
-                continue  # Timeout/error/parse failed = 0 score
+            if result.trace is None:
+                continue  # Timeout/error = 0 score
+            # Use structured output if available, fall back to raw result text
+            answer = (
+                result.trace.output.final_answer if result.trace.output
+                else result.trace.result if result.trace.result
+                else None
+            )
+            if answer is None:
+                continue
             score += self.scorer(
                 result.question,
-                result.trace.output.final_answer,
+                answer,
                 result.ground_truth,
             )
         return score / len(results)
