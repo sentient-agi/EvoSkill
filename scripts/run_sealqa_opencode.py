@@ -13,8 +13,8 @@ set_sdk("opencode")
 
 
 async def run(limit: int | None = None, offset: int = 0):
-    model = "gemini-3.1-flash-lite-preview"
-    provider = "gemini"
+    model = "gpt-oss-120b"
+    provider = "arc"
 
     # Options dict for opencode CLI path
     def custom_factory():
@@ -26,7 +26,7 @@ async def run(limit: int | None = None, offset: int = 0):
     agent = Agent(custom_factory, AgentResponse)
 
     dataset = Path(".dataset/seal-0.csv")
-    output = Path("results/sealqa_opencode_gemini_flash.pkl")
+    output = Path("results/sealqa_opencode_gpt_oss.pkl")
 
     data = pd.read_csv(dataset)
     items = [(idx, row["question"], row["answer"]) for idx, row in data.iterrows()]

@@ -1,19 +1,19 @@
 #!/bin/bash
 #SBATCH --job-name=sealqa-gemini
-#SBATCH --account=llms-ar
+#SBATCH --account=llms-lab
 #SBATCH --time=04:00:00
 #SBATCH --partition=normal_q
 #SBATCH --output=job-outputs/sealqa-%j.out
 #SBATCH --error=job-outputs/sealqa-%j.err
 #SBATCH --mem=16G
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=noahpro@gmail.com
+#SBATCH --mail-user=kuzoto@vt.edu
 
 module reset
 module load Python/3.13.1-GCCcore-14.2.0
 
 export PATH="$HOME/.opencode/bin:$PATH"
-source ~/.secrets/gemini.env
+source ~/research/EvoSkill/.env
 export OPENCODE_ENABLE_EXA=true
 export PYTHONPATH=$PYTHONPATH:$SLURM_SUBMIT_DIR
 export PYTHONUNBUFFERED=1

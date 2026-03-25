@@ -128,7 +128,7 @@ async def main():
     successful = [r for r in all_results if r.error is None]
     failed = [r for r in all_results if r.error is not None]
 
-    # Score successful results
+    # Score successful results (for officeqa use score_answer from reward.py)
     correct = 0
     for r in successful:
         if r.trace and r.trace.output and r.trace.output.final_answer:

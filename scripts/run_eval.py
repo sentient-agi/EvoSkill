@@ -46,7 +46,7 @@ class EvalSettings(BaseSettings):
         description="Model for base agent (opus, sonnet, haiku)",
     )
     dataset_path: Path = Field(
-        default=Path("~/officeqa/officeqa.csv").expanduser(),
+        default=Path(".dataset/officeqa.csv").expanduser(),
         description="Path to OfficeQA dataset CSV",
     )
     sdk: Literal["claude", "opencode"] = Field(

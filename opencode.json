@@ -34,8 +34,8 @@
         "gpt-oss-120b": {
           "name": "GPT OSS 120B",
           "limit": {
-            "context": 8192,
-            "output": 4096
+            "context": 128000,
+            "output": 3072
           }
         }
       }
