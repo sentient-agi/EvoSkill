@@ -37,6 +37,13 @@
             "context": 128000,
             "output": 3072
           }
+        },
+        "Kimi-K2.5": {
+          "name": "Kimi K2.5",
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
         }
       }
     },
