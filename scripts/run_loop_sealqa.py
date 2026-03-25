@@ -99,14 +99,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--train-ratio",
         type=float,
-        default=0.13,
-        help="Fraction of each category for training (default: 0.13 -> 14 samples)",
+        default=0.12,
+        help="Fraction of each category for training (default: 0.12 -> 14 samples)",
     )
     parser.add_argument(
         "--val-ratio",
         type=float,
-        default=0.13,
-        help="Fraction of each category for validation (default: 0.13 -> 14 samples)",
+        default=0.12,
+        help="Fraction of each category for validation (default: 0.12 -> 14 samples)",
     )
     parser.add_argument(
         "--model",
