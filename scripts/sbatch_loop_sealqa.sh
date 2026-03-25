@@ -20,6 +20,6 @@ export PYTHONUNBUFFERED=1
 mkdir -p job-outputs
 
 echo "Running EvoSkill loop..."
-uv run scripts/run_loop_sealqa.py "$@"
+uv run scripts/run_loop_comb.py "$@"
 
 echo "Job complete."
