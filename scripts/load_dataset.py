@@ -1,10 +1,123 @@
-from scripts.run_eval_comb import EvalSettings
+# from scripts.run_eval_comb import EvalSettings, list_active_skills
 from src.api.data_utils import stratified_split
 import pandas as pd
+from pydantic import Field
+from pydantic_settings import (
+    BaseSettings,
+    SettingsConfigDict,
+)
 from pathlib import Path
 from typing import Literal, Optional
 
-def load_officeqa(data: pd.DataFrame, settings: EvalSettings):
+from contextlib import contextmanager
+from src.agent_profiles.skill_generator import get_project_root
+import shutil
+
+SKILLS_DIR = Path(get_project_root()) / ".claude" / "skills"
+SKILLS_HIDDEN = SKILLS_DIR.parent / "_skills_hidden"
+
+# Skill names that are meta-tools (not task-specific evolved skills)
+META_SKILLS = {"skill-creator", "brainstorming"}
+
+@contextmanager
+def hide_skills():
+    """Temporarily hide .claude/skills/ so the agent runs without evolved skills."""
+    if not SKILLS_DIR.exists():
+        yield
+        return
+    SKILLS_HIDDEN.mkdir(parents=True, exist_ok=True)
+    moved = []
+    for skill_dir in SKILLS_DIR.iterdir():
+        if skill_dir.is_dir() and skill_dir.name not in META_SKILLS:
+            dest = SKILLS_HIDDEN / skill_dir.name
+            shutil.move(str(skill_dir), str(dest))
+            moved.append(skill_dir.name)
+    if moved:
+        print(f"Hidden skills for baseline: {moved}")
+    try:
+        yield
+    finally:
+        for name in moved:
+            src = SKILLS_HIDDEN / name
+            if src.exists():
+                shutil.move(str(src), str(SKILLS_DIR / name))
+        if SKILLS_HIDDEN.exists():
+            shutil.rmtree(str(SKILLS_HIDDEN), ignore_errors=True)
+
+
+def list_active_skills() -> list[str]:
+    """List non-meta skills currently on disk."""
+    if not SKILLS_DIR.exists():
+        return []
+    return [
+        d.name for d in SKILLS_DIR.iterdir()
+        if d.is_dir() and d.name not in META_SKILLS and (d / "SKILL.md").exists()
+    ]
+
+class EvalSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        cli_parse_args=True,
+    )
+    output: Path = Field(
+        default=Path("results/eval_results.pkl"), description="Output pkl file path"
+    )
+    max_concurrent: int = Field(default=8, description="Max concurrent evaluations")
+    resume: bool = Field(default=True, description="Resume from existing results")
+    difficulty: Literal["all", "easy", "hard"] = Field(
+        default="all", description="Filter by difficulty"
+    )
+    topic: str = Field(
+        default="all", description="Filter by topic"
+    )
+    level: str = Field(
+        default="all", description="Filter by level"
+    )
+    platform: str = Field(
+        default="all", description="Filter by platform"
+    )
+    num_samples: Optional[int] = Field(
+        default=None, description="Limit to first N samples"
+    )
+    offset: int = Field(
+        default=0, description="Skip the first N questions"
+    )
+    model: Optional[str] = Field(
+        default="claude-opus-4-5-20251101",
+        description="Model for base agent (opus, sonnet, haiku)",
+    )
+    dataset_path: Path = Field(
+        default=Path(".dataset/officeqa.csv").expanduser(),
+        description="Path to evaluation dataset CSV",
+    )
+    data_dir: str = Field(
+        default="DABstep-data/data/context", description="Path to shared context files directory"
+    )
+    sdk: Literal["claude", "opencode"] = Field(
+        default="claude",
+        description="SDK to use: 'claude' or 'opencode'",
+    )
+    provider: str = Field(
+        default=None, description="Provider ID for opencode SDK (e.g., gemini, arc). Required when --sdk=opencode."
+    )
+    held_out: bool = Field(
+        default=False,
+        description="Evaluate only on the held-out test set (excludes train/val samples)",
+    )
+    no_skills: bool = Field(
+       default=False,
+       description="Run baseline without evolved skills (temporarily hides .claude/skills/)" 
+    )
+    train_ratio: float = Field(
+        default=0.12, description="Train ratio for stratified split"
+    )
+    val_ratio: float = Field(
+        default=0.12, description="Val ratio for stratified split"
+    )
+
+def load_officeqa(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     if settings.held_out:
         data.rename(columns={"answer": "ground_truth", "difficulty": "category"}, inplace=True)
         _train, _val, test_data = stratified_split(data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio)
@@ -31,7 +144,7 @@ def load_officeqa(data: pd.DataFrame, settings: EvalSettings):
 
     return items
 
-def load_sealqa(data: pd.DataFrame, settings: EvalSettings):
+def load_sealqa(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     if settings.held_out:
         data.rename(columns={"topic": "category", "answer": "ground_truth"}, inplace=True)
         _train, _val, test_data = stratified_split(data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio)
@@ -45,20 +158,26 @@ def load_sealqa(data: pd.DataFrame, settings: EvalSettings):
     if settings.topic != "all":
         data = data[data["topic"] == settings.topic]
 
-    # Limit to num_samples if specified
-    if settings.num_samples is not None:
-        data = data.head(settings.num_samples)
-
-    print(f"Evaluating: {len(data)} samples (topic={settings.topic})")
-
     items = [
         (idx, row["question"], row["answer"])
         for idx, row in data.iterrows()
     ]
 
+    #Apply offset and limit
+    if settings.offset:
+        items = items[settings.offset:]
+    if settings.num_samples is not None:
+        items = items[:settings.num_samples]
+
+    # Report config
+    active = list_active_skills()
+    mode = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
+    print(f"Evaluating: {len(items)} samples (topic={settings.topic}, {mode})")
+    print(f"  sdk={settings.sdk} model={settings.model} provider={settings.provider or 'default'}")
+
     return items
 
-def load_dabstep(data: pd.DataFrame, settings: EvalSettings, PROMPT):
+def load_dabstep(data: pd.DataFrame, settings: EvalSettings, PROMPT) -> list[tuple]:
     # Filter by level if requested
     if settings.level != "all":
         data = data[data["level"].astype(str) == settings.level]
@@ -91,7 +210,7 @@ def load_dabstep(data: pd.DataFrame, settings: EvalSettings, PROMPT):
 
     return items
 
-def load_livecode(data: pd.DataFrame, settings: EvalSettings):
+def load_livecode(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     # Filter by platform if requested
     if settings.platform != "all":
         data = data[data["platform"] == settings.platform]
