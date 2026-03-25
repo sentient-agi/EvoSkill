@@ -417,6 +417,65 @@ class SelfImprovingLoop:
             iterations_completed=iteration_count,
         )
 
+    # Meta-skills that should not be exported (they're always present)
+    META_SKILLS = {"skill-creator", "brainstorming"}
+
+    def export_best_skills(self, target_branch: str | None = None) -> list[str]:
+        """Copy evolved skills from the best frontier program to a target branch.
+
+        This makes skills available outside the loop's program branches so that
+        standalone eval scripts (e.g., run_eval_sealqa.py) can use them.
+
+        Args:
+            target_branch: Git branch to export to. If None, exports to the
+                current working branch (before program branches were created).
+
+        Returns:
+            List of skill names that were exported.
+        """
+        import shutil
+        import subprocess
+
+        best = self.manager.get_best_from_frontier()
+        if not best:
+            _log("EXPORT", "No frontier programs to export skills from")
+            return []
+
+        # Switch to best program to read its skills
+        self.manager.switch_to(best)
+        skills_dir = self._project_root / ".claude" / "skills"
+
+        # Collect evolved skills (exclude meta-skills)
+        evolved_skills: dict[str, str] = {}  # name -> SKILL.md content
+        if skills_dir.exists():
+            for skill_dir in skills_dir.iterdir():
+                if (
+                    skill_dir.is_dir()
+                    and skill_dir.name not in self.META_SKILLS
+                    and (skill_dir / "SKILL.md").exists()
+                ):
+                    evolved_skills[skill_dir.name] = (skill_dir / "SKILL.md").read_text()
+
+        if not evolved_skills:
+            _log("EXPORT", f"No evolved skills found on {best}")
+            return []
+
+        # Switch to target branch and write skills
+        if target_branch:
+            subprocess.run(
+                ["git", "checkout", target_branch],
+                cwd=self._project_root, check=True,
+                capture_output=True,
+            )
+
+        for name, content in evolved_skills.items():
+            dest = skills_dir / name
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / "SKILL.md").write_text(content)
+
+        _log("EXPORT", f"Exported {len(evolved_skills)} skill(s) from {best}: {list(evolved_skills.keys())}")
+        return list(evolved_skills.keys())
+
     def _save_error_trace(self, iteration: int, question: str, error: Exception) -> None:
         """Save error trace to disk for debugging timeouts and crashes."""
         trace_dir = self._project_root / ".claude" / "traces" / f"iter_{iteration:03d}"

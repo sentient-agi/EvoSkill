@@ -17,12 +17,14 @@ PROMPT_FILE = Path(__file__).parent.parent / "base_agent" / "prompt.txt"
 
 def get_sealqa_agent_options(
     model: str | None = None,
+    provider: str | None = None,
 ) -> Union[ClaudeAgentOptions, dict]:
     """
     Factory function that creates agent options with the current prompt.
 
     Args:
         model: Model to use. If None, uses SDK default.
+        provider: Provider ID for opencode SDK (e.g., 'gemini', 'arc').
     """
     # Read prompt from disk
     prompt_text = PROMPT_FILE.read_text().strip()
@@ -31,7 +33,7 @@ def get_sealqa_agent_options(
         return {
             "system": prompt_text,
             "model_id": model or "gpt-oss-120b",
-            "provider_id": "arc",
+            "provider_id": provider or "arc",
             "tools": {tool: True for tool in SEALQA_AGENT_TOOLS},
             "format": {
                 "type": "json_schema",
@@ -66,11 +68,11 @@ def get_sealqa_agent_options(
         return options
 
 
-def make_sealqa_agent_options(model: str | None = None):
+def make_sealqa_agent_options(model: str | None = None, provider: str | None = None):
     """Create a factory function for agent options."""
 
     def factory() -> Union[ClaudeAgentOptions, dict]:
-        return get_sealqa_agent_options(model=model)
+        return get_sealqa_agent_options(model=model, provider=provider)
 
     return factory
 

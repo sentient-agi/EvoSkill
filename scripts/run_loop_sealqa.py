@@ -177,9 +177,7 @@ async def main(args: argparse.Namespace):
     print(f"Val samples: {len(val_data)}")
 
     # Build base agent options
-    base_options = get_sealqa_agent_options(model=args.model)
-    if isinstance(base_options, dict):
-        base_options["provider_id"] = args.provider
+    base_options = get_sealqa_agent_options(model=args.model, provider=args.provider)
 
     agents = LoopAgents(
         base=Agent(base_options, AgentResponse),
@@ -203,6 +201,13 @@ async def main(args: argparse.Namespace):
         continue_mode=args.continue_loop,
     )
 
+    # Remember the starting branch so we can export skills back to it
+    import subprocess
+    starting_branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True, text=True, cwd=get_project_root(),
+    ).stdout.strip()
+
     print(f"Running loop: sdk={args.sdk}, model={args.model}, provider={args.provider}, mode={args.mode}")
     print(f"Config: max_iter={args.max_iterations}, cats_per_batch=2, samples_per_cat=1 (~1.5 epochs)")
     loop = SelfImprovingLoop(config, agents, manager, train_pools, val_data, scorer=_sealqa_scorer)
@@ -210,6 +215,12 @@ async def main(args: argparse.Namespace):
 
     print(f"Best: {result.best_program} ({result.best_score:.2%})")
     print(f"Frontier: {result.frontier}")
+
+    # Export best skills back to the starting branch so eval scripts can use them
+    if result.best_program != "base" and args.mode == "skill_only":
+        exported = loop.export_best_skills(target_branch=starting_branch)
+        if exported:
+            print(f"Exported skills to {starting_branch}: {exported}")
 
 
 if __name__ == "__main__":

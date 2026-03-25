@@ -13,6 +13,7 @@ treasury_bulletins_parsed/
 !.claude/program.yaml
 !.claude/skills/
 results/
+job-outputs/
 DABstep-data/
 
 # Virtual environments
