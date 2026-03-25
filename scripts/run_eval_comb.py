@@ -3,9 +3,6 @@
 
 import asyncio
 from pathlib import Path
-from typing import Literal, Optional
-from contextlib import contextmanager
-import shutil
 
 import pandas as pd
 from pydantic import Field
@@ -33,7 +30,7 @@ from src.evaluation.sealqa_scorer import score_sealqa
 from src.evaluation.reward import score_answer
 from src.evaluation.dabstep_scorer import question_scorer
 from src.evaluation.livecodebench.livecodebench_scorer import score_livecodebench
-from scripts.load_dataset import load_dabstep, load_livecode, load_officeqa, load_sealqa, hide_skills, EvalSettings
+from scripts.load_dataset import load_dabstep, load_livecode, load_officeqa, load_sealqa, prepare_run_dir, list_active_skills, EvalSettings
 
 PROMPT = """You are an expert data analyst and you will answer factoid questions by loading and referencing the files/documents listed below.
 You have these files available:
@@ -46,111 +43,6 @@ Here are the guidelines you must follow when answering the question above:
 {guidelines}
 """
 
-# SKILLS_DIR = Path(get_project_root()) / ".claude" / "skills"
-# SKILLS_HIDDEN = SKILLS_DIR.parent / "_skills_hidden"
-
-# # Skill names that are meta-tools (not task-specific evolved skills)
-# META_SKILLS = {"skill-creator", "brainstorming"}
-
-
-# @contextmanager
-# def hide_skills():
-#     """Temporarily hide .claude/skills/ so the agent runs without evolved skills."""
-#     if not SKILLS_DIR.exists():
-#         yield
-#         return
-#     SKILLS_HIDDEN.mkdir(parents=True, exist_ok=True)
-#     moved = []
-#     for skill_dir in SKILLS_DIR.iterdir():
-#         if skill_dir.is_dir() and skill_dir.name not in META_SKILLS:
-#             dest = SKILLS_HIDDEN / skill_dir.name
-#             shutil.move(str(skill_dir), str(dest))
-#             moved.append(skill_dir.name)
-#     if moved:
-#         print(f"Hidden skills for baseline: {moved}")
-#     try:
-#         yield
-#     finally:
-#         for name in moved:
-#             src = SKILLS_HIDDEN / name
-#             if src.exists():
-#                 shutil.move(str(src), str(SKILLS_DIR / name))
-#         if SKILLS_HIDDEN.exists():
-#             shutil.rmtree(str(SKILLS_HIDDEN), ignore_errors=True)
-
-
-# def list_active_skills() -> list[str]:
-#     """List non-meta skills currently on disk."""
-#     if not SKILLS_DIR.exists():
-#         return []
-#     return [
-#         d.name for d in SKILLS_DIR.iterdir()
-#         if d.is_dir() and d.name not in META_SKILLS and (d / "SKILL.md").exists()
-#     ]
-
-
-# class EvalSettings(BaseSettings):
-#     model_config = SettingsConfigDict(
-#         env_file=".env",
-#         env_file_encoding="utf-8",
-#         extra="ignore",
-#         cli_parse_args=True,
-#     )
-#     output: Path = Field(
-#         default=Path("results/eval_results.pkl"), description="Output pkl file path"
-#     )
-#     max_concurrent: int = Field(default=8, description="Max concurrent evaluations")
-#     resume: bool = Field(default=True, description="Resume from existing results")
-#     difficulty: Literal["all", "easy", "hard"] = Field(
-#         default="all", description="Filter by difficulty"
-#     )
-#     topic: str = Field(
-#         default="all", description="Filter by topic"
-#     )
-#     level: str = Field(
-#         default="all", description="Filter by level"
-#     )
-#     platform: str = Field(
-#         default="all", description="Filter by platform"
-#     )
-#     num_samples: Optional[int] = Field(
-#         default=None, description="Limit to first N samples"
-#     )
-#     offset: int = Field(
-#         default=0, description="Skip the first N questions"
-#     )
-#     model: Optional[str] = Field(
-#         default="claude-opus-4-5-20251101",
-#         description="Model for base agent (opus, sonnet, haiku)",
-#     )
-#     dataset_path: Path = Field(
-#         default=Path(".dataset/officeqa.csv").expanduser(),
-#         description="Path to evaluation dataset CSV",
-#     )
-#     data_dir: str = Field(
-#         default="DABstep-data/data/context", description="Path to shared context files directory"
-#     )
-#     sdk: Literal["claude", "opencode"] = Field(
-#         default="claude",
-#         description="SDK to use: 'claude' or 'opencode'",
-#     )
-#     provider: str = Field(
-#         default=None, description="Provider ID for opencode SDK (e.g., gemini, arc). Required when --sdk=opencode."
-#     )
-#     held_out: bool = Field(
-#         default=False,
-#         description="Evaluate only on the held-out test set (excludes train/val samples)",
-#     )
-#     no_skills: bool = Field(
-#        default=False,
-#        description="Run baseline without evolved skills (temporarily hides .claude/skills/)" 
-#     )
-#     train_ratio: float = Field(
-#         default=0.12, description="Train ratio for stratified split"
-#     )
-#     val_ratio: float = Field(
-#         default=0.12, description="Val ratio for stratified split"
-#     )
 
 
 async def main(settings: EvalSettings):
@@ -176,21 +68,36 @@ async def main(settings: EvalSettings):
         items = load_livecode(data, settings)
         agent_options = make_livecodebench_agent_options(model=settings.model)
 
-    # Create agent and run
-    agent = Agent(agent_options, AgentResponse)
+    # Prepare isolated run directory for opencode (avoids skill conflicts between runs)
+    include_skills = not settings.no_skills
+    if settings.session:
+        session_name = settings.session
+    else:
+        model_slug = (settings.model or "default").replace("/", "_")
+        session_name = f"{model_slug}_{'evolved' if include_skills else 'baseline'}"
+    run_dir = prepare_run_dir(session_name, include_skills=include_skills)
+    print(f"Run directory: {run_dir}")
+
+    # Wrap agent_options to inject run_dir for opencode
+    original_factory = agent_options
+    def agent_factory():
+        opts = original_factory() if callable(original_factory) else original_factory
+        if isinstance(opts, dict):
+            opts["run_dir"] = str(run_dir)
+        return opts
+
+    agent = Agent(agent_factory, AgentResponse)
 
     model_info = f" (model: {settings.model})" if settings.model else " (model: opus)"
     print(f"Agent configured{model_info}")
 
-    ctx = hide_skills() if settings.no_skills else contextmanager(lambda: (yield))()
-    with ctx:
-        await evaluate_full(
-            agent=agent,
-            items=items,
-            output_path=settings.output,
-            max_concurrent=settings.max_concurrent,
-            resume=settings.resume,
-        )
+    await evaluate_full(
+        agent=agent,
+        items=items,
+        output_path=settings.output,
+        max_concurrent=settings.max_concurrent,
+        resume=settings.resume,
+    )
 
     # Summary
     all_results = load_results(settings.output)

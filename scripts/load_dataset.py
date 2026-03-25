@@ -1,6 +1,6 @@
-# from scripts.run_eval_comb import EvalSettings, list_active_skills
 from src.api.data_utils import stratified_split
 import pandas as pd
+import shutil
 from pydantic import Field
 from pydantic_settings import (
     BaseSettings,
@@ -9,40 +9,54 @@ from pydantic_settings import (
 from pathlib import Path
 from typing import Literal, Optional
 
-from contextlib import contextmanager
 from src.agent_profiles.skill_generator import get_project_root
-import shutil
 
-SKILLS_DIR = Path(get_project_root()) / ".claude" / "skills"
-SKILLS_HIDDEN = SKILLS_DIR.parent / "_skills_hidden"
+PROJECT_ROOT = Path(get_project_root())
+SKILLS_DIR = PROJECT_ROOT / ".claude" / "skills"
+RUNS_DIR = PROJECT_ROOT / ".evoskill-runs"
 
 # Skill names that are meta-tools (not task-specific evolved skills)
 META_SKILLS = {"skill-creator", "brainstorming"}
 
-@contextmanager
-def hide_skills():
-    """Temporarily hide .claude/skills/ so the agent runs without evolved skills."""
-    if not SKILLS_DIR.exists():
-        yield
-        return
-    SKILLS_HIDDEN.mkdir(parents=True, exist_ok=True)
-    moved = []
-    for skill_dir in SKILLS_DIR.iterdir():
-        if skill_dir.is_dir() and skill_dir.name not in META_SKILLS:
-            dest = SKILLS_HIDDEN / skill_dir.name
-            shutil.move(str(skill_dir), str(dest))
-            moved.append(skill_dir.name)
-    if moved:
-        print(f"Hidden skills for baseline: {moved}")
-    try:
-        yield
-    finally:
-        for name in moved:
-            src = SKILLS_HIDDEN / name
-            if src.exists():
-                shutil.move(str(src), str(SKILLS_DIR / name))
-        if SKILLS_HIDDEN.exists():
-            shutil.rmtree(str(SKILLS_HIDDEN), ignore_errors=True)
+
+def prepare_run_dir(session_name: str, include_skills: bool) -> Path:
+    """Create an isolated directory for an opencode run.
+
+    Each session gets its own dir with opencode.json and .env copied in.
+    Skills are only included if include_skills=True, avoiding race conditions
+    when baseline and evolved runs share the same filesystem.
+
+    Args:
+        session_name: Name for the session directory.
+        include_skills: Whether to copy evolved skills into the run dir.
+
+    Returns:
+        Path to the run directory.
+    """
+    run_dir = RUNS_DIR / session_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy opencode.json
+    opencode_json = PROJECT_ROOT / "opencode.json"
+    if opencode_json.exists():
+        shutil.copy2(str(opencode_json), str(run_dir / "opencode.json"))
+
+    # Copy .env
+    env_file = PROJECT_ROOT / ".env"
+    if env_file.exists():
+        shutil.copy2(str(env_file), str(run_dir / ".env"))
+
+    # Set up .claude/skills/ in the run dir
+    run_skills = run_dir / ".claude" / "skills"
+    if run_skills.exists():
+        shutil.rmtree(str(run_skills))
+
+    if include_skills and SKILLS_DIR.exists():
+        shutil.copytree(str(SKILLS_DIR), str(run_skills))
+    else:
+        run_skills.mkdir(parents=True, exist_ok=True)
+
+    return run_dir
 
 
 def list_active_skills() -> list[str]:
@@ -115,6 +129,9 @@ class EvalSettings(BaseSettings):
     )
     val_ratio: float = Field(
         default=0.12, description="Val ratio for stratified split"
+    )
+    session: Optional[str] = Field(
+        default=None, description="Session name for isolated run dir (e.g., 'gemini_baseline'). Auto-generated if not set.",
     )
 
 def load_officeqa(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:

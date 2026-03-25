@@ -10,8 +10,6 @@ treasury_bulletins_parsed/
 *.log
 # Claude Code config (ignore most, but track program state)
 .claude/*
-!.claude/program.yaml
-!.claude/skills/
 results/
 job-outputs/
 DABstep-data/
@@ -31,3 +29,6 @@ scratch/
 
 # Ignore loose Python scripts in repo root
 /*.py
+.evoskill-runs/
+*.csv
+*.zip

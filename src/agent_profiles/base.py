@@ -193,11 +193,15 @@ class Agent(Generic[T]):
                 f"opencode-run-{run_id}",
             )
 
+            # Allow callers to set a custom working directory for opencode
+            run_dir = options.get("run_dir")
+
             proc = await asyncio.create_subprocess_exec(
                 *cmd, query,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
+                cwd=run_dir,
             )
             stdout, stderr = await proc.communicate()
 
