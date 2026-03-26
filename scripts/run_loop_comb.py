@@ -190,20 +190,18 @@ async def main(settings: LoopSettings):
             opts["run_dir"] = run_dir_str
         return opts
 
-    # Claude SDK agents: clone options with cwd pointing to run dir
-    from copy import deepcopy
-
-    def _with_cwd(opts, cwd):
-        o = deepcopy(opts)
-        o.cwd = cwd
-        return o
+    # Claude SDK agents: set cwd to run dir
+    skill_proposer_options.cwd = run_dir_str
+    prompt_proposer_options.cwd = run_dir_str
+    skill_generator_options.cwd = run_dir_str
+    prompt_generator_options.cwd = run_dir_str
 
     agents = LoopAgents(
         base=Agent(agent_factory, AgentResponse),
-        skill_proposer=Agent(_with_cwd(skill_proposer_options, run_dir_str), SkillProposerResponse),
-        prompt_proposer=Agent(_with_cwd(prompt_proposer_options, run_dir_str), PromptProposerResponse),
-        skill_generator=Agent(_with_cwd(skill_generator_options, run_dir_str), ToolGeneratorResponse),
-        prompt_generator=Agent(_with_cwd(prompt_generator_options, run_dir_str), PromptGeneratorResponse),
+        skill_proposer=Agent(skill_proposer_options, SkillProposerResponse),
+        prompt_proposer=Agent(prompt_proposer_options, PromptProposerResponse),
+        skill_generator=Agent(skill_generator_options, ToolGeneratorResponse),
+        prompt_generator=Agent(prompt_generator_options, PromptGeneratorResponse),
     )
     manager = ProgramManager(cwd=run_dir_str)
 
