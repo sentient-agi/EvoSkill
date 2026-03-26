@@ -173,22 +173,39 @@ async def main(settings: LoopSettings):
     run_dir = prepare_run_dir(session_name, include_skills=False)
     print(f"Run directory: {run_dir}")
 
-    # Wrap agent_options to inject run_dir for opencode
+    # Init a git repo in the run dir for ProgramManager branch tracking
+    if not (run_dir / ".git").exists():
+        subprocess.run(["git", "init"], cwd=run_dir, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=run_dir, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init", "--allow-empty"], cwd=run_dir, capture_output=True)
+
+    # Point all agents at the run dir so skills, git, everything is isolated
+    run_dir_str = str(run_dir)
+
+    # Base agent (opencode): inject run_dir into options dict
     original_factory = agent_options
     def agent_factory():
         opts = original_factory() if callable(original_factory) else original_factory
         if isinstance(opts, dict):
-            opts["run_dir"] = str(run_dir)
+            opts["run_dir"] = run_dir_str
         return opts
+
+    # Claude SDK agents: clone options with cwd pointing to run dir
+    from copy import deepcopy
+
+    def _with_cwd(opts, cwd):
+        o = deepcopy(opts)
+        o.cwd = cwd
+        return o
 
     agents = LoopAgents(
         base=Agent(agent_factory, AgentResponse),
-        skill_proposer=Agent(skill_proposer_options, SkillProposerResponse),
-        prompt_proposer=Agent(prompt_proposer_options, PromptProposerResponse),
-        skill_generator=Agent(skill_generator_options, ToolGeneratorResponse),
-        prompt_generator=Agent(prompt_generator_options, PromptGeneratorResponse),
+        skill_proposer=Agent(_with_cwd(skill_proposer_options, run_dir_str), SkillProposerResponse),
+        prompt_proposer=Agent(_with_cwd(prompt_proposer_options, run_dir_str), PromptProposerResponse),
+        skill_generator=Agent(_with_cwd(skill_generator_options, run_dir_str), ToolGeneratorResponse),
+        prompt_generator=Agent(_with_cwd(prompt_generator_options, run_dir_str), PromptGeneratorResponse),
     )
-    manager = ProgramManager(cwd=get_project_root())
+    manager = ProgramManager(cwd=run_dir_str)
 
     config = LoopConfig(
         max_iterations=settings.max_iterations,
@@ -203,12 +220,6 @@ async def main(settings: LoopSettings):
         continue_mode=settings.continue_loop,
     )
 
-    # Remember starting branch so we can return to it after the loop
-    starting_branch = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True, text=True, cwd=get_project_root(),
-    ).stdout.strip()
-
     print(f"Dataset: {dataset_name}")
     print(f"Loop: mode={settings.mode}, sdk={settings.sdk}, model={settings.model}")
     print(f"Config: max_iter={settings.max_iterations}, cats_per_batch={settings.categories_per_batch}, samples_per_cat={settings.samples_per_category}")
@@ -219,17 +230,11 @@ async def main(settings: LoopSettings):
     print(f"Best: {result.best_program} ({result.best_score:.2%})")
     print(f"Frontier: {result.frontier}")
 
-    # Export best skills to the run dir (for eval to pick up via --session)
+    # Export best skills — they're already in run_dir/.claude/skills/ on the best branch
     if result.best_program != "base" and settings.mode == "skill_only":
         exported = loop.export_best_skills(run_dir=run_dir)
         if exported:
             print(f"Exported skills to {run_dir}: {exported}")
-
-    # Return to starting branch
-    subprocess.run(
-        ["git", "checkout", starting_branch],
-        cwd=get_project_root(), capture_output=True,
-    )
 
 
 if __name__ == "__main__":
