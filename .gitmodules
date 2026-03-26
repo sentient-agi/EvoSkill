@@ -1,0 +1,3 @@
+[submodule "OSWorld"]
+	path = OSWorld
+	url = https://github.com/LastS3cond/OSWorld.git
