@@ -420,15 +420,19 @@ class SelfImprovingLoop:
     # Meta-skills that should not be exported (they're always present)
     META_SKILLS = {"skill-creator", "brainstorming"}
 
-    def export_best_skills(self, target_branch: str | None = None) -> list[str]:
-        """Copy evolved skills from the best frontier program to a target branch.
+    def export_best_skills(
+        self,
+        target_branch: str | None = None,
+        run_dir: str | Path | None = None,
+    ) -> list[str]:
+        """Copy evolved skills from the best frontier program.
 
-        This makes skills available outside the loop's program branches so that
-        standalone eval scripts (e.g., run_eval_sealqa.py) can use them.
+        Exports to either a run directory (preferred) or a git branch.
 
         Args:
-            target_branch: Git branch to export to. If None, exports to the
-                current working branch (before program branches were created).
+            target_branch: Git branch to export to (legacy).
+            run_dir: Path to .evoskill-runs/<session>/ dir. If set, skills are
+                written to run_dir/.claude/skills/ and target_branch is ignored.
 
         Returns:
             List of skill names that were exported.
@@ -460,20 +464,29 @@ class SelfImprovingLoop:
             _log("EXPORT", f"No evolved skills found on {best}")
             return []
 
-        # Switch to target branch and write skills
-        if target_branch:
-            subprocess.run(
-                ["git", "checkout", target_branch],
-                cwd=self._project_root, check=True,
-                capture_output=True,
-            )
+        if run_dir:
+            # Export to isolated run directory
+            dest_skills = Path(run_dir) / ".claude" / "skills"
+            dest_skills.mkdir(parents=True, exist_ok=True)
+            for name, content in evolved_skills.items():
+                dest = dest_skills / name
+                dest.mkdir(parents=True, exist_ok=True)
+                (dest / "SKILL.md").write_text(content)
+            _log("EXPORT", f"Exported {len(evolved_skills)} skill(s) to {run_dir}: {list(evolved_skills.keys())}")
+        else:
+            # Legacy: export to git branch
+            if target_branch:
+                subprocess.run(
+                    ["git", "checkout", target_branch],
+                    cwd=self._project_root, check=True,
+                    capture_output=True,
+                )
+            for name, content in evolved_skills.items():
+                dest = skills_dir / name
+                dest.mkdir(parents=True, exist_ok=True)
+                (dest / "SKILL.md").write_text(content)
+            _log("EXPORT", f"Exported {len(evolved_skills)} skill(s) from {best}: {list(evolved_skills.keys())}")
 
-        for name, content in evolved_skills.items():
-            dest = skills_dir / name
-            dest.mkdir(parents=True, exist_ok=True)
-            (dest / "SKILL.md").write_text(content)
-
-        _log("EXPORT", f"Exported {len(evolved_skills)} skill(s) from {best}: {list(evolved_skills.keys())}")
         return list(evolved_skills.keys())
 
     def _save_error_trace(self, iteration: int, question: str, error: Exception) -> None:
