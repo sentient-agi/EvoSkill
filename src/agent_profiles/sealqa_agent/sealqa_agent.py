@@ -12,7 +12,7 @@ SEALQA_AGENT_TOOLS = [
 ]
 
 # Path to the prompt file (read at runtime)
-PROMPT_FILE = Path(__file__).parent.parent / "base_agent" / "prompt.txt"
+PROMPT_FILE = Path(__file__).parent / "prompt.txt"
 
 
 def get_sealqa_agent_options(

@@ -25,7 +25,6 @@ DABstep-data/
 
 # Cache
 .cache/
-*.txt
 output.txt
 tests/
 scratch/
