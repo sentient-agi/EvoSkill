@@ -66,7 +66,7 @@ async def main(settings: EvalSettings):
         agent_options = make_dabstep_agent_options(model=settings.model, data_dir=settings.data_dir)
     elif settings.dataset_path.name == "livecodebench_v6.csv":
         items = load_livecode(data, settings)
-        agent_options = make_livecodebench_agent_options(model=settings.model)
+        agent_options = make_livecodebench_agent_options(model=settings.model, provider=settings.provider)
 
     # Prepare isolated run directory for opencode (avoids skill conflicts between runs)
     include_skills = not settings.no_skills

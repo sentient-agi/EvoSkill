@@ -1,5 +1,5 @@
 from typing import Any, Union
-
+from pathlib import Path
 from src.agent_profiles.sdk_config import is_claude_sdk
 from src.agent_profiles.skill_generator import get_project_root
 from src.schemas import AgentResponse
@@ -23,10 +23,12 @@ LIVECODEBENCH_AGENT_TOOLS = [
 # NOTE: Question formatting (in livecodebench_format.py) matches Artificial Analysis.
 # However, we use default Claude Code system prompts and tools for better performance.
 # Reference: https://artificialanalysis.ai/benchmarks/livecodebench
-
+# Path to the prompt file (read at runtime)
+PROMPT_FILE = Path(__file__).parent / "prompt.txt"
 
 def get_livecodebench_agent_options(
     model: str | None = None,
+    provider: str | None = None,
 ) -> Union[Any, dict[str, Any]]:
     """
     Factory function that creates agent options for LiveCodeBench evaluation.
@@ -37,6 +39,9 @@ def get_livecodebench_agent_options(
     Args:
         model: Model to use (e.g., "opus", "sonnet"). If None, uses SDK default.
     """
+    # Read prompt from disk
+    prompt_text = PROMPT_FILE.read_text().strip()
+
     if is_claude_sdk():
         from claude_agent_sdk import ClaudeAgentOptions
 
@@ -64,19 +69,19 @@ def get_livecodebench_agent_options(
     else:
         # OpenCode SDK - return dict with default system prompt and tools
         return {
-            "system": "",  # Use default system prompt
+            "system": prompt_text,  # Use default system prompt
             "format": {
                 "type": "json_schema",
                 "schema": AgentResponse.model_json_schema(),
             },
             "tools": {tool: True for tool in LIVECODEBENCH_AGENT_TOOLS},
             "mode": "build",
-            "model_id": model or "deepseek-ai/DeepSeek-V3",
-            "provider_id": "togetherai",
+            "model_id": model or "gpt-oss-120b",
+            "provider_id": provider or "arc",
         }
 
 
-def make_livecodebench_agent_options(model: str | None = None):
+def make_livecodebench_agent_options(model: str | None = None, provider: str | None = None):
     """Create a factory function for LiveCodeBench agent options with a specific model.
 
     Args:
@@ -87,7 +92,7 @@ def make_livecodebench_agent_options(model: str | None = None):
     """
 
     def factory() -> Union[Any, dict[str, Any]]:
-        return get_livecodebench_agent_options(model=model)
+        return get_livecodebench_agent_options(model=model, provider=provider)
 
     return factory
 
