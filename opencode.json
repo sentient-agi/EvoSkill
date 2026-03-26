@@ -1,0 +1,68 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "gemini": {
+      "npm": "@ai-sdk/google",
+      "options": {
+        "apiKey": "{env:GEMINI_API_KEY}"
+      },
+      "models": {
+        "gemini-2.5-flash": {
+          "name": "Gemini 2.5 Flash",
+          "limit": {
+            "context": 1048576,
+            "output": 65536
+          }
+        },
+        "gemini-3.1-flash-lite-preview": {
+          "name": "Gemini 3.1 Flash Lite Preview",
+          "limit": {
+            "context": 1048576,
+            "output": 65536
+          }
+        }
+      }
+    },
+    "arc": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "ARC VT LLM API",
+      "options": {
+        "baseURL": "https://llm-api.arc.vt.edu/api/v1",
+        "apiKey": "{env:ARC_LLM_API_KEY}"
+      },
+      "models": {
+        "gpt-oss-120b": {
+          "name": "GPT OSS 120B",
+          "limit": {
+            "context": 128000,
+            "output": 3072
+          }
+        },
+        "Kimi-K2.5": {
+          "name": "Kimi K2.5",
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "togetherai": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Together AI",
+      "options": {
+        "baseURL": "https://api.together.xyz/v1",
+        "apiKey": "{env:TOGETHER_AI_API_KEY}"
+      },
+      "models": {
+        "moonshotai/Kimi-K2.5": {
+          "name": "Kimi K2.5",
+          "limit": {
+            "context": 131072,
+            "output": 8192
+          }
+        }
+      }
+    }
+  }
+}

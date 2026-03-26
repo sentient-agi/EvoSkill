@@ -13,6 +13,7 @@ treasury_bulletins_parsed/
 !.claude/program.yaml
 !.claude/skills/
 results/
+job-outputs/
 DABstep-data/
 
 # Virtual environments
@@ -23,11 +24,16 @@ DABstep-data/
 
 # Cache
 .cache/
-*.txt
 output.txt
 tests/
 scratch/
 
-# vmware
+# Vmware for OSWorld
 vmware_vm_data/
 .vmware_vms
+
+# Ignore loose Python scripts in repo root
+/*.py
+.evoskill-runs/
+*.csv
+*.zip

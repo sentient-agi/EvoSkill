@@ -1,6 +1,8 @@
 import re
 import json
-from llm_sandbox import SandboxSession
+import subprocess
+import tempfile
+import os
 
 
 # Regex to extract code from markdown code blocks
@@ -23,9 +25,9 @@ def extract_code(response: str) -> str | None:
 
 
 def run_code_with_input(
-    code: str, test_input: str, timeout: int = 5
+    code: str, test_input: str, timeout: int = 10
 ) -> tuple[bool, str]:
-    """Execute Python code with given input in a secure sandbox.
+    """Execute Python code with given input via subprocess.
 
     Args:
         code: Python code to execute
@@ -36,30 +38,30 @@ def run_code_with_input(
         Tuple of (success, output/error)
     """
     try:
-        # Wrap code to read from stdin and handle input
-        wrapped_code = f"""
-import sys
-from io import StringIO
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False
+        ) as f:
+            f.write(code)
+            f.flush()
+            tmp_path = f.name
 
-# Mock stdin with test input
-sys.stdin = StringIO({repr(test_input)})
-
-# Execute the user's code
-{code}
-"""
-
-        with SandboxSession(
-            lang="python",
-            keep_template=False,
-            verbose=False,
-        ) as session:
-            result = session.run(wrapped_code)
-
-            if result.exit_code == 0:
+        try:
+            result = subprocess.run(
+                ["python3", tmp_path],
+                input=test_input,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            if result.returncode == 0:
                 return True, result.stdout.strip()
             else:
                 return False, result.stderr.strip()
+        finally:
+            os.unlink(tmp_path)
 
+    except subprocess.TimeoutExpired:
+        return False, f"Timeout after {timeout}s"
     except Exception as e:
         return False, str(e)
 

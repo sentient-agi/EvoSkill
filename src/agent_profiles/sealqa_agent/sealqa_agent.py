@@ -1,66 +1,79 @@
+from typing import Union
 from pathlib import Path
 from claude_agent_sdk import ClaudeAgentOptions
 from src.schemas import AgentResponse
 from src.agent_profiles.skill_generator import get_project_root
+from src.agent_profiles.sdk_config import is_opencode_sdk
 
 
-SEALQA_AGENT_TOOLS = ["Read", "Write", "Bash", "Glob", "Grep", "Edit", "WebFetch", "WebSearch", "TodoWrite", "BashOutput", "Skill"]
+SEALQA_AGENT_TOOLS = [
+    "WebFetch",
+    "WebSearch",
+]
 
 # Path to the prompt file (read at runtime)
 PROMPT_FILE = Path(__file__).parent / "prompt.txt"
 
 
-def get_sealqa_agent_options(model: str | None = None) -> ClaudeAgentOptions:
+def get_sealqa_agent_options(
+    model: str | None = None,
+    provider: str | None = None,
+) -> Union[ClaudeAgentOptions, dict]:
     """
-    Factory function that creates ClaudeAgentOptions with the current prompt.
-
-    Reads prompt.txt from disk each time, allowing dynamic updates
-    without restarting the Python process.
+    Factory function that creates agent options with the current prompt.
 
     Args:
-        model: Model to use (e.g., "opus", "sonnet"). If None, uses SDK default.
+        model: Model to use. If None, uses SDK default.
+        provider: Provider ID for opencode SDK (e.g., 'gemini', 'arc').
     """
     # Read prompt from disk
     prompt_text = PROMPT_FILE.read_text().strip()
 
-    system_prompt = {
-        "type": "preset",
-        "preset": "claude_code",
-        "append": prompt_text
-    }
+    if is_opencode_sdk():
+        return {
+            "system": prompt_text,
+            "model_id": model or "gpt-oss-120b",
+            "provider_id": provider or "arc",
+            "tools": {tool: True for tool in SEALQA_AGENT_TOOLS},
+            "format": {
+                "type": "json_schema",
+                "schema": AgentResponse.model_json_schema(),
+            },
+        }
+    else:
+        # system_prompt = {
+        #     "type": "preset",
+        #     "preset": "claude_code",
+        #     "append": prompt_text,
+        # }
 
-    output_format = {
-        "type": "json_schema",
-        "schema": AgentResponse.model_json_schema()
-    }
+        output_format = {
+            "type": "json_schema",
+            "schema": AgentResponse.model_json_schema(),
+        }
 
-    options = ClaudeAgentOptions(
-        system_prompt=system_prompt,
-        output_format=output_format,
-        allowed_tools=SEALQA_AGENT_TOOLS,
-        setting_sources=["user", "project"],
-        permission_mode='acceptEdits',
-        cwd=get_project_root(),
-        max_buffer_size=10 * 1024 * 1024,  # 10MB buffer (default is 1MB)
-    )
+        options = ClaudeAgentOptions(
+            system_prompt=None,
+            output_format=output_format,
+            allowed_tools=SEALQA_AGENT_TOOLS,
+            setting_sources=["user", "project"],
+            permission_mode="acceptEdits",
+            cwd=get_project_root(),
+            max_buffer_size=10 * 1024 * 1024,  # 10MB buffer
+        )
 
-    if model:
-        options.model = model
+        if model:
+            options.model = model
 
-    return options
+        return options
 
 
-def make_sealqa_agent_options(model: str | None = None):
-    """Create a factory function for sealqa agent options with a specific model.
+def make_sealqa_agent_options(model: str | None = None, provider: str | None = None):
+    """Create a factory function for agent options."""
 
-    Args:
-        model: Model to use (e.g., "opus", "sonnet"). If None, uses SDK default.
+    def factory() -> Union[ClaudeAgentOptions, dict]:
+        return get_sealqa_agent_options(model=model, provider=provider)
 
-    Returns:
-        A callable that returns ClaudeAgentOptions configured with the model.
-    """
-    def factory() -> ClaudeAgentOptions:
-        return get_sealqa_agent_options(model=model)
     return factory
 
 

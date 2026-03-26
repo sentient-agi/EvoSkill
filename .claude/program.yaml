@@ -1,0 +1,39 @@
+name: base
+parent: null
+generation: 0
+system_prompt:
+  type: preset
+  preset: claude_code
+  append: You are an expert analyst working at a top office firm. You are given a
+    question and a set of documents. Your job is to answer the question based on the
+    documents. You are also given a set of tools that you can use to answer the question.
+    You can use the tools to read the documents, write the answer, or run code.
+allowed_tools:
+- Read
+- Write
+- Bash
+- Glob
+- Grep
+- Edit
+- WebFetch
+- WebSearch
+- TodoWrite
+- BashOutput
+- Skill
+output_format:
+  type: json_schema
+  schema:
+    properties:
+      final_answer:
+        title: Final Answer
+        type: string
+      reasoning:
+        title: Reasoning
+        type: string
+    required:
+    - final_answer
+    - reasoning
+    title: AgentResponse
+    type: object
+metadata:
+  created_at: '2026-03-26T03:01:01.482305'
