@@ -11,8 +11,7 @@ treasury_bulletins_parsed/
 # Claude Code config (ignore most, but track program state)
 .claude/*
 !.claude/program.yaml
-!.claude/skills/skill-creator/**/*.py
-!.claude/skills/skill-creator/**/*.md
+!.claude/skills/
 results/
 job-outputs/
 DABstep-data/
