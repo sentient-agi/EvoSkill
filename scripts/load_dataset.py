@@ -23,12 +23,13 @@ def prepare_run_dir(session_name: str, include_skills: bool) -> Path:
     """Create an isolated directory for an opencode run.
 
     Each session gets its own dir with opencode.json and .env copied in.
-    Skills are only included if include_skills=True, avoiding race conditions
-    when baseline and evolved runs share the same filesystem.
+    If the session dir already has skills (e.g., from a prior loop run),
+    they are preserved — the eval reuses them.
 
     Args:
         session_name: Name for the session directory.
         include_skills: Whether to copy evolved skills into the run dir.
+            Ignored if the session already has evolved skills (from a loop).
 
     Returns:
         Path to the run directory.
@@ -36,26 +37,40 @@ def prepare_run_dir(session_name: str, include_skills: bool) -> Path:
     run_dir = RUNS_DIR / session_name
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy opencode.json
+    # Always refresh opencode.json and .env
     opencode_json = PROJECT_ROOT / "opencode.json"
     if opencode_json.exists():
         shutil.copy2(str(opencode_json), str(run_dir / "opencode.json"))
 
-    # Copy .env
     env_file = PROJECT_ROOT / ".env"
     if env_file.exists():
         shutil.copy2(str(env_file), str(run_dir / ".env"))
 
-    # Set up .claude/skills/ in the run dir
+    # If session already has skills (from a loop run), keep them
     run_skills = run_dir / ".claude" / "skills"
-    if run_skills.exists():
-        shutil.rmtree(str(run_skills))
+    existing_evolved = [
+        d.name for d in run_skills.iterdir()
+        if d.is_dir() and d.name not in META_SKILLS and (d / "SKILL.md").exists()
+    ] if run_skills.exists() else []
 
-    if include_skills and SKILLS_DIR.exists():
-        # Copy all skills (meta + evolved)
+    if existing_evolved:
+        # Session has evolved skills from a loop — preserve them
+        # Just ensure meta-skills are present
+        if SKILLS_DIR.exists():
+            for skill_dir in SKILLS_DIR.iterdir():
+                if skill_dir.is_dir() and skill_dir.name in META_SKILLS:
+                    dest = run_skills / skill_dir.name
+                    if not dest.exists():
+                        shutil.copytree(str(skill_dir), str(dest))
+    elif include_skills and SKILLS_DIR.exists():
+        # Fresh session, copy all skills (meta + evolved)
+        if run_skills.exists():
+            shutil.rmtree(str(run_skills))
         shutil.copytree(str(SKILLS_DIR), str(run_skills))
     else:
         # Baseline: only copy meta-skills (skill-creator, etc.)
+        if run_skills.exists():
+            shutil.rmtree(str(run_skills))
         run_skills.mkdir(parents=True, exist_ok=True)
         if SKILLS_DIR.exists():
             for skill_dir in SKILLS_DIR.iterdir():

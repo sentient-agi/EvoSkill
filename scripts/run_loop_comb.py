@@ -33,7 +33,7 @@ from src.schemas import (
     ToolGeneratorResponse,
     PromptGeneratorResponse,
 )
-from scripts.load_dataset import EvalSettings
+from scripts.load_dataset import EvalSettings, prepare_run_dir
 
 from pathlib import Path
 from pydantic import Field
@@ -164,8 +164,25 @@ async def main(settings: LoopSettings):
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
+    # Create isolated run dir — base agent runs from here, skills land here
+    if settings.session:
+        session_name = settings.session
+    else:
+        model_slug = (settings.model or "default").replace("/", "_")
+        session_name = f"{model_slug}_evolved"
+    run_dir = prepare_run_dir(session_name, include_skills=False)
+    print(f"Run directory: {run_dir}")
+
+    # Wrap agent_options to inject run_dir for opencode
+    original_factory = agent_options
+    def agent_factory():
+        opts = original_factory() if callable(original_factory) else original_factory
+        if isinstance(opts, dict):
+            opts["run_dir"] = str(run_dir)
+        return opts
+
     agents = LoopAgents(
-        base=Agent(agent_options, AgentResponse),
+        base=Agent(agent_factory, AgentResponse),
         skill_proposer=Agent(skill_proposer_options, SkillProposerResponse),
         prompt_proposer=Agent(prompt_proposer_options, PromptProposerResponse),
         skill_generator=Agent(skill_generator_options, ToolGeneratorResponse),
@@ -186,7 +203,7 @@ async def main(settings: LoopSettings):
         continue_mode=settings.continue_loop,
     )
 
-    # Remember starting branch so we can export skills back
+    # Remember starting branch so we can return to it after the loop
     starting_branch = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
         capture_output=True, text=True, cwd=get_project_root(),
@@ -202,11 +219,17 @@ async def main(settings: LoopSettings):
     print(f"Best: {result.best_program} ({result.best_score:.2%})")
     print(f"Frontier: {result.frontier}")
 
-    # Export best skills back to the starting branch
+    # Export best skills to the run dir (for eval to pick up via --session)
     if result.best_program != "base" and settings.mode == "skill_only":
-        exported = loop.export_best_skills(target_branch=starting_branch)
+        exported = loop.export_best_skills(run_dir=run_dir)
         if exported:
-            print(f"Exported skills to {starting_branch}: {exported}")
+            print(f"Exported skills to {run_dir}: {exported}")
+
+    # Return to starting branch
+    subprocess.run(
+        ["git", "checkout", starting_branch],
+        cwd=get_project_root(), capture_output=True,
+    )
 
 
 if __name__ == "__main__":
