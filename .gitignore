@@ -27,3 +27,7 @@ DABstep-data/
 output.txt
 tests/
 scratch/
+
+# vmware
+vmware_vm_data/
+.vmware_vms
