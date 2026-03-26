@@ -15,6 +15,8 @@ fi
 export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.opencode/bin:$PATH"
 export PYTHONPATH=$PYTHONPATH:$SLURM_SUBMIT_DIR
 export PYTHONUNBUFFERED=1
+# Unset to avoid "nested session" error when loop spawns Claude SDK agents
+unset CLAUDECODE
 
 mkdir -p job-outputs
 
