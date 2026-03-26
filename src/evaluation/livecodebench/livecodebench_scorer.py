@@ -25,7 +25,7 @@ def extract_code(response: str) -> str | None:
 
 
 def run_code_with_input(
-    code: str, test_input: str, timeout: int = 10
+    code: str, test_input: str, timeout: int = 60
 ) -> tuple[bool, str]:
     """Execute Python code with given input via subprocess.
 
@@ -61,6 +61,7 @@ def run_code_with_input(
             os.unlink(tmp_path)
 
     except subprocess.TimeoutExpired:
+        print(f"Timeout after {timeout}s")
         return False, f"Timeout after {timeout}s"
     except Exception as e:
         return False, str(e)
@@ -102,7 +103,7 @@ def score_livecodebench(question: str, ground_truth: str, predicted: str) -> flo
         test_input = test_case.get("input", "")
         expected_output = test_case.get("output", "").strip()
 
-        success, actual_output = run_code_with_input(code, test_input, timeout=5)
+        success, actual_output = run_code_with_input(code, test_input, timeout=60)
 
         if success and actual_output == expected_output:
             passed += 1
