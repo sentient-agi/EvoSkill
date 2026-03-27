@@ -46,7 +46,7 @@ def prepare_run_dir(session_name: str) -> Path:
         shutil.copy2(str(env_file), str(run_dir / ".env"))
 
     # Symlink data directories the agent may need
-    for data_dir_name in ["data_directories", ".dataset"]:
+    for data_dir_name in ["data_directories", ".dataset", ".opencode"]:
         src = PROJECT_ROOT / data_dir_name
         dest = run_dir / data_dir_name
         if src.exists() and not dest.exists():
