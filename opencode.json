@@ -52,14 +52,14 @@
       "name": "Together AI",
       "options": {
         "baseURL": "https://api.together.xyz/v1",
-        "apiKey": "{env:TOGETHER_AI_API_KEY}"
+        "apiKey": "{env:TOGETHER_API_KEY}"
       },
       "models": {
-        "moonshotai/Kimi-K2.5": {
-          "name": "Kimi K2.5",
+        "gpt-oss-120b": {
+          "name": "GPT OSS 120B",
           "limit": {
-            "context": 131072,
-            "output": 8192
+            "context": 128000,
+            "output": 3072
           }
         }
       }
