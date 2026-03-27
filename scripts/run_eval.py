@@ -91,13 +91,13 @@ async def main(settings: EvalSettings):
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
     # Prepare isolated run directory for opencode (avoids skill conflicts between runs)
-    include_skills = not settings.no_skills
     if settings.session:
         session_name = settings.session
     else:
         model_slug = (settings.model or "default").replace("/", "_")
-        session_name = f"{model_slug}_{'evolved' if include_skills else 'baseline'}"
-    run_dir = prepare_run_dir(session_name, include_skills=include_skills)
+        mode = "baseline" if settings.no_skills else "evolved"
+        session_name = f"{model_slug}_{mode}"
+    run_dir = prepare_run_dir(session_name)
     print(f"Run directory: {run_dir}")
 
     # Wrap agent_options to inject run_dir for opencode
