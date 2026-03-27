@@ -20,6 +20,7 @@ from src.agent_profiles import (
     dabstep_agent_options, 
     make_dabstep_agent_options,
     make_livecodebench_agent_options,
+    make_gdpval_agent_options,
     set_sdk,
 )
 from src.api.data_utils import stratified_split
@@ -30,7 +31,8 @@ from src.evaluation.sealqa_scorer import score_sealqa
 from src.evaluation.reward import score_answer
 from src.evaluation.dabstep_scorer import question_scorer
 from src.evaluation.livecodebench.livecodebench_scorer import score_livecodebench
-from scripts.load_dataset import load_dabstep, load_livecode, load_officeqa, load_sealqa, prepare_run_dir, list_active_skills, EvalSettings
+from src.evaluation.gdpval_scorer import score_gdpval_with_judge
+from scripts.load_dataset import load_dabstep, load_livecode, load_officeqa, load_sealqa, load_gdpval, prepare_run_dir, list_active_skills, EvalSettings
 
 PROMPT = """You are an expert data analyst and you will answer factoid questions by loading and referencing the files/documents listed below.
 You have these files available:
@@ -49,29 +51,40 @@ async def main(settings: EvalSettings):
     set_sdk(settings.sdk)
 
     # Load dataset
-    data = pd.read_csv(settings.dataset_path)
+    dataset_path = settings.dataset_path
+    dataset_name = dataset_path.name
+    data = pd.read_csv(dataset_path)
 
     # Slice dataset before splitting (e.g., first 120 questions)
     if settings.dataset_slice:
         data = data.head(settings.dataset_slice)
         print(f"Sliced dataset to first {settings.dataset_slice} rows")
 
-    if settings.dataset_path.name == "officeqa.csv":
+    if dataset_name == "officeqa.csv":
         items = load_officeqa(data, settings)
         agent_options = (
             make_base_agent_options(model=settings.model)
             if settings.model
             else base_agent_options
         )
-    elif settings.dataset_path.name == "seal-0.csv":
+    elif dataset_name == "seal-0.csv":
         items = load_sealqa(data, settings)
         agent_options = make_sealqa_agent_options(model=settings.model, provider=settings.provider)
-    elif settings.dataset_path.name == "dabstep_data.csv":
+    elif dataset_name == "dabstep_data.csv":
         items = load_dabstep(data, settings, PROMPT)
         agent_options = make_dabstep_agent_options(model=settings.model, data_dir=settings.data_dir)
-    elif settings.dataset_path.name == "livecodebench_v6.csv":
+    elif dataset_name == "livecodebench_v6.csv":
         items = load_livecode(data, settings)
         agent_options = make_livecodebench_agent_options(model=settings.model, provider=settings.provider)
+    elif dataset_name == "gdpval.csv":
+        # Set up output directory for GDPval deliverables
+        gdpval_output_dir = Path(get_project_root()) / "output" / "gdpval_deliverables"
+        items = load_gdpval(data, settings, output_base_dir=gdpval_output_dir)
+        # GDPval reference files are in data_directories/reference_files
+        gdpval_ref_dir = str(Path(get_project_root()) / "data_directories" / "reference_files")
+        agent_options = make_gdpval_agent_options(model=settings.model, data_dir=gdpval_ref_dir)
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
 
     # Prepare isolated run directory for opencode (avoids skill conflicts between runs)
     include_skills = not settings.no_skills
@@ -122,22 +135,52 @@ async def main(settings: EvalSettings):
         
         if predicted:
             scored += 1
-            if settings.dataset_path.name == "officeqa.csv":
+            if dataset_name == "officeqa.csv":
                 score = score_answer(str(r.ground_truth), predicted)
                 if score > 0:
                     correct += 1
-            elif settings.dataset_path.name == "seal-0.csv":
+            elif dataset_name == "seal-0.csv":
                 score = score_sealqa(r.question, str(r.ground_truth), predicted)
                 if score > 0:
                     correct += 1
-            elif settings.dataset_path.name == "dabstep_data.csv":
+            elif dataset_name == "dabstep_data.csv":
                 score = question_scorer(predicted, str(r.ground_truth))
                 if score:
                     correct += 1
-            elif settings.dataset_path.name == "livecodebench_v6.csv":
+            elif dataset_name == "livecodebench_v6.csv":
                 score = score_livecodebench(r.question, str(r.ground_truth), predicted)
                 if score > 0:
                     correct += 1
+            elif dataset_name == "gdpval.csv":
+                # GDPval uses async multimodal scoring with file comparison
+                # Parse rubric_info from ground_truth
+                import json
+                rubric_info = json.loads(r.ground_truth)
+                task_id = rubric_info["task_id"]
+                generated_dir = Path(rubric_info["generated_dir"])
+                
+                # Get reference deliverable paths from the dataset
+                ref_deliverables = rubric_info.get("deliverable_files", [])
+                if isinstance(ref_deliverables, str):
+                    ref_deliverables = json.loads(ref_deliverables)
+                
+                # Get GDPval base path
+                from src.evaluation.gdpval_scorer import get_gdpval_base_path
+                gdpval_base = get_gdpval_base_path()
+                
+                # Run async scoring
+                score, rationale = await score_gdpval_with_judge(
+                    task_id=task_id,
+                    prompt=r.question,
+                    rubric_json=rubric_info.get("rubric_json", ""),
+                    generated_dir=generated_dir,
+                    reference_deliverable_paths=ref_deliverables,
+                    gdpval_base_path=gdpval_base,
+                )
+                if score > 0:
+                    correct += 1
+                # Store rationale in result metadata for debugging
+                print(f"  GDPval task {task_id}: score={score}, rationale={rationale[:100]}...")
 
     print(f"\n{'=' * 50}")
     print(f"Total completed: {len(all_results)}/{len(data)}")

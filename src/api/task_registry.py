@@ -62,12 +62,17 @@ def _sealqa_scorer(question: str, predicted: str, ground_truth: str) -> float:
 
     return score_sealqa(question, ground_truth, predicted)
 
-
 def _livecodebench_scorer(question: str, predicted: str, ground_truth: str) -> float:
     """Wrapper around score_livecodebench matching the runner's signature."""
     from src.evaluation.livecodebench import score_livecodebench
-
     return score_livecodebench(question, ground_truth, predicted)
+
+
+def _gdpval_scorer(question: str, predicted: str, ground_truth: str) -> float:
+    """Wrapper around score_gdpval matching the runner's signature."""
+    from src.evaluation.gdpval_scorer import score_gdpval
+
+    return score_gdpval(question, predicted, ground_truth)
 
 
 def _register_builtins() -> None:
@@ -77,6 +82,7 @@ def _register_builtins() -> None:
         make_dabstep_agent_options,
         make_livecodebench_agent_options,
         make_sealqa_agent_options,
+        make_gdpval_agent_options,
     )
 
     register_task(
@@ -122,6 +128,19 @@ def _register_builtins() -> None:
             answer_col="public_test_cases",
             category_col="platform",
             default_dataset=livecodebench_dataset,
+        )
+    )
+
+    register_task(
+        TaskConfig(
+            name="gdpval",
+            make_agent_options=make_gdpval_agent_options,
+            scorer=_gdpval_scorer,
+            question_col="prompt",
+            answer_col="rubric_json",
+            category_col="sector",
+            column_renames={"sector": "category"},
+            default_dataset=".dataset/gdpval/gdpval.csv",
         )
     )
 
