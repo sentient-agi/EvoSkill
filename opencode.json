@@ -35,31 +35,62 @@
           "name": "GPT OSS 120B",
           "limit": {
             "context": 128000,
-            "output": 3072
+            "output": 32768
           }
         },
         "Kimi-K2.5": {
           "name": "Kimi K2.5",
           "limit": {
             "context": 131072,
-            "output": 8192
+            "output": 32768
           }
         }
       }
     },
-    "togetherai": {
+    "arc2": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Together AI",
+      "name": "ARC VT LLM API (Key 2)",
       "options": {
-        "baseURL": "https://api.together.xyz/v1",
-        "apiKey": "{env:TOGETHER_API_KEY}"
+        "baseURL": "https://llm-api.arc.vt.edu/api/v1",
+        "apiKey": "{env:ARC_LLM_API_KEY2}"
       },
       "models": {
         "gpt-oss-120b": {
           "name": "GPT OSS 120B",
           "limit": {
             "context": 128000,
-            "output": 3072
+            "output": 32768
+          }
+        },
+        "Kimi-K2.5": {
+          "name": "Kimi K2.5",
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          }
+        }
+      }
+    },
+    "arc3": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "ARC VT LLM API (Key 3)",
+      "options": {
+        "baseURL": "https://llm-api.arc.vt.edu/api/v1",
+        "apiKey": "{env:ARC_LLM_API_KEY_SETH}"
+      },
+      "models": {
+        "gpt-oss-120b": {
+          "name": "GPT OSS 120B",
+          "limit": {
+            "context": 128000,
+            "output": 32768
+          }
+        },
+        "Kimi-K2.5": {
+          "name": "Kimi K2.5",
+          "limit": {
+            "context": 131072,
+            "output": 32768
           }
         }
       }
