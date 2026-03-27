@@ -188,7 +188,7 @@ async def main(settings: LoopSettings):
     else:
         model_slug = (settings.model or "default").replace("/", "_")
         session_name = f"{model_slug}_evolved"
-    run_dir = prepare_run_dir(session_name, include_skills=False)
+    run_dir = prepare_run_dir(session_name)
     print(f"Run directory: {run_dir}")
 
     # Init a git repo in the run dir for ProgramManager branch tracking
