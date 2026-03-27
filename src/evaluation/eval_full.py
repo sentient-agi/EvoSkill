@@ -31,11 +31,14 @@ def load_results(path: Path) -> list[IndexedEvalResult]:
 
 
 def get_successful_indices(path: Path) -> set[int]:
-    """Get set of indices that completed successfully (no error)."""
+    """Get set of indices that completed successfully (no error AND has output)."""
     results = load_results(path)
     return {
         r.index for r in results
-        if r.error is None and (r.trace is None or not r.trace.is_error)
+        if r.error is None
+        and r.trace is not None
+        and not r.trace.is_error
+        and (r.trace.result or (r.trace.output and r.trace.output.final_answer))
     }
 
 
