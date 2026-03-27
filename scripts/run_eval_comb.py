@@ -51,6 +51,11 @@ async def main(settings: EvalSettings):
     # Load dataset
     data = pd.read_csv(settings.dataset_path)
 
+    # Slice dataset before splitting (e.g., first 120 questions)
+    if settings.dataset_slice:
+        data = data.head(settings.dataset_slice)
+        print(f"Sliced dataset to first {settings.dataset_slice} rows")
+
     if settings.dataset_path.name == "officeqa.csv":
         items = load_officeqa(data, settings)
         agent_options = (

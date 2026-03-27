@@ -113,8 +113,11 @@ class EvalSettings(BaseSettings):
     platform: str = Field(
         default="all", description="Filter by platform"
     )
+    dataset_slice: Optional[int] = Field(
+        default=None, description="Truncate dataset to first N rows BEFORE train/val/test splitting (use to shrink the total pool)"
+    )
     num_samples: Optional[int] = Field(
-        default=None, description="Limit to first N samples"
+        default=None, description="Limit to first N items AFTER splitting (use to cap how many questions to evaluate)"
     )
     offset: int = Field(
         default=0, description="Skip the first N questions"
