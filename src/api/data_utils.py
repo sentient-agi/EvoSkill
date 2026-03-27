@@ -25,11 +25,13 @@ def load_dataset(path: str, task_config: TaskConfig) -> pd.DataFrame:
         data.rename(columns=task_config.column_renames, inplace=True)
     return data
 
+import pandas as pd
 
 def stratified_split(
     data: pd.DataFrame,
     train_ratio: float = 0.18,
     val_ratio: float = 0.12,
+    max_examples: int = None
 ) -> tuple[dict[str, list[tuple[str, str]]], list[tuple[str, str, str]], list[tuple[str, str, str]]]:
     """Split data ensuring each category has at least 1 in both train and validation.
 
@@ -37,6 +39,7 @@ def stratified_split(
         data: DataFrame with 'question', 'ground_truth', 'category' columns.
         train_ratio: Fraction of each category to use for training.
         val_ratio: Fraction of each category to use for validation.
+        max_examples: Maximum total examples to use across the entire dataset.
 
     Returns:
         train_pools: Dict mapping category -> list of (question, answer) tuples.
@@ -50,13 +53,22 @@ def stratified_split(
 
     # Drop rows with missing categories
     data = data.dropna(subset=["category"])
+    total_rows = len(data)
     categories = data["category"].unique()
+    
     train_pools: dict[str, list[tuple[str, str]]] = {}
     val_data: list[tuple[str, str, str]] = []
     test_data: list[tuple[str, str, str]] = []
 
     for cat in categories:
         cat_data = data[data["category"] == cat].sample(frac=1, random_state=42)
+
+        if max_examples is not None and total_rows > max_examples:
+            cat_proportion = len(cat_data) / total_rows
+            cat_limit = max(2, int(round(cat_proportion * max_examples)))
+            cat_limit = min(cat_limit, len(cat_data))
+            cat_data = cat_data.head(cat_limit)
+
         n_train = max(1, int(len(cat_data) * train_ratio))
         n_val = max(1, int(len(cat_data) * val_ratio))
 

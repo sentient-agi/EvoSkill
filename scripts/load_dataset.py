@@ -140,10 +140,6 @@ class EvalSettings(BaseSettings):
     provider: str = Field(
         default=None, description="Provider ID for opencode SDK (e.g., gemini, arc). Required when --sdk=opencode."
     )
-    held_out: bool = Field(
-        default=True,
-        description="Evaluate only on the held-out test set (excludes train/val samples)",
-    )
     no_skills: bool = Field(
        default=False,
        description="Run baseline without evolved skills (temporarily hides .claude/skills/)" 
@@ -159,14 +155,12 @@ class EvalSettings(BaseSettings):
     )
 
 def load_officeqa(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
-    if settings.held_out:
-        data.rename(columns={"answer": "ground_truth", "difficulty": "category"}, inplace=True)
-        _train, _val, test_data = stratified_split(data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio)
-        # Rebuild dataframe from held-out tuples
-        data = pd.DataFrame(test_data, columns=["question", "answer", "difficulty"])
-        print(f"Held-out test set: {len(data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
-    else:
-        print(f"Full dataset: {len(data)} samples")
+    data.rename(columns={"answer": "ground_truth", "difficulty": "category"}, inplace=True)
+    _train, _val, test_data = stratified_split(data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio, max_examples=settings.dataset_slice)
+    # Rebuild dataframe from held-out tuples
+    data = pd.DataFrame(test_data, columns=["question", "answer", "difficulty"])
+    print(f"Sampled dataset: {settings.dataset_slice}, Held-out test set: {len(data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
+
 
     # Filter by difficulty if requested
     if settings.difficulty != "all":
@@ -186,14 +180,12 @@ def load_officeqa(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     return items
 
 def load_sealqa(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
-    if settings.held_out:
-        data.rename(columns={"topic": "category", "answer": "ground_truth"}, inplace=True)
-        _train, _val, test_data = stratified_split(data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio)
-        # Rebuild dataframe from held-out tuples
-        data = pd.DataFrame(test_data, columns=["question", "answer", "topic"])
-        print(f"Held-out test set: {len(data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
-    else:
-        print(f"Full dataset: {len(data)} samples")
+    data.rename(columns={"topic": "category", "answer": "ground_truth"}, inplace=True)
+    _train, _val, test_data = stratified_split(data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio, max_examples=settings.dataset_slice)
+    # Rebuild dataframe from held-out tuples
+    data = pd.DataFrame(test_data, columns=["question", "answer", "topic"])
+    print(f"Held-out test set: {len(data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
+
 
     # Filter by topic if requested
     if settings.topic != "all":
