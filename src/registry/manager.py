@@ -185,7 +185,7 @@ class ProgramManager:
         branch = f"{self.BRANCH_PREFIX}{name}"
         # Switch away if currently on this branch
         if self._git_current_branch() == branch:
-            self._git_checkout("main")
+            self._git_checkout(self._run_git(["var", "GIT_DEFAULT_BRANCH"]).stdout.strip().split("\n"))
         self._git_branch_delete(branch)
 
         # Also remove frontier tag if exists

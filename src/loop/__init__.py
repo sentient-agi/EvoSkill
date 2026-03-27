@@ -25,5 +25,6 @@ Example usage:
 
 from .config import LoopConfig
 from .runner import SelfImprovingLoop, LoopAgents, LoopResult
+from .gepa_runner import GEPALoop
 
-__all__ = ["SelfImprovingLoop", "LoopConfig", "LoopAgents", "LoopResult"]
+__all__ = ["SelfImprovingLoop", "GEPALoop", "LoopConfig", "LoopAgents", "LoopResult"]

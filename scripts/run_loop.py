@@ -6,7 +6,7 @@ import subprocess
 
 import pandas as pd
 
-from src.loop import SelfImprovingLoop, LoopConfig, LoopAgents
+from src.loop import SelfImprovingLoop, GEPALoop, LoopConfig, LoopAgents
 from src.agent_profiles import (
     Agent,
     set_sdk,
@@ -68,6 +68,14 @@ class LoopSettings(EvalSettings):
         default=False,
         description="Continue from existing frontier instead of starting fresh",
     )
+    optimizer: Literal["evoskill", "gepa"] = Field(
+        default="evoskill",
+        description='Optimizer: "evoskill" (proposer+generator pipeline) or "gepa" (dspy.GEPA)',
+    )
+    gepa_reflection_model: Optional[str] = Field(
+        default=None,
+        description="Model for dspy.GEPA reflection LM. Defaults to --model if not set.",
+    )
 
 
 # Scorer wrappers matching (question, predicted, ground_truth) -> float
@@ -128,6 +136,7 @@ async def main(settings: LoopSettings):
 
     dataset_path = settings.dataset_path
     dataset_name = dataset_path.name
+    prompt_path = (Path(get_project_root()) / "src" / "agent_profiles" / "base_agent" / "prompt.txt")
 
     # Load dataset based on file extension
     if dataset_name.endswith('.parquet'):
@@ -140,10 +149,12 @@ async def main(settings: LoopSettings):
         train_pools, val_data = build_train_val(data, "topic", "answer", "question", settings)
         agent_options = make_sealqa_agent_options(model=settings.model, provider=settings.provider)
         scorer = _sealqa_scorer
+        prompt_path = (Path(get_project_root()) / "src" / "agent_profiles" / "sealqa_agent" / "prompt.txt")
     elif dataset_name == "officeqa.csv":
         train_pools, val_data = build_train_val(data, "difficulty", "answer", "question", settings)
         agent_options = make_base_agent_options(model=settings.model)
         scorer = _officeqa_scorer
+        prompt_path = (Path(get_project_root()) / "src" / "agent_profiles" / "base_agent" / "prompt.txt")
     elif dataset_name == "dabstep_data.csv":
         # DABstep needs formatted prompts — use level as category
         data_dir = Path(settings.data_dir).resolve()
@@ -170,6 +181,8 @@ async def main(settings: LoopSettings):
         )
         agent_options = make_livecodebench_agent_options(model=settings.model)
         scorer = _livecodebench_scorer
+        prompt_path = (Path(get_project_root()) / "src" / "agent_profiles" / "livecodebench_agent" / "prompt.txt")
+
     elif dataset_name == "gdpval.csv":
         # GDPval dataset - treated as CSV
         train_pools, val_data = build_train_val(
@@ -240,7 +253,23 @@ async def main(settings: LoopSettings):
     print(f"Loop: mode={settings.mode}, sdk={settings.sdk}, model={settings.model}")
     print(f"Config: max_iter={settings.max_iterations}, cats_per_batch={settings.categories_per_batch}, samples_per_cat={settings.samples_per_category}")
 
-    loop = SelfImprovingLoop(config, agents, manager, train_pools, val_data, scorer=scorer)
+    if settings.optimizer == "gepa":
+        student_model = settings.model or "claude-opus-4-5-20251101"
+        reflection_model = settings.gepa_reflection_model or student_model
+        provider = settings.provider or "anthropic"
+        print(f"Optimizer: dspy.GEPA (model={student_model}, reflection={reflection_model}, provider={provider})")
+        loop = GEPALoop(
+            config, agents, manager, train_pools, val_data,
+            scorer=scorer,
+            student_model=student_model,
+            reflection_model=reflection_model,
+            provider=provider,
+            prompt_path=prompt_path,
+        )
+    else:
+        print(f"Optimizer: EvoSkill (two-step proposer+generator)")
+        loop = SelfImprovingLoop(config, agents, manager, train_pools, val_data, scorer=scorer)
+
     result = await loop.run()
 
     print(f"Best: {result.best_program} ({result.best_score:.2%})")
