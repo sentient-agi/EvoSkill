@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable
 
 import dspy
+import os
 
 from src.agent_profiles.skill_generator import get_project_root
 from src.registry import ProgramManager
@@ -178,14 +179,31 @@ class GEPALoop:
         self._initial_instructions = self._build_initial_instructions()
 
         # 2. Configure dspy LMs using same model/provider settings as base agent
-        student_lm = dspy.LM(
-            f"{self.provider}/{self.student_model}", temperature=0.7
-        )
-        reflection_lm = dspy.LM(
-            f"{self.provider}/{self.reflection_model}",
-            temperature=1.0,
-            max_tokens=32000,
-        )
+        if "arc" in self.provider:
+            arc_key = os.environ.get("ARC_LLM_API_KEY")
+            student_lm = dspy.LM(
+                f"openai/{self.student_model}", 
+                temperature=0.7, 
+                api_key=arc_key, 
+                api_base="https://llm-api.arc.vt.edu/api/v1",
+            )
+            reflection_lm = dspy.LM(
+                f"openai/{self.reflection_model}",
+                temperature=1.0,
+                max_tokens=32000,
+                api_key=arc_key, 
+                api_base="https://llm-api.arc.vt.edu/api/v1",
+            )
+        else:
+            student_lm = dspy.LM(
+                f"{self.provider}/{self.student_model}", temperature=0.7
+            )
+            reflection_lm = dspy.LM(
+                f"{self.provider}/{self.reflection_model}",
+                temperature=1.0,
+                max_tokens=32000,
+            )
+            
         dspy.configure(lm=student_lm)
 
         # 3. Prepare data
