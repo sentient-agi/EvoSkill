@@ -356,7 +356,9 @@ def load_gdpval(data: pd.DataFrame, settings: EvalSettings, output_base_dir: Pat
 IMPORTANT: You must save your deliverable file(s) to the following directory:
 {task_deliverable_dir}
 
-Create the deliverable(s) exactly as requested and save them to the specified directory path."""
+Create the deliverable(s) exactly as requested and save them to the specified directory path.
+
+You have been given everything you needed through the prompt and all (if any) reference files. Finish the task without further user input."""
         
         items.append((task_id, enhanced_prompt, str(rubric_info)))
 

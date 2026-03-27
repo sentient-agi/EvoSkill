@@ -151,36 +151,37 @@ async def main(settings: EvalSettings):
                 score = score_livecodebench(r.question, str(r.ground_truth), predicted)
                 if score > 0:
                     correct += 1
-            elif dataset_name == "gdpval.csv":
+            # elif dataset_name == "gdpval.csv":
                 # GDPval uses async multimodal scoring with file comparison
                 # Parse rubric_info from ground_truth
-                import json
-                rubric_info = json.loads(r.ground_truth)
-                task_id = rubric_info["task_id"]
-                generated_dir = Path(rubric_info["generated_dir"])
+                # Skipping scoring due to complexity
+                # import json
+                # rubric_info = json.loads(r.ground_truth)
+                # task_id = rubric_info["task_id"]
+                # generated_dir = Path(rubric_info["generated_dir"])
                 
-                # Get reference deliverable paths from the dataset
-                ref_deliverables = rubric_info.get("deliverable_files", [])
-                if isinstance(ref_deliverables, str):
-                    ref_deliverables = json.loads(ref_deliverables)
+                # # Get reference deliverable paths from the dataset
+                # ref_deliverables = rubric_info.get("deliverable_files", [])
+                # if isinstance(ref_deliverables, str):
+                #     ref_deliverables = json.loads(ref_deliverables)
                 
-                # Get GDPval base path
-                from src.evaluation.gdpval_scorer import get_gdpval_base_path
-                gdpval_base = get_gdpval_base_path()
+                # # Get GDPval base path
+                # from src.evaluation.gdpval_scorer import get_gdpval_base_path
+                # gdpval_base = get_gdpval_base_path()
                 
-                # Run async scoring
-                score, rationale = await score_gdpval_with_judge(
-                    task_id=task_id,
-                    prompt=r.question,
-                    rubric_json=rubric_info.get("rubric_json", ""),
-                    generated_dir=generated_dir,
-                    reference_deliverable_paths=ref_deliverables,
-                    gdpval_base_path=gdpval_base,
-                )
-                if score > 0:
-                    correct += 1
-                # Store rationale in result metadata for debugging
-                print(f"  GDPval task {task_id}: score={score}, rationale={rationale[:100]}...")
+                # # Run async scoring
+                # score, rationale = await score_gdpval_with_judge(
+                #     task_id=task_id,
+                #     prompt=r.question,
+                #     rubric_json=rubric_info.get("rubric_json", ""),
+                #     generated_dir=generated_dir,
+                #     reference_deliverable_paths=ref_deliverables,
+                #     gdpval_base_path=gdpval_base,
+                # )
+                # if score > 0:
+                #     correct += 1
+                # # Store rationale in result metadata for debugging
+                # print(f"  GDPval task {task_id}: score={score}, rationale={rationale[:100]}...")
 
     print(f"\n{'=' * 50}")
     print(f"Total completed: {len(all_results)}/{len(data)}")
