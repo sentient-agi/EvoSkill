@@ -282,6 +282,33 @@ def load_livecode(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     return items
 
 
+def load_frames(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
+    data.rename(columns={"Prompt": "question", "Answer": "ground_truth", "reasoning_types": "category"}, inplace=True)
+    _train, _val, test_data = stratified_split(data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio, max_examples=settings.dataset_slice)
+    # Rebuild dataframe from held-out tuples
+    data = pd.DataFrame(test_data, columns=["question", "answer", "category"])
+    print(f"Sampled dataset: {settings.dataset_slice}, Held-out test set: {len(data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
+
+    items = [
+        (idx, row["question"], row["answer"])
+        for idx, row in data.iterrows()
+    ]
+
+    # Apply offset and limit
+    if settings.offset:
+        items = items[settings.offset:]
+    if settings.num_samples is not None:
+        items = items[:settings.num_samples]
+
+    # Report config
+    active = list_active_skills()
+    mode = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
+    print(f"Evaluating: {len(items)} samples (category={settings.topic}, {mode})")
+    print(f"  sdk={settings.sdk} model={settings.model} provider={settings.provider or 'default'}")
+
+    return items
+
+
 def load_gdpval(data: pd.DataFrame, settings: EvalSettings, output_base_dir: Path | None = None) -> list[tuple]:
     """Load GDPval dataset items.
     

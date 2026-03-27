@@ -21,6 +21,7 @@ from src.agent_profiles import (
     make_dabstep_agent_options,
     make_livecodebench_agent_options,
     make_gdpval_agent_options,
+    make_frames_agent_options,
     set_sdk,
 )
 from src.api.data_utils import stratified_split
@@ -32,7 +33,7 @@ from src.evaluation.reward import score_answer
 from src.evaluation.dabstep_scorer import question_scorer
 from src.evaluation.livecodebench.livecodebench_scorer import score_livecodebench
 from src.evaluation.gdpval_scorer import score_gdpval_with_judge
-from scripts.load_dataset import load_dabstep, load_livecode, load_officeqa, load_sealqa, load_gdpval, prepare_run_dir, list_active_skills, EvalSettings
+from scripts.load_dataset import load_dabstep, load_livecode, load_officeqa, load_sealqa, load_gdpval, load_frames, prepare_run_dir, list_active_skills, EvalSettings
 
 PROMPT = """You are an expert data analyst and you will answer factoid questions by loading and referencing the files/documents listed below.
 You have these files available:
@@ -76,6 +77,9 @@ async def main(settings: EvalSettings):
     elif dataset_name == "livecodebench_v6.csv":
         items = load_livecode(data, settings)
         agent_options = make_livecodebench_agent_options(model=settings.model, provider=settings.provider)
+    elif dataset_name in ("frames.csv", "frames_filtered.csv"):
+        items = load_frames(data, settings)
+        agent_options = make_frames_agent_options(model=settings.model, provider=settings.provider)
     elif dataset_name == "gdpval.csv":
         # Set up output directory for GDPval deliverables
         gdpval_output_dir = Path(get_project_root()) / "output" / "gdpval_deliverables"
@@ -146,6 +150,10 @@ async def main(settings: EvalSettings):
             elif dataset_name == "dabstep_data.csv":
                 score = question_scorer(predicted, str(r.ground_truth))
                 if score:
+                    correct += 1
+            elif dataset_name in ("frames.csv", "frames_filtered.csv"):
+                score = score_sealqa(str(r.ground_truth), predicted)
+                if score > 0:
                     correct += 1
             elif dataset_name == "livecodebench_v6.csv":
                 score = score_livecodebench(r.question, str(r.ground_truth), predicted)

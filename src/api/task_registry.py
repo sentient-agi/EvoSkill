@@ -83,6 +83,7 @@ def _register_builtins() -> None:
         make_livecodebench_agent_options,
         make_sealqa_agent_options,
         make_gdpval_agent_options,
+        make_frames_agent_options,
     )
 
     register_task(
@@ -141,6 +142,16 @@ def _register_builtins() -> None:
             category_col="sector",
             column_renames={"sector": "category"},
             default_dataset=".dataset/gdpval/gdpval.csv",
+        )
+    )
+
+    register_task(
+        TaskConfig(
+            name="frames",
+            make_agent_options=make_frames_agent_options,
+            scorer=None,
+            column_renames={"Prompt": "question", "Answer": "ground_truth", "reasoning_types": "category"},
+            default_dataset=".dataset/frames_filtered.csv",
         )
     )
 
