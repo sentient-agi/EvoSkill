@@ -14,6 +14,7 @@ from src.agent_profiles import (
     make_sealqa_agent_options,
     make_dabstep_agent_options,
     make_livecodebench_agent_options,
+    make_gdpval_agent_options,
     skill_proposer_options,
     prompt_proposer_options,
     skill_generator_options,
@@ -25,6 +26,7 @@ from src.evaluation.sealqa_scorer import score_sealqa
 from src.evaluation.reward import score_answer
 from src.evaluation.dabstep_scorer import question_scorer
 from src.evaluation.livecodebench.livecodebench_scorer import score_livecodebench
+from src.evaluation.gdpval_scorer import score_gdpval  # Note: Returns 0.0, use run_eval_comb.py for full scoring
 from src.registry import ProgramManager
 from src.schemas import (
     AgentResponse,
@@ -124,8 +126,15 @@ Here are the guidelines you must follow when answering the question above:
 async def main(settings: LoopSettings):
     set_sdk(settings.sdk)
 
-    data = pd.read_csv(settings.dataset_path)
-    dataset_name = settings.dataset_path.name
+    dataset_path = settings.dataset_path
+    dataset_name = dataset_path.name
+
+    # Load dataset based on file extension
+    if dataset_name.endswith('.parquet'):
+        data = pd.read_parquet(dataset_path)
+    else:
+        # Default to CSV for all other files including gdpval.csv
+        data = pd.read_csv(dataset_path)
 
     if dataset_name == "seal-0.csv":
         train_pools, val_data = build_train_val(data, "topic", "answer", "question", settings)
@@ -161,6 +170,15 @@ async def main(settings: LoopSettings):
         )
         agent_options = make_livecodebench_agent_options(model=settings.model)
         scorer = _livecodebench_scorer
+    elif dataset_name == "gdpval.csv":
+        # GDPval dataset - treated as CSV
+        train_pools, val_data = build_train_val(
+            data, "sector", "rubric_json", "prompt", settings,
+        )
+        # GDPval reference files are in data_directories/reference_files
+        gdpval_ref_dir = str(Path(get_project_root()) / "data_directories" / "reference_files")
+        agent_options = make_gdpval_agent_options(model=settings.model, data_dir=gdpval_ref_dir)
+        scorer = score_gdpval
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 

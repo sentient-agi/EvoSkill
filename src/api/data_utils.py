@@ -31,8 +31,9 @@ def stratified_split(
     data: pd.DataFrame,
     train_ratio: float = 0.18,
     val_ratio: float = 0.12,
-    max_examples: int = None
-) -> tuple[dict[str, list[tuple[str, str]]], list[tuple[str, str, str]], list[tuple[str, str, str]]]:
+    max_examples: int | None = None,
+    extra_cols: list[str] | None = None
+) -> tuple[dict[str, list[tuple]], list[tuple], list[tuple]]:
     """Split data ensuring each category has at least 1 in both train and validation.
 
     Args:
@@ -40,11 +41,13 @@ def stratified_split(
         train_ratio: Fraction of each category to use for training.
         val_ratio: Fraction of each category to use for validation.
         max_examples: Maximum total examples to use across the entire dataset.
+        extra_cols: List of additional column names to preserve in the tuples.
 
     Returns:
-        train_pools: Dict mapping category -> list of (question, answer) tuples.
-        val_data: List of (question, answer, category) tuples for validation.
-        test_data: List of (question, answer, category) tuples for held-out test set.
+        train_pools: Dict mapping category -> list of tuples.
+            Each tuple is (question, ground_truth, *extra_cols).
+        val_data: List of tuples (question, ground_truth, category, *extra_cols).
+        test_data: List of tuples (question, ground_truth, category, *extra_cols).
     """
     if train_ratio + val_ratio > 1.0:
         raise ValueError(
@@ -56,9 +59,20 @@ def stratified_split(
     total_rows = len(data)
     categories = data["category"].unique()
     
-    train_pools: dict[str, list[tuple[str, str]]] = {}
-    val_data: list[tuple[str, str, str]] = []
-    test_data: list[tuple[str, str, str]] = []
+    train_pools: dict[str, list[tuple]] = {}
+    val_data: list[tuple] = []
+    test_data: list[tuple] = []
+
+    extra_cols = extra_cols or []
+
+    def _make_tuple(row, include_category: bool = False) -> tuple:
+        """Build tuple from row data."""
+        base = [row.question, row.ground_truth]
+        if include_category:
+            base.append(row.category)
+        for col in extra_cols:
+            base.append(row.get(col, None))
+        return tuple(base)
 
     for cat in categories:
         cat_data = data[data["category"] == cat].sample(frac=1, random_state=42)
@@ -74,18 +88,18 @@ def stratified_split(
 
         # Train comes first, then validation, then held-out test
         train_pools[cat] = [
-            (row.question, row.ground_truth)
+            _make_tuple(row)
             for _, row in cat_data.head(n_train).iterrows()
         ]
         val_data.extend(
             [
-                (row.question, row.ground_truth, cat)
+                _make_tuple(row, include_category=True)
                 for _, row in cat_data.iloc[n_train : n_train + n_val].iterrows()
             ]
         )
         test_data.extend(
             [
-                (row.question, row.ground_truth, cat)
+                _make_tuple(row, include_category=True)
                 for _, row in cat_data.iloc[n_train + n_val :].iterrows()
             ]
         )

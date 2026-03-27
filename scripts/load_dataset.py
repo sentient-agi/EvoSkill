@@ -47,8 +47,8 @@ def prepare_run_dir(session_name: str, include_skills: bool) -> Path:
     if env_file.exists():
         shutil.copy2(str(env_file), str(run_dir / ".env"))
 
-    # Symlink data directories the agent may need (e.g., treasury docs for officeqa)
-    for data_dir_name in ["treasury_bulletins_parsed", "DABstep-data"]:
+    # Symlink data directories the agent may need
+    for data_dir_name in ["data_directories", ".dataset"]:
         src = PROJECT_ROOT / data_dir_name
         dest = run_dir / data_dir_name
         if src.exists() and not dest.exists():
@@ -192,7 +192,7 @@ def load_sealqa(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     _train, _val, test_data = stratified_split(data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio, max_examples=settings.dataset_slice)
     # Rebuild dataframe from held-out tuples
     data = pd.DataFrame(test_data, columns=["question", "answer", "topic"])
-    print(f"Held-out test set: {len(data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
+    print(f"Sampled dataset: {settings.dataset_slice}, Held-out test set: {len(data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
 
 
     # Filter by topic if requested
@@ -279,4 +279,86 @@ def load_livecode(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
         for idx, row in data.iterrows()
     ]
 
+    return items
+
+
+def load_gdpval(data: pd.DataFrame, settings: EvalSettings, output_base_dir: Path | None = None) -> list[tuple]:
+    """Load GDPval dataset items.
+    
+    GDPval has columns: task_id, sector, occupation, prompt,
+    reference_files, deliverable_files, rubric_json, etc.
+    
+    Args:
+        data: The DataFrame containing GDPval data
+        settings: Evaluation settings
+        output_base_dir: Base directory where agent should save deliverables
+                        (if None, uses project_root/output/gdpval_deliverables)
+    """
+    from src.agent_profiles.skill_generator import get_project_root
+    
+    # Rename columns for consistency with stratified_split expectations
+    # stratified_split expects 'question', 'ground_truth', and 'category' columns
+    data = data.rename(columns={
+        "sector": "category",
+        "prompt": "question",
+        "rubric_json": "ground_truth"
+    })
+    
+    _train, _val, test_data = stratified_split(
+        data, 
+        train_ratio=settings.train_ratio, 
+        val_ratio=settings.val_ratio, 
+        max_examples=settings.dataset_slice,
+        extra_cols=["task_id", "deliverable_files", "reference_files"]
+    )
+
+    # test_data is list of tuples: (prompt, rubric_json, sector, task_id, deliverable_files, reference_files)
+    print(f"Sampled dataset: {settings.dataset_slice}, Held-out test set: {len(test_data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
+
+    active = list_active_skills()
+    mode = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
+    print(f"  sdk={settings.sdk} model={settings.model} provider={settings.provider or 'default'}")
+
+    # Set up output directory for generated deliverables
+    if output_base_dir is None:
+        output_base_dir = Path(get_project_root()) / "output" / "gdpval_deliverables"
+    output_base_dir.mkdir(parents=True, exist_ok=True)
+    print(f"  deliverables_dir={output_base_dir}")
+
+    # Prepare items: (task_id, prompt, rubric_info, generated_dir)
+    items = []
+    
+    # Apply offset
+    if settings.offset:
+        test_data = test_data[settings.offset:]
+    
+    # Limit to num_samples if specified
+    if settings.num_samples is not None:
+        test_data = test_data[:settings.num_samples]
+
+    for prompt, rubric_json, sector, task_id, deliverable_files, reference_files in test_data:
+        # Create task-specific deliverable directory
+        task_deliverable_dir = output_base_dir / task_id / "deliverables"
+        task_deliverable_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Store rubric info and deliverable directory for scoring
+        rubric_info = {
+            "task_id": task_id,
+            "rubric_json": rubric_json,
+            "deliverable_files": deliverable_files if deliverable_files else [],
+            "reference_files": reference_files if reference_files else [],
+            "generated_dir": str(task_deliverable_dir),
+        }
+        
+        # Enhanced prompt that tells the agent where to save deliverables
+        enhanced_prompt = f"""{prompt}
+
+IMPORTANT: You must save your deliverable file(s) to the following directory:
+{task_deliverable_dir}
+
+Create the deliverable(s) exactly as requested and save them to the specified directory path."""
+        
+        items.append((task_id, enhanced_prompt, str(rubric_info)))
+
+    print(f"Evaluating: {len(items)} samples (category={settings.topic}, {mode})")
     return items

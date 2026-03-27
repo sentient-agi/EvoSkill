@@ -7,6 +7,7 @@ from .livecodebench_agent import (
     livecodebench_agent_options,
     make_livecodebench_agent_options,
 )
+from .gdpval_agent import gdpval_agent_options, make_gdpval_agent_options
 from .prompt_generator import prompt_generator_options
 from .skill_proposer import skill_proposer_options
 from .prompt_proposer import prompt_proposer_options
@@ -24,6 +25,8 @@ __all__ = [
     "make_sealqa_agent_options",
     "livecodebench_agent_options",
     "make_livecodebench_agent_options",
+    "gdpval_agent_options",
+    "make_gdpval_agent_options",
     "prompt_generator_options",
     "skill_proposer_options",
     "prompt_proposer_options",
