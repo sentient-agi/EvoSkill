@@ -23,6 +23,23 @@
         }
       }
     },
+    "openrouter": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "OpenRouter",
+      "options": {
+        "baseURL": "https://openrouter.ai/api/v1",
+        "apiKey": "{env:OPENROUTER_API_KEY}"
+      },
+      "models": {
+        "google/gemini-3.1-flash-lite-preview": {
+          "name": "Gemini 3.1 Flash Lite Preview",
+          "limit": {
+            "context": 1048576,
+            "output": 65536
+          }
+        }
+      }
+    },
     "arc": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "ARC VT LLM API",
