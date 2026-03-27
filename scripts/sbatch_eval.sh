@@ -20,6 +20,6 @@ unset CLAUDECODE
 mkdir -p job-outputs
 
 echo "Running evaluation..."
-uv run scripts/run_eval_comb.py "$@"
+uv run scripts/run_eval.py "$@"
 
 echo "Job complete."

@@ -21,6 +21,6 @@ unset CLAUDECODE
 mkdir -p job-outputs
 
 echo "Running EvoSkill loop..."
-uv run scripts/run_loop_comb.py "$@"
+uv run scripts/run_loop.py "$@"
 
 echo "Job complete."
