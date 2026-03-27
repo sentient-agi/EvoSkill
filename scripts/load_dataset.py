@@ -1,4 +1,5 @@
 from src.api.data_utils import stratified_split
+import os
 import pandas as pd
 import shutil
 from pydantic import Field
@@ -45,6 +46,13 @@ def prepare_run_dir(session_name: str, include_skills: bool) -> Path:
     env_file = PROJECT_ROOT / ".env"
     if env_file.exists():
         shutil.copy2(str(env_file), str(run_dir / ".env"))
+
+    # Symlink data directories the agent may need (e.g., treasury docs for officeqa)
+    for data_dir_name in ["treasury_bulletins_parsed", "DABstep-data"]:
+        src = PROJECT_ROOT / data_dir_name
+        dest = run_dir / data_dir_name
+        if src.exists() and not dest.exists():
+            os.symlink(str(src), str(dest))
 
     # If session already has skills (from a loop run), keep them
     run_skills = run_dir / ".claude" / "skills"
