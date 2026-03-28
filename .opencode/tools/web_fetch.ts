@@ -7,7 +7,7 @@ export default tool({
     url: tool.schema.string().describe("URL to fetch"),
   },
   async execute(args, context) {
-    const script = path.join(context.worktree, ".opencode/tools/webfetch.py")
+    const script = path.join(context.worktree, ".opencode/tools/web_fetch.py")
     const result = await Bun.$`python ${script} -u ${args.url}`.text()
     return result.trim()
   },

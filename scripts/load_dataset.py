@@ -17,7 +17,7 @@ SKILLS_DIR = PROJECT_ROOT / ".claude" / "skills"
 RUNS_DIR = PROJECT_ROOT / ".evoskill-runs"
 
 # Skill names that are meta-tools (not task-specific evolved skills)
-META_SKILLS = {"skill-creator", "brainstorming"}
+META_SKILLS = {"skill-creator"}
 
 
 def prepare_run_dir(session_name: str) -> Path:
@@ -115,10 +115,7 @@ class EvalSettings(BaseSettings):
         default="all", description="Filter by platform"
     )
     dataset_slice: Optional[int] = Field(
-        default=None, description="Truncate dataset to first N rows BEFORE train/val/test splitting (use to shrink the total pool)"
-    )
-    num_samples: Optional[int] = Field(
-        default=None, description="Limit to first N items AFTER splitting (use to cap how many questions to evaluate)"
+        default=None, description="Limit dataset to first N rows (passed as max_examples to stratified split)"
     )
     offset: int = Field(
         default=0, description="Skip the first N questions"
@@ -167,10 +164,6 @@ def load_officeqa(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     if settings.difficulty != "all":
         data = data[data["difficulty"] == settings.difficulty]
 
-    # Limit to num_samples if specified
-    if settings.num_samples is not None:
-        data = data.head(settings.num_samples)
-
     print(f"Evaluating: {len(data)} samples (difficulty={settings.difficulty})")
 
     # Prepare items with index
@@ -200,9 +193,6 @@ def load_sealqa(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     #Apply offset and limit
     if settings.offset:
         items = items[settings.offset:]
-    if settings.num_samples is not None:
-        items = items[:settings.num_samples]
-
     # Report config
     active = list_active_skills()
     mode = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
@@ -216,9 +206,9 @@ def load_dabstep(data: pd.DataFrame, settings: EvalSettings, PROMPT) -> list[tup
     if settings.level != "all":
         data = data[data["level"].astype(str) == settings.level]
 
-    # Limit to num_samples if specified
-    if settings.num_samples is not None:
-        data = data.head(settings.num_samples)
+    # Limit to dataset_slice if specified
+    if settings.dataset_slice is not None:
+        data = data.head(settings.dataset_slice)
 
     print(f"Dataset: {len(data)} samples (level={settings.level})")
 
@@ -253,9 +243,9 @@ def load_livecode(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     if settings.difficulty != "all":
         data = data[data["difficulty"] == settings.difficulty]
 
-    # Limit to num_samples if specified
-    if settings.num_samples is not None:
-        data = data.head(settings.num_samples)
+    # Limit to dataset_slice if specified
+    if settings.dataset_slice is not None:
+        data = data.head(settings.dataset_slice)
 
     print(
         f"Dataset: {len(data)} samples (platform={settings.platform}, difficulty={settings.difficulty})"
@@ -276,11 +266,10 @@ def load_livecode(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
 
 
 def load_frames(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
-    data.rename(columns={"Prompt": "question", "Answer": "ground_truth", "reasoning_types": "category"}, inplace=True)
-    _train, _val, test_data = stratified_split(data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio, max_examples=settings.dataset_slice)
-    # Rebuild dataframe from held-out tuples
-    data = pd.DataFrame(test_data, columns=["question", "answer", "category"])
-    print(f"Sampled dataset: {settings.dataset_slice}, Held-out test set: {len(data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
+    data.rename(columns={"Prompt": "question", "Answer": "answer", "reasoning_types": "category"}, inplace=True)
+
+    if settings.dataset_slice is not None:
+        data = data.head(settings.dataset_slice)
 
     items = [
         (idx, row["question"], row["answer"])
@@ -290,9 +279,6 @@ def load_frames(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     # Apply offset and limit
     if settings.offset:
         items = items[settings.offset:]
-    if settings.num_samples is not None:
-        items = items[:settings.num_samples]
-
     # Report config
     active = list_active_skills()
     mode = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
@@ -352,10 +338,6 @@ def load_gdpval(data: pd.DataFrame, settings: EvalSettings, output_base_dir: Pat
     if settings.offset:
         test_data = test_data[settings.offset:]
     
-    # Limit to num_samples if specified
-    if settings.num_samples is not None:
-        test_data = test_data[:settings.num_samples]
-
     for prompt, rubric_json, sector, task_id, deliverable_files, reference_files in test_data:
         # Create task-specific deliverable directory
         task_deliverable_dir = output_base_dir / task_id / "deliverables"

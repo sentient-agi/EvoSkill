@@ -179,7 +179,8 @@ class Agent(Generic[T]):
             provider = options.get("provider_id")
             model_flag = f"{provider}/{model}" if provider and model else model
 
-            cmd = ["opencode", "run", "--format", "json"]
+            opencode_bin = "opencode.cmd" if os.name == "nt" else "opencode"
+            cmd = [opencode_bin, "run", "--format", "json"]
             if model_flag:
                 cmd.extend(["-m", model_flag])
 

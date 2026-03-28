@@ -56,11 +56,6 @@ async def main(settings: EvalSettings):
     dataset_name = dataset_path.name
     data = pd.read_csv(dataset_path)
 
-    # Slice dataset before splitting (e.g., first 120 questions)
-    if settings.dataset_slice:
-        data = data.head(settings.dataset_slice)
-        print(f"Sliced dataset to first {settings.dataset_slice} rows")
-
     if dataset_name == "officeqa.csv":
         items = load_officeqa(data, settings)
         agent_options = (
@@ -152,7 +147,7 @@ async def main(settings: EvalSettings):
                 if score:
                     correct += 1
             elif dataset_name in ("frames.csv", "frames_filtered.csv"):
-                score = score_sealqa(str(r.ground_truth), predicted)
+                score = score_sealqa(r.question, str(r.ground_truth), predicted)
                 if score > 0:
                     correct += 1
             elif dataset_name == "livecodebench_v6.csv":
@@ -192,7 +187,7 @@ async def main(settings: EvalSettings):
                 # print(f"  GDPval task {task_id}: score={score}, rationale={rationale[:100]}...")
 
     print(f"\n{'=' * 50}")
-    print(f"Total completed: {len(all_results)}/{len(data)}")
+    print(f"Total completed: {len(all_results)}/{settings.dataset_slice if settings.dataset_slice else len(data)}")
     print(f"Successful: {len(successful)}")
     print(f"Failed: {len(failed)}")
     if failed:

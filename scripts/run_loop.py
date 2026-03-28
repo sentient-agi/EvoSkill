@@ -139,12 +139,7 @@ async def main(settings: LoopSettings):
     dataset_name = dataset_path.name
     prompt_path = (Path(get_project_root()) / "src" / "agent_profiles" / "base_agent" / "prompt.txt")
 
-    # Load dataset based on file extension
-    if dataset_name.endswith('.parquet'):
-        data = pd.read_parquet(dataset_path)
-    else:
-        # Default to CSV for all other files including gdpval.csv
-        data = pd.read_csv(dataset_path)
+    data = pd.read_csv(dataset_path)
 
     if dataset_name == "seal-0.csv":
         train_pools, val_data = build_train_val(data, "topic", "answer", "question", settings)
@@ -205,7 +200,7 @@ async def main(settings: LoopSettings):
     else:
         model_slug = (settings.model or "default").replace("/", "_")
         session_name = f"{model_slug}_evolved"
-    run_dir = prepare_run_dir(session_name)
+    run_dir = prepare_run_dir(session_name, include_skills=False)
     print(f"Run directory: {run_dir}")
 
     # Init a git repo in the run dir for ProgramManager branch tracking
