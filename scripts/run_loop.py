@@ -175,7 +175,7 @@ async def main(settings: LoopSettings):
         train_pools, val_data = build_train_val(
             data, "difficulty", "public_test_cases", "formatted_question", settings,
         )
-        agent_options = make_livecodebench_agent_options(model=settings.model)
+        agent_options = make_livecodebench_agent_options(model=settings.model, provider=settings.provider)
         scorer = _livecodebench_scorer
         prompt_path = (Path(get_project_root()) / "src" / "agent_profiles" / "livecodebench_agent" / "prompt.txt")
     elif dataset_name in ("frames.csv", "frames_filtered.csv"):
@@ -267,7 +267,7 @@ async def main(settings: LoopSettings):
         )
     else:
         print(f"Optimizer: EvoSkill (two-step proposer+generator)")
-        loop = SelfImprovingLoop(config, agents, manager, train_pools, val_data, scorer=scorer)
+        loop = SelfImprovingLoop(config, agents, manager, train_pools, val_data, scorer=scorer, session=session_name)
 
     result = await loop.run()
 

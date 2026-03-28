@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=evoskill-loop
-#SBATCH --time=06:00:00
+#SBATCH --time=20:00:00
 #SBATCH --partition=normal_q
 #SBATCH --output=job-outputs/loop-%j.out
 #SBATCH --error=job-outputs/loop-%j.err
