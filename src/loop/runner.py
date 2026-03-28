@@ -117,6 +117,7 @@ class SelfImprovingLoop:
         train_pools: dict[str, list[tuple[str, str]]],
         val_data: list[tuple[str, str, str]],
         scorer: Callable[[str, str, str], float] | None = None,
+        session: str | None = None,
     ):
         """Initialize the self-improving loop.
 
@@ -135,6 +136,7 @@ class SelfImprovingLoop:
         self.train_pools = train_pools
         self.val_data = val_data
         self.scorer = scorer or _score_multi_tolerance
+        self.session = session
 
         # Round-robin sampling state
         self._category_offset = 0  # Which category to start with next iteration
@@ -142,7 +144,7 @@ class SelfImprovingLoop:
 
         # Paths
         self._project_root = Path(get_project_root())
-        self._feedback_path = self._project_root / ".claude" / "feedback_history.md"
+        self._feedback_path = self._project_root / ".claude" / f"feedback_history_{self.session}.md"
         self._prompt_path = (
             self._project_root / "src" / "agent_profiles" / "base_agent" / "prompt.txt"
         )
@@ -163,7 +165,7 @@ class SelfImprovingLoop:
         self._iteration_offset = 0
 
         # Checkpoint file for exact resume
-        self._checkpoint_path = self._project_root / ".claude" / "loop_checkpoint.json"
+        self._checkpoint_path = self._project_root / ".claude" / f"loop_checkpoint_{self.session}.json"
 
     def _save_checkpoint(self, iteration: int) -> None:
         """Save sampling state for exact resume.
