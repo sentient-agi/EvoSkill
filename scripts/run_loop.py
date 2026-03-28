@@ -16,10 +16,6 @@ from src.agent_profiles import (
     make_livecodebench_agent_options,
     make_gdpval_agent_options,
     make_frames_agent_options,
-    skill_proposer_options,
-    prompt_proposer_options,
-    skill_generator_options,
-    prompt_generator_options,
 )
 from src.agent_profiles.skill_generator import get_project_root
 from src.api.data_utils import stratified_split
@@ -200,7 +196,7 @@ async def main(settings: LoopSettings):
     else:
         model_slug = (settings.model or "default").replace("/", "_")
         session_name = f"{model_slug}_evolved"
-    run_dir = prepare_run_dir(session_name, include_skills=False)
+    run_dir = prepare_run_dir(session_name)
     print(f"Run directory: {run_dir}")
 
     # Init a git repo in the run dir for ProgramManager branch tracking
