@@ -20,6 +20,7 @@ class IndexedEvalResult(Generic[T]):
     ground_truth: str
     trace: AgentTrace[T] | None
     error: str | None  # Error message if failed
+    score: float | None = None  # Cached score from grader (None = not yet scored)
 
 
 def load_results(path: Path) -> list[IndexedEvalResult]:
