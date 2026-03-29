@@ -16,6 +16,10 @@ from src.agent_profiles import (
     make_livecodebench_agent_options,
     make_gdpval_agent_options,
     make_frames_agent_options,
+    skill_proposer_options,
+    prompt_proposer_options,
+    skill_generator_options,
+    prompt_generator_options,
 )
 from src.agent_profiles.skill_generator import get_project_root
 from src.api.data_utils import stratified_split
@@ -177,7 +181,7 @@ async def main(settings: LoopSettings):
     elif dataset_name in ("frames.csv", "frames_filtered.csv"):
         train_pools, val_data = build_train_val(data, "reasoning_types", "Answer", "Prompt", settings)
         agent_options = make_frames_agent_options(model=settings.model, provider=settings.provider)
-        scorer = _officeqa_scorer
+        scorer = _sealqa_scorer
     elif dataset_name == "gdpval.csv":
         # GDPval dataset - treated as CSV
         train_pools, val_data = build_train_val(
