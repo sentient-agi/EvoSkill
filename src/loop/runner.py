@@ -449,7 +449,8 @@ class SelfImprovingLoop:
 
         # Switch to best program to read its skills
         self.manager.switch_to(best)
-        skills_dir = self._project_root / ".claude" / "skills"
+        # Read skills from the manager's cwd (session dir), not the main repo
+        skills_dir = self.manager.cwd / ".claude" / "skills"
 
         # Collect evolved skills (exclude meta-skills)
         evolved_skills: dict[str, str] = {}  # name -> SKILL.md content
