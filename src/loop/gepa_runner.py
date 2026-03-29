@@ -19,12 +19,14 @@ _PROMPT_PATH = (
     Path(get_project_root())
     / "src" / "agent_profiles" / "base_agent" / "prompt.txt"
 )
-_INITIAL_SKILLS_PLACEHOLDER = (
-    "\n\n## Skills\n"
-    "(No skills yet. Skills will be discovered through prompt optimization.)"
-)
+_INITIAL_SKILLS_SECTION = """\
+## Skills
 
-_SKILL_USAGE = ("You should use the skills available to you, seen under '## Skills', to solve the problems")
+Domain-specific algorithmic patterns for this problem set.
+Each skill targets a recurring problem type with a concrete approach.
+
+*(No skills yet)*\
+"""
 
 class GEPAFeedbackMetric:
     """Wraps the deep_agents scorer for dspy.GEPA.
@@ -79,24 +81,28 @@ class QASignature(dspy.Signature):
 
 
 class QAModule(dspy.Module):
-    """dspy module whose instructions GEPA will evolve into skill content.
+    """dspy module whose ## Skills section GEPA evolves.
 
-    Initialized with the static base system prompt + an empty skills placeholder.
-    GEPA's reflection LM will iteratively improve the instructions section,
-    discovering and adding skills to address observed failures.
+    The base prompt is static and injected at query time — GEPA never sees it
+    and cannot overwrite it. GEPA only optimizes the `instructions` field, which
+    is seeded with the structured ## Skills section so the reflection LM learns
+    to add and refine skills rather than rewriting a full system prompt.
     """
 
-    def __init__(self, initial_instructions: str):
+    def __init__(self, base_prompt: str, initial_skills: str):
         super().__init__()
-        sig = QASignature.with_instructions(initial_instructions)
+        self._base_prompt = base_prompt  # static; not touched by GEPA
+        sig = QASignature.with_instructions(initial_skills)
         self.predict = dspy.ChainOfThought(sig)
 
     def forward(self, question: str):
+        # Prepend the static base prompt so the model has its full context,
+        # but the base prompt lives outside GEPA's optimizable instructions.
+        augmented = f"{self._base_prompt}\n\n---\n\n{question}"
         try:
-            return self.predict(question=question)
+            return self.predict(question=augmented)
         except Exception:
-            # Parse failures (AdapterParseError, etc.) score as 0 rather than
-            # crashing the whole evaluation batch.
+            # Parse failures score as 0 rather than crashing the eval batch.
             return dspy.Prediction(answer="", reasoning="")
 
 
@@ -135,10 +141,9 @@ class GEPALoop:
         self._optimized_module: QAModule | None = None
         self._initial_instructions: str = ""
 
-    def _build_initial_instructions(self) -> str:
-        """Load static base prompt + empty skills placeholder."""
-        base_prompt = self.prompt_path.read_text().strip()
-        return base_prompt + _SKILL_USAGE + _INITIAL_SKILLS_PLACEHOLDER
+    def _load_base_prompt(self) -> str:
+        """Load the static base system prompt."""
+        return self.prompt_path.read_text().strip()
 
     def _to_dspy_examples(self) -> list[dspy.Example]:
         """Flatten train_pools into dspy.Example list."""
@@ -177,20 +182,34 @@ class GEPALoop:
         return correct / total if total > 0 else 0.0
 
     def _extract_skill_content(self, optimized: QAModule) -> str:
-        """Extract the skill additions from the optimized module's instructions.
+        """Extract skill entries from the GEPA-optimized instructions.
 
-        Returns the portion of instructions after the static base prompt —
-        the skill content GEPA discovered. Falls back to full instructions
-        if the diff cannot be computed.
+        GEPA's reflection LM may wrap skills in preamble or workflow text.
+        We extract only entries that look like skills (a ### or #### heading
+        followed by **When to use:**) so the exported SKILL.md stays clean.
+        Falls back to the full instructions if no skill-shaped entries are found.
         """
-        optimized_instructions = optimized.predict.signature.instructions
-        base_prefix = self._initial_instructions.split("\n\n## Skills")[0]
-        if optimized_instructions.startswith(base_prefix):
-            skill_start = optimized_instructions.find("\n\n## Skills")
-            if skill_start != -1:
-                return optimized_instructions[skill_start + 2:]  # strip leading \n\n
-        # Fallback: return full optimized instructions as skill content
-        return optimized_instructions
+        import re
+
+        instructions = optimized.predict.signature.instructions
+
+        # Strip stray markdown fences the reflection LM may add (e.g. ```markdown)
+        instructions = re.sub(r"^```[a-z]*\n?", "", instructions.strip())
+        instructions = re.sub(r"\n?```$", "", instructions.strip())
+
+        # Split into candidate sections at ### or #### headings
+        sections = re.split(r"\n(?=#{3,4} )", instructions)
+
+        skill_sections: list[str] = []
+        for section in sections:
+            # A skill section must contain a **When to use:** field
+            if re.search(r"\*\*When to use", section, re.IGNORECASE):
+                skill_sections.append(section.strip())
+
+        if not skill_sections:
+            return instructions  # fallback: return everything
+
+        return "## Skills\n\n" + "\n\n---\n\n".join(skill_sections)
 
     async def run(self) -> LoopResult:
         """Run dspy.GEPA skill optimization and return LoopResult."""
@@ -199,8 +218,8 @@ class GEPALoop:
             f"student={self.student_model}, reflection={self.reflection_model}, provider={self.provider}",
         )
 
-        # 1. Static base prompt + skills placeholder → initial instructions
-        self._initial_instructions = self._build_initial_instructions()
+        # 1. Load static base prompt; seed the skills section separately
+        base_prompt = self._load_base_prompt()
 
         # 2. Configure dspy LMs using same model/provider settings as base agent
         if "arc" in self.provider:
@@ -235,8 +254,8 @@ class GEPALoop:
         valset = self._to_dspy_val()
         _log("GEPA DATA", f"trainset={len(trainset)}, valset={len(valset)}")
 
-        # 4. Create module (static prompt + empty skills) and metric
-        module = QAModule(self._initial_instructions)
+        # 4. Create module: base prompt is static; GEPA only optimizes the skills section
+        module = QAModule(base_prompt, _INITIAL_SKILLS_SECTION)
         metric = GEPAFeedbackMetric(self.scorer)
 
         # 5. Instantiate dspy.GEPA — budget maps to max_iterations full eval passes
@@ -301,7 +320,17 @@ class GEPALoop:
         if run_dir:
             dest = Path(run_dir) / ".claude" / "skills" / skill_name
             dest.mkdir(parents=True, exist_ok=True)
-            (dest / "SKILL.md").write_text(skill_content)
+            # Wrap in SKILL.md frontmatter so Claude Code can load and trigger it
+            skill_md = (
+                f"---\n"
+                f"name: {skill_name}\n"
+                f"description: >-\n"
+                f"  Reusable skills discovered by GEPA optimization "
+                f"({self.student_model}). Apply when solving problems in this domain.\n"
+                f"---\n\n"
+                f"{skill_content}\n"
+            )
+            (dest / "SKILL.md").write_text(skill_md)
             _log("EXPORT", f"Exported GEPA skill to {run_dir}: [{skill_name}]")
         else:
             _log("EXPORT", "No run_dir provided — skill not exported")

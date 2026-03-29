@@ -148,7 +148,7 @@ async def main(settings: LoopSettings):
         prompt_path = (Path(get_project_root()) / "src" / "agent_profiles" / "sealqa_agent" / "prompt.txt")
     elif dataset_name == "officeqa.csv":
         train_pools, val_data = build_train_val(data, "difficulty", "answer", "question", settings)
-        agent_options = make_base_agent_options(model=settings.model)
+        agent_options = make_base_agent_options(model=settings.model, provider=settings.provider)
         scorer = _officeqa_scorer
         prompt_path = (Path(get_project_root()) / "src" / "agent_profiles" / "base_agent" / "prompt.txt")
     elif dataset_name == "dabstep_data.csv":

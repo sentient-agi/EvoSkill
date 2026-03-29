@@ -59,7 +59,7 @@ async def main(settings: EvalSettings):
     if dataset_name == "officeqa.csv":
         items = load_officeqa(data, settings)
         agent_options = (
-            make_base_agent_options(model=settings.model)
+            make_base_agent_options(model=settings.model, provider=settings.provider)
             if settings.model
             else base_agent_options
         )
