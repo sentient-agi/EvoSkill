@@ -20,6 +20,7 @@ class IndexedEvalResult(Generic[T]):
     ground_truth: str
     trace: AgentTrace[T] | None
     error: str | None  # Error message if failed
+    score: float | None = None  # Cached score from grader (None = not yet scored)
 
 
 def load_results(path: Path) -> list[IndexedEvalResult]:
@@ -68,17 +69,6 @@ async def evaluate_full(
     if resume:
         successful = get_successful_indices(output_path)
         items_to_run = [(i, q, gt) for i, q, gt in items if i not in successful]
-
-        # Remove failed results from file so they can be replaced
-        failed_indices = {i for i, _, _ in items_to_run}
-        existing = load_results(output_path)
-        kept_results = [r for r in existing if r.index not in failed_indices]
-        if len(kept_results) < len(existing):
-            # Some failed results were removed, save the cleaned file
-            with open(output_path, "wb") as f:
-                pickle.dump(kept_results, f)
-            print(f"Removed {len(existing) - len(kept_results)} failed results for re-run")
-
         items = items_to_run
         if successful:
             print(f"Resuming: {len(successful)} successful, {len(items)} to run")
@@ -114,10 +104,31 @@ async def evaluate_full(
                 error=error,
             )
 
-            # Append to file immediately (thread-safe)
+            # Save result: replace old entry for same index only if new one is better
             async with lock:
                 existing = load_results(output_path)
-                existing.append(result)
+                new_has_output = (
+                    result.error is None
+                    and result.trace is not None
+                    and (result.trace.result or (result.trace.output and result.trace.output.final_answer))
+                )
+                # Check if we already have a good result for this index
+                old = next((r for r in existing if r.index == index), None)
+                old_has_output = (
+                    old is not None
+                    and old.error is None
+                    and old.trace is not None
+                    and (old.trace.result or (old.trace.output and old.trace.output.final_answer))
+                )
+                if old is None:
+                    # New index, just append
+                    existing.append(result)
+                elif new_has_output or not old_has_output:
+                    # Replace only if new is good, or old was also bad
+                    existing = [r for r in existing if r.index != index]
+                    existing.append(result)
+                # else: keep old good result, discard new bad one
+
                 with open(output_path, "wb") as f:
                     pickle.dump(existing, f)
 

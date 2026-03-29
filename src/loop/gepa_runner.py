@@ -21,9 +21,10 @@ _PROMPT_PATH = (
 )
 _INITIAL_SKILLS_PLACEHOLDER = (
     "\n\n## Skills\n"
-    "(No skills yet. Skills will be discovered through optimization.)"
+    "(No skills yet. Skills will be discovered through prompt optimization.)"
 )
 
+#_SKILL_USAGE = ("You should use the skills available to you, seen under '## Skills', to solve the problems")
 
 class GEPAFeedbackMetric:
     """Wraps the deep_agents scorer for dspy.GEPA.
@@ -48,14 +49,33 @@ class GEPAFeedbackMetric:
         except Exception:
             score = 0.0
 
-        if score >= 0.8:
-            feedback = f"Correct. Predicted: {predicted}"
-        else:
-            feedback = (
-                f"Incorrect. Expected: {ground_truth}. "
-                f"Got: {predicted}. Score: {score:.2f}."
-            )
-        return {"score": score, "feedback": feedback}
+        # dspy.Evaluate (used internally by GEPA for valset scoring) calls this
+        # metric with no extra args and sums the results — it needs a float.
+        # Only return the dict form when GEPA is requesting feedback for reflection.
+        if pred_trace is not None or pred_name is not None:
+            if score >= 0.8:
+                feedback = f"Correct. Predicted: {predicted}"
+            else:
+                feedback = (
+                    f"Incorrect. Expected: {ground_truth}. "
+                    f"Got: {predicted}. Score: {score:.2f}."
+                )
+            return {"score": score, "feedback": feedback}
+
+        return score
+
+
+class QASignature(dspy.Signature):
+    """Answer the given question following the instructions exactly."""
+
+    question: str = dspy.InputField()
+    answer: str = dspy.OutputField(
+        desc=(
+            "Your final answer only — no reasoning here. "
+            "Follow any formatting instructions given in the question exactly "
+            "(e.g. code enclosed in backticks, specific output format, etc.)."
+        )
+    )
 
 
 class QAModule(dspy.Module):
@@ -68,12 +88,16 @@ class QAModule(dspy.Module):
 
     def __init__(self, initial_instructions: str):
         super().__init__()
-        self.predict = dspy.ChainOfThought(
-            dspy.Signature("question -> answer", instructions=initial_instructions)
-        )
+        sig = QASignature.with_instructions(initial_instructions)
+        self.predict = dspy.ChainOfThought(sig)
 
     def forward(self, question: str):
-        return self.predict(question=question)
+        try:
+            return self.predict(question=question)
+        except Exception:
+            # Parse failures (AdapterParseError, etc.) score as 0 rather than
+            # crashing the whole evaluation batch.
+            return dspy.Prediction(answer="", reasoning="")
 
 
 class GEPALoop:

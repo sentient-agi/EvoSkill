@@ -117,6 +117,7 @@ class SelfImprovingLoop:
         train_pools: dict[str, list[tuple[str, str]]],
         val_data: list[tuple[str, str, str]],
         scorer: Callable[[str, str, str], float] | None = None,
+        session: str | None = None,
     ):
         """Initialize the self-improving loop.
 
@@ -135,6 +136,7 @@ class SelfImprovingLoop:
         self.train_pools = train_pools
         self.val_data = val_data
         self.scorer = scorer or _score_multi_tolerance
+        self.session = session
 
         # Round-robin sampling state
         self._category_offset = 0  # Which category to start with next iteration
@@ -142,7 +144,7 @@ class SelfImprovingLoop:
 
         # Paths
         self._project_root = Path(get_project_root())
-        self._feedback_path = self._project_root / ".claude" / "feedback_history.md"
+        self._feedback_path = self._project_root / ".claude" / f"feedback_history_{self.session}.md"
         self._prompt_path = (
             self._project_root / "src" / "agent_profiles" / "base_agent" / "prompt.txt"
         )
@@ -163,7 +165,7 @@ class SelfImprovingLoop:
         self._iteration_offset = 0
 
         # Checkpoint file for exact resume
-        self._checkpoint_path = self._project_root / ".claude" / "loop_checkpoint.json"
+        self._checkpoint_path = self._project_root / ".claude" / f"loop_checkpoint_{self.session}.json"
 
     def _save_checkpoint(self, iteration: int) -> None:
         """Save sampling state for exact resume.
@@ -447,7 +449,8 @@ class SelfImprovingLoop:
 
         # Switch to best program to read its skills
         self.manager.switch_to(best)
-        skills_dir = self._project_root / ".claude" / "skills"
+        # Read skills from the manager's cwd (session dir), not the main repo
+        skills_dir = self.manager.cwd / ".claude" / "skills"
 
         # Collect evolved skills (exclude meta-skills)
         evolved_skills: dict[str, str] = {}  # name -> SKILL.md content
@@ -515,13 +518,22 @@ class SelfImprovingLoop:
         if "base" not in self.manager.list_programs():
             current_options = get_base_agent_options()
 
+            if isinstance(current_options, dict):
+                system_prompt = {"type": "text", "text": current_options["system"]}
+                allowed_tools = list(current_options.get("tools", {}).keys())
+                output_format = current_options.get("format")
+            else:
+                system_prompt = current_options.system_prompt
+                allowed_tools = current_options.allowed_tools
+                output_format = current_options.output_format
+
             base_config = ProgramConfig(
                 name="base",
                 parent=None,
                 generation=0,
-                system_prompt=current_options.system_prompt,
-                allowed_tools=current_options.allowed_tools,
-                output_format=current_options.output_format,
+                system_prompt=system_prompt,
+                allowed_tools=allowed_tools,
+                output_format=output_format,
                 metadata={},
             ).with_timestamp()
 
