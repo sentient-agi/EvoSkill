@@ -41,3 +41,4 @@ vmware_vm_data/
 
 # Relevant data directories that don't need to be in the commit history
 data_directories/
+opencode.json
