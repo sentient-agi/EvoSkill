@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Callable
 
 import dspy
+import json
 import os
+import re
 
 from src.agent_profiles.skill_generator import get_project_root
 from src.registry import ProgramManager
@@ -25,6 +27,71 @@ _INITIAL_SKILLS_PLACEHOLDER = (
 )
 
 #_SKILL_USAGE = ("You should use the skills available to you, seen under '## Skills', to solve the problems")
+
+
+def _resolve_env_value(value: str) -> str:
+    """Resolve '{env:VAR_NAME}' patterns to actual environment variable values."""
+    match = re.fullmatch(r"\{env:(\w+)\}", value)
+    if match:
+        var_name = match.group(1)
+        result = os.environ.get(var_name)
+        if result is None:
+            raise EnvironmentError(
+                f"Environment variable '{var_name}' is not set "
+                f"(required by opencode.json)"
+            )
+        return result
+    return value
+
+
+def _load_provider_config(provider: str, model: str) -> dict:
+    """Load provider config from opencode.json.
+
+    Returns a dict with keys: api_key (str | None), api_base (str | None),
+    model_prefix (str), max_tokens (int | None).
+    """
+    config_path = Path(get_project_root()) / "opencode.json"
+    if not config_path.exists():
+        raise FileNotFoundError(f"opencode.json not found at {config_path}")
+
+    with open(config_path) as f:
+        config = json.load(f)
+
+    providers = config.get("provider", {})
+    if provider not in providers:
+        raise ValueError(
+            f"Provider '{provider}' not found in opencode.json. "
+            f"Available providers: {list(providers.keys())}"
+        )
+
+    prov_cfg = providers[provider]
+    options = prov_cfg.get("options", {})
+    npm = prov_cfg.get("npm", "")
+    models = prov_cfg.get("models", {})
+
+    raw_key = options.get("apiKey", "")
+    api_key = _resolve_env_value(raw_key) if raw_key else None
+
+    api_base = options.get("baseURL")
+
+    if api_base:
+        model_prefix = "openai"
+    elif npm == "@ai-sdk/google":
+        model_prefix = "gemini"
+    else:
+        model_prefix = provider
+
+    max_tokens = None
+    if model in models:
+        max_tokens = models[model].get("limit", {}).get("output")
+
+    return {
+        "api_key": api_key,
+        "api_base": api_base,
+        "model_prefix": model_prefix,
+        "max_tokens": max_tokens,
+    }
+
 
 class GEPAFeedbackMetric:
     """Wraps the deep_agents scorer for dspy.GEPA.
@@ -207,33 +274,28 @@ class GEPALoop:
         # 2. Configure dspy LMs using same model/provider settings as base agent
         # cache=False: dspy's disk cache uses diskcache (SQLite), which corrupts
         # under concurrent thread access from GEPA's parallel evaluation workers.
-        if "arc" in self.provider:
-            arc_key = os.environ.get("ARC_LLM_API_KEY")
-            student_lm = dspy.LM(
-                f"openai/{self.student_model}",
-                temperature=0.7,
-                api_key=arc_key,
-                api_base="https://llm-api.arc.vt.edu/api/v1",
-                cache=False,
-            )
-            reflection_lm = dspy.LM(
-                f"openai/{self.reflection_model}",
-                temperature=1.0,
-                max_tokens=32000,
-                api_key=arc_key,
-                api_base="https://llm-api.arc.vt.edu/api/v1",
-                cache=False,
-            )
-        else:
-            student_lm = dspy.LM(
-                f"{self.provider}/{self.student_model}", temperature=0.7, cache=False,
-            )
-            reflection_lm = dspy.LM(
-                f"{self.provider}/{self.reflection_model}",
-                temperature=1.0,
-                max_tokens=32000,
-                cache=False,
-            )
+        student_cfg = _load_provider_config(self.provider, self.student_model)
+        reflection_cfg = _load_provider_config(self.provider, self.reflection_model)
+
+        lm_kwargs = {"cache": False}
+        if student_cfg["api_key"]:
+            lm_kwargs["api_key"] = student_cfg["api_key"]
+        if student_cfg["api_base"]:
+            lm_kwargs["api_base"] = student_cfg["api_base"]
+
+        prefix = student_cfg["model_prefix"]
+        student_lm = dspy.LM(
+            f"{prefix}/{self.student_model}",
+            temperature=0.7,
+            max_tokens=student_cfg["max_tokens"],
+            **lm_kwargs,
+        )
+        reflection_lm = dspy.LM(
+            f"{prefix}/{self.reflection_model}",
+            temperature=1.0,
+            max_tokens=reflection_cfg["max_tokens"],
+            **lm_kwargs,
+        )
             
         dspy.configure(lm=student_lm)
 
