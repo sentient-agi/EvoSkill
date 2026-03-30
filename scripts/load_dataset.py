@@ -90,6 +90,47 @@ def list_active_skills() -> list[str]:
         if d.is_dir() and d.name not in META_SKILLS and (d / "SKILL.md").exists()
     ]
 
+
+def split_held_out(
+    data: pd.DataFrame,
+    settings: "EvalSettings",
+    category_col: str,
+    extra_cols: list[str] | None = None,
+) -> pd.DataFrame:
+    """Apply stratified split and return only the held-out test set.
+
+    This is the single place where train/val/test splitting happens for eval.
+    Every load_* function should call this instead of doing its own split.
+
+    Args:
+        data: DataFrame with 'question' and 'ground_truth' columns already renamed.
+        settings: EvalSettings with train_ratio, val_ratio, dataset_slice.
+        category_col: Name of the column to use as category for stratification.
+        extra_cols: Additional columns to preserve through the split.
+
+    Returns:
+        DataFrame containing only the held-out test rows.
+    """
+    data = data.rename(columns={category_col: "category"})
+    _train, _val, test_data = stratified_split(
+        data,
+        train_ratio=settings.train_ratio,
+        val_ratio=settings.val_ratio,
+        max_examples=settings.dataset_slice,
+        extra_cols=extra_cols,
+    )
+
+    # Build column names for the test DataFrame
+    cols = ["question", "ground_truth", "category"]
+    if extra_cols:
+        cols.extend(extra_cols)
+    test_df = pd.DataFrame(test_data, columns=cols)
+
+    n_train = sum(1 for _ in _train.values() for _ in _)  # flatten train pools
+    print(f"Split: {n_train} train, {len(_val)} val, {len(test_data)} test (slice={settings.dataset_slice}, ratio={settings.train_ratio}/{settings.val_ratio})")
+    return test_df
+
+
 class EvalSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -135,7 +176,7 @@ class EvalSettings(BaseSettings):
         default="claude",
         description="SDK to use: 'claude' or 'opencode'",
     )
-    provider: str = Field(
+    provider: str | None = Field(
         default=None, description="Provider ID for opencode SDK (e.g., gemini, arc). Required when --sdk=opencode."
     )
     no_skills: bool = Field(
@@ -156,47 +197,37 @@ class EvalSettings(BaseSettings):
     )
 
 def load_officeqa(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
-    data.rename(columns={"answer": "ground_truth", "difficulty": "category"}, inplace=True)
-    _train, _val, test_data = stratified_split(data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio, max_examples=settings.dataset_slice)
-    # Rebuild dataframe from held-out tuples
-    data = pd.DataFrame(test_data, columns=["question", "answer", "difficulty"])
-    print(f"Sampled dataset: {settings.dataset_slice}, Held-out test set: {len(data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
-
+    data = data.rename(columns={"answer": "ground_truth"})
+    test_df = split_held_out(data, settings, category_col="difficulty")
 
     # Filter by difficulty if requested
     if settings.difficulty != "all":
-        data = data[data["difficulty"] == settings.difficulty]
+        test_df = test_df[test_df["category"] == settings.difficulty]
 
-    print(f"Evaluating: {len(data)} samples (difficulty={settings.difficulty})")
+    print(f"Evaluating: {len(test_df)} samples (difficulty={settings.difficulty})")
 
-    # Prepare items with index
     items = [
-        (int(i), str(row["question"]), str(row["answer"])) for i, row in data.iterrows()
+        (int(i), str(row["question"]), str(row["ground_truth"])) for i, row in test_df.iterrows()
     ]
 
     return items
 
 def load_sealqa(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
-    data.rename(columns={"topic": "category", "answer": "ground_truth"}, inplace=True)
-    _train, _val, test_data = stratified_split(data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio, max_examples=settings.dataset_slice)
-    # Rebuild dataframe from held-out tuples
-    data = pd.DataFrame(test_data, columns=["question", "answer", "topic"])
-    print(f"Sampled dataset: {settings.dataset_slice}, Held-out test set: {len(data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
-
+    data = data.rename(columns={"answer": "ground_truth"})
+    test_df = split_held_out(data, settings, category_col="topic")
 
     # Filter by topic if requested
     if settings.topic != "all":
-        data = data[data["topic"] == settings.topic]
+        test_df = test_df[test_df["category"] == settings.topic]
 
     items = [
-        (idx, row["question"], row["answer"])
-        for idx, row in data.iterrows()
+        (idx, row["question"], row["ground_truth"])
+        for idx, row in test_df.iterrows()
     ]
 
-    #Apply offset and limit
     if settings.offset:
         items = items[settings.offset:]
-    # Report config
+
     active = list_active_skills()
     mode = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
     print(f"Evaluating: {len(items)} samples (topic={settings.topic}, {mode})")
@@ -242,27 +273,18 @@ def load_livecode(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     if settings.platform != "all":
         data = data[data["platform"] == settings.platform]
 
-    # Filter by difficulty if requested
-    if settings.difficulty != "all":
-        data = data[data["difficulty"] == settings.difficulty]
+    # Rename for stratified split
+    data = data.rename(columns={"formatted_question": "question", "public_test_cases": "ground_truth"})
 
-    # Limit to dataset_slice if specified
-    if settings.dataset_slice is not None:
-        data = data.head(settings.dataset_slice)
+    # Stratified split by difficulty
+    test_df = split_held_out(data, settings, category_col="difficulty")
 
-    print(
-        f"Dataset: {len(data)} samples (platform={settings.platform}, difficulty={settings.difficulty})"
-    )
-    # print(f"SDK: {args.sdk}, Model: {args.model}")
+    print(f"Evaluating: {len(test_df)} samples (platform={settings.platform})")
 
     # Prepare items: (index, formatted_question, public_test_cases)
     items = [
-        (
-            idx,
-            row["formatted_question"],
-            row["public_test_cases"],
-        )
-        for idx, row in data.iterrows()
+        (idx, row["question"], row["ground_truth"])
+        for idx, row in test_df.iterrows()
     ]
 
     return items
@@ -294,24 +316,22 @@ def _simplify_reasoning_category_frames(reasoning_types: str) -> str:
 
 
 def load_frames(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
-    data.rename(columns={"Prompt": "question", "Answer": "answer", "reasoning_types": "category"}, inplace=True)
-    data["category"] = data["category"].apply(_simplify_reasoning_category_frames)
+    data = data.rename(columns={"Prompt": "question", "Answer": "ground_truth"})
+    data["reasoning_types"] = data["reasoning_types"].apply(_simplify_reasoning_category_frames)
 
-    if settings.dataset_slice is not None:
-        data = data.head(settings.dataset_slice)
+    test_df = split_held_out(data, settings, category_col="reasoning_types")
 
     items = [
-        (idx, row["question"], row["answer"])
-        for idx, row in data.iterrows()
+        (idx, row["question"], row["ground_truth"])
+        for idx, row in test_df.iterrows()
     ]
 
-    # Apply offset and limit
     if settings.offset:
         items = items[settings.offset:]
-    # Report config
+
     active = list_active_skills()
     mode = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
-    print(f"Evaluating: {len(items)} samples (category={settings.topic}, {mode})")
+    print(f"Evaluating: {len(items)} samples ({mode})")
     print(f"  sdk={settings.sdk} model={settings.model} provider={settings.provider or 'default'}")
 
     return items
@@ -331,24 +351,9 @@ def load_gdpval(data: pd.DataFrame, settings: EvalSettings, output_base_dir: Pat
     """
     from src.agent_profiles.skill_generator import get_project_root
     
-    # Rename columns for consistency with stratified_split expectations
-    # stratified_split expects 'question', 'ground_truth', and 'category' columns
-    data = data.rename(columns={
-        "sector": "category",
-        "prompt": "question",
-        "rubric_json": "ground_truth"
-    })
-    
-    _train, _val, test_data = stratified_split(
-        data, 
-        train_ratio=settings.train_ratio, 
-        val_ratio=settings.val_ratio, 
-        max_examples=settings.dataset_slice,
-        extra_cols=["task_id", "deliverable_files", "reference_files"]
-    )
-
-    # test_data is list of tuples: (prompt, rubric_json, sector, task_id, deliverable_files, reference_files)
-    print(f"Sampled dataset: {settings.dataset_slice}, Held-out test set: {len(test_data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
+    data = data.rename(columns={"prompt": "question", "rubric_json": "ground_truth"})
+    extra = ["task_id", "deliverable_files", "reference_files"]
+    test_df = split_held_out(data, settings, category_col="sector", extra_cols=extra)
 
     active = list_active_skills()
     mode = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
@@ -363,11 +368,12 @@ def load_gdpval(data: pd.DataFrame, settings: EvalSettings, output_base_dir: Pat
     # Prepare items: (task_id, prompt, rubric_info, generated_dir)
     items = []
     
-    # Apply offset
-    if settings.offset:
-        test_data = test_data[settings.offset:]
-    
-    for prompt, rubric_json, sector, task_id, deliverable_files, reference_files in test_data:
+    for _, row in test_df.iterrows():
+        prompt = row["question"]
+        rubric_json = row["ground_truth"]
+        task_id = row["task_id"]
+        deliverable_files = row["deliverable_files"]
+        reference_files = row["reference_files"]
         # Create task-specific deliverable directory
         task_deliverable_dir = output_base_dir / task_id / "deliverables"
         task_deliverable_dir.mkdir(parents=True, exist_ok=True)
