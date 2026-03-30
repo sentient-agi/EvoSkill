@@ -110,6 +110,7 @@ def build_train_val(
 
     train_pools, val_data, _test = stratified_split(
         data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio,
+        max_examples=settings.dataset_slice,
     )
 
     total_train = sum(len(p) for p in train_pools.values())
