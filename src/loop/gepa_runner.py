@@ -205,29 +205,34 @@ class GEPALoop:
         self._initial_instructions = self._build_initial_instructions()
 
         # 2. Configure dspy LMs using same model/provider settings as base agent
+        # cache=False: dspy's disk cache uses diskcache (SQLite), which corrupts
+        # under concurrent thread access from GEPA's parallel evaluation workers.
         if "arc" in self.provider:
             arc_key = os.environ.get("ARC_LLM_API_KEY")
             student_lm = dspy.LM(
-                f"openai/{self.student_model}", 
-                temperature=0.7, 
-                api_key=arc_key, 
+                f"openai/{self.student_model}",
+                temperature=0.7,
+                api_key=arc_key,
                 api_base="https://llm-api.arc.vt.edu/api/v1",
+                cache=False,
             )
             reflection_lm = dspy.LM(
                 f"openai/{self.reflection_model}",
                 temperature=1.0,
                 max_tokens=32000,
-                api_key=arc_key, 
+                api_key=arc_key,
                 api_base="https://llm-api.arc.vt.edu/api/v1",
+                cache=True,
             )
         else:
             student_lm = dspy.LM(
-                f"{self.provider}/{self.student_model}", temperature=0.7
+                f"{self.provider}/{self.student_model}", temperature=0.7, cache=False,
             )
             reflection_lm = dspy.LM(
                 f"{self.provider}/{self.reflection_model}",
                 temperature=1.0,
                 max_tokens=32000,
+                cache=True,
             )
             
         dspy.configure(lm=student_lm)
