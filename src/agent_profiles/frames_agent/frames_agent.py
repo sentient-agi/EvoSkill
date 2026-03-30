@@ -7,8 +7,8 @@ from src.agent_profiles.sdk_config import is_opencode_sdk
 
 
 FRAMES_AGENT_TOOLS = [
-    "WebFetch",
-    "WebSearch",
+    "web_fetch",
+    "web_search",
 ]
 
 # Path to the prompt file (read at runtime)
@@ -32,15 +32,12 @@ def get_frames_agent_options(
     prompt_text = (prompt_file or PROMPT_FILE).read_text().strip()
 
     if is_opencode_sdk():
+        # Note: OpenCode CLI doesn't support tool restriction;
+        # all built-in + .opencode/tools/ are available.
         return {
             "system": prompt_text,
             "model_id": model or "gpt-oss-120b",
             "provider_id": provider or "arc",
-            "tools": {tool: True for tool in FRAMES_AGENT_TOOLS},
-            "format": {
-                "type": "json_schema",
-                "schema": AgentResponse.model_json_schema(),
-            },
         }
     else:
         output_format = {

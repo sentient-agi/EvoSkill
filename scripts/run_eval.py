@@ -78,10 +78,11 @@ async def main(settings: EvalSettings):
     elif dataset_name == "gdpval.csv":
         # Set up output directory for GDPval deliverables
         gdpval_output_dir = Path(get_project_root()) / "output" / "gdpval_deliverables"
+        gdpval_output_dir.mkdir(parents=True, exist_ok=True)
         items = load_gdpval(data, settings, output_base_dir=gdpval_output_dir)
-        # GDPval reference files are in data_directories/reference_files
-        gdpval_ref_dir = str(Path(get_project_root()) / "data_directories" / "reference_files")
-        agent_options = make_gdpval_agent_options(model=settings.model, data_dir=gdpval_ref_dir, prompt_file=settings.prompt_file)
+        # Use output dir as cwd for best-effort isolation (agent won't browse project/dataset)
+        # Reference files are passed as absolute paths in the prompt
+        agent_options = make_gdpval_agent_options(model=settings.model, prompt_file=settings.prompt_file, cwd=str(gdpval_output_dir))
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
@@ -92,7 +93,8 @@ async def main(settings: EvalSettings):
         model_slug = (settings.model or "default").replace("/", "_")
         mode = "baseline" if settings.no_skills else "evolved"
         session_name = f"{model_slug}_{mode}"
-    run_dir = prepare_run_dir(session_name)
+    # Exclude .dataset symlink for gdpval to prevent ground-truth contamination
+    run_dir = prepare_run_dir(session_name, exclude_dataset=(dataset_name == "gdpval.csv"))
     print(f"Run directory: {run_dir}")
 
     # Wrap agent_options to inject run_dir for both opencode and Claude SDK

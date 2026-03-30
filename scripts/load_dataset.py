@@ -1,4 +1,6 @@
 from src.api.data_utils import stratified_split
+import ast
+import json
 import os
 import pandas as pd
 import shutil
@@ -20,7 +22,7 @@ RUNS_DIR = PROJECT_ROOT / ".evoskill-runs"
 META_SKILLS = {"skill-creator"}
 
 
-def prepare_run_dir(session_name: str) -> Path:
+def prepare_run_dir(session_name: str, exclude_dataset: bool = False) -> Path:
     """Create an isolated directory for an opencode run.
 
     Each session gets its own dir with opencode.json, .env, and data symlinks.
@@ -29,6 +31,8 @@ def prepare_run_dir(session_name: str) -> Path:
 
     Args:
         session_name: Name for the session directory.
+        exclude_dataset: If True, skip symlinking .dataset/ to prevent
+                        ground-truth contamination (e.g. for gdpval).
 
     Returns:
         Path to the run directory.
@@ -46,7 +50,10 @@ def prepare_run_dir(session_name: str) -> Path:
         shutil.copy2(str(env_file), str(run_dir / ".env"))
 
     # Symlink data directories the agent may need
-    for data_dir_name in ["data_directories", ".dataset", ".opencode"]:
+    symlink_dirs = ["data_directories", ".opencode"]
+    if not exclude_dataset:
+        symlink_dirs.append(".dataset")
+    for data_dir_name in symlink_dirs:
         src = PROJECT_ROOT / data_dir_name
         dest = run_dir / data_dir_name
         if src.exists() and not dest.exists():
@@ -176,7 +183,7 @@ class EvalSettings(BaseSettings):
         default="claude",
         description="SDK to use: 'claude' or 'opencode'",
     )
-    provider: str | None = Field(
+    provider: Optional[str] = Field(
         default=None, description="Provider ID for opencode SDK (e.g., gemini, arc). Required when --sdk=opencode."
     )
     no_skills: bool = Field(
@@ -184,10 +191,10 @@ class EvalSettings(BaseSettings):
        description="Run baseline without evolved skills (temporarily hides .claude/skills/)" 
     )
     train_ratio: float = Field(
-        default=0.13, description="Train ratio for stratified split"
+        default=0.15, description="Train ratio for stratified split"
     )
     val_ratio: float = Field(
-        default=0.13, description="Val ratio for stratified split"
+        default=0.15, description="Val ratio for stratified split"
     )
     session: Optional[str] = Field(
         default=None, description="Session name for isolated run dir (e.g., 'gemini_baseline'). Auto-generated if not set.",
@@ -315,11 +322,30 @@ def _simplify_reasoning_category_frames(reasoning_types: str) -> str:
     return "Multiple constraints"
 
 
-def load_frames(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
-    data = data.rename(columns={"Prompt": "question", "Answer": "ground_truth"})
-    data["reasoning_types"] = data["reasoning_types"].apply(_simplify_reasoning_category_frames)
+def prepare_frames_data(data: pd.DataFrame) -> pd.DataFrame:
+    """Rename columns and simplify categories for FRAMES dataset.
 
-    test_df = split_held_out(data, settings, category_col="reasoning_types")
+    Standardizes to stratified_split's expected columns:
+    question, ground_truth, category.
+    """
+    data = data.rename(columns={
+        "Prompt": "question",
+        "Answer": "ground_truth",
+        "reasoning_types": "category",
+    })
+    data["category"] = data["category"].apply(_simplify_reasoning_category_frames)
+    return data
+
+
+def load_frames(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
+    data = prepare_frames_data(data)
+
+    _train, _val, test_data = stratified_split(
+        data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio,
+        max_examples=settings.dataset_slice,
+    )
+    data = pd.DataFrame(test_data, columns=["question", "answer", "category"])
+    print(f"Sampled dataset: {settings.dataset_slice}, Held-out test set: {len(data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
 
     items = [
         (idx, row["question"], row["ground_truth"])
@@ -328,7 +354,6 @@ def load_frames(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
 
     if settings.offset:
         items = items[settings.offset:]
-
     active = list_active_skills()
     mode = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
     print(f"Evaluating: {len(items)} samples ({mode})")
@@ -365,30 +390,55 @@ def load_gdpval(data: pd.DataFrame, settings: EvalSettings, output_base_dir: Pat
     output_base_dir.mkdir(parents=True, exist_ok=True)
     print(f"  deliverables_dir={output_base_dir}")
 
-    # Prepare items: (task_id, prompt, rubric_info, generated_dir)
+    # Prepare items: (index, prompt, rubric_info_json)
     items = []
-    
-    for _, row in test_df.iterrows():
-        prompt = row["question"]
-        rubric_json = row["ground_truth"]
-        task_id = row["task_id"]
-        deliverable_files = row["deliverable_files"]
-        reference_files = row["reference_files"]
+
+    # Apply offset
+    if settings.offset:
+        test_data = test_data[settings.offset:]
+
+    ref_base = Path(get_project_root()) / "data_directories"
+
+    for idx, (prompt, rubric_json, sector, task_id, deliverable_files, reference_files) in enumerate(test_data):
         # Create task-specific deliverable directory
         task_deliverable_dir = output_base_dir / task_id / "deliverables"
         task_deliverable_dir.mkdir(parents=True, exist_ok=True)
-        
+
+        # Parse reference file paths and resolve to absolute paths
+        try:
+            ref_list = ast.literal_eval(reference_files) if isinstance(reference_files, str) else []
+        except (ValueError, SyntaxError):
+            ref_list = []
+        resolved_refs = [str(ref_base / ref_path) for ref_path in ref_list]
+
+        # Parse expected deliverable filenames
+        try:
+            del_list = ast.literal_eval(deliverable_files) if isinstance(deliverable_files, str) else []
+        except (ValueError, SyntaxError):
+            del_list = []
+        expected_names = [Path(f).name for f in del_list]
+
+        ref_section = ""
+        if resolved_refs:
+            ref_lines = "\n".join(f"- {p}" for p in resolved_refs)
+            ref_section = f"\n\nREFERENCE FILES for this task (use Read tool to access):\n{ref_lines}"
+
+        deliverable_section = ""
+        if expected_names:
+            del_lines = "\n".join(f"- {name}" for name in expected_names)
+            deliverable_section = f"\n\nEXPECTED DELIVERABLE(S) — you MUST use these exact filenames:\n{del_lines}"
+
         # Store rubric info and deliverable directory for scoring
         rubric_info = {
             "task_id": task_id,
             "rubric_json": rubric_json,
-            "deliverable_files": deliverable_files if deliverable_files else [],
-            "reference_files": reference_files if reference_files else [],
+            "deliverable_files": del_list,
+            "reference_files": ref_list,
             "generated_dir": str(task_deliverable_dir),
         }
-        
-        # Enhanced prompt that tells the agent where to save deliverables
-        enhanced_prompt = f"""{prompt}
+
+        # Enhanced prompt with references, expected deliverables, and save location
+        enhanced_prompt = f"""{prompt}{ref_section}{deliverable_section}
 
 IMPORTANT: You must save your deliverable file(s) to the following directory:
 {task_deliverable_dir}
@@ -396,8 +446,8 @@ IMPORTANT: You must save your deliverable file(s) to the following directory:
 Create the deliverable(s) exactly as requested and save them to the specified directory path.
 
 You have been given everything you needed through the prompt and all (if any) reference files. Finish the task without further user input."""
-        
-        items.append((task_id, enhanced_prompt, str(rubric_info)))
+
+        items.append((idx, enhanced_prompt, json.dumps(rubric_info)))
 
     print(f"Evaluating: {len(items)} samples (category={settings.topic}, {mode})")
     return items

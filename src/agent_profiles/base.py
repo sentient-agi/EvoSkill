@@ -9,6 +9,10 @@ from .sdk_config import is_claude_sdk
 
 logger = logging.getLogger(__name__)
 
+# Serialize all ClaudeSDKClient usage to prevent concurrent claude.exe
+# subprocesses from corrupting ~/.claude.json (shared global config file).
+_claude_sdk_lock = asyncio.Lock()
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -143,27 +147,28 @@ class Agent(Generic[T]):
         use_claude = isinstance(options, _CAO) or (is_claude_sdk() and not isinstance(options, dict))
 
         if use_claude:
-            # Claude SDK path
-            from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+            # Claude SDK path — serialized via lock to prevent ~/.claude.json corruption
+            async with _claude_sdk_lock:
+                from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
-            # Convert dict to ClaudeAgentOptions if needed
-            if isinstance(options, dict):
-                claude_opts = ClaudeAgentOptions(
-                    system_prompt=options.get("system"),
-                    allowed_tools=list(options.get("tools", {}).keys())
-                    if options.get("tools")
-                    else [],
-                    output_format=options.get("format"),
-                    setting_sources=["user", "project"],
-                    permission_mode="acceptEdits",
-                )
-                if "model_id" in options and "claude" in options["model_id"].lower():
-                    claude_opts.model = options["model_id"]
-                options = claude_opts
+                # Convert dict to ClaudeAgentOptions if needed
+                if isinstance(options, dict):
+                    claude_opts = ClaudeAgentOptions(
+                        system_prompt=options.get("system"),
+                        allowed_tools=list(options.get("tools", {}).keys())
+                        if options.get("tools")
+                        else [],
+                        output_format=options.get("format"),
+                        setting_sources=["user", "project"],
+                        permission_mode="acceptEdits",
+                    )
+                    if "model_id" in options and "claude" in options["model_id"].lower():
+                        claude_opts.model = options["model_id"]
+                    options = claude_opts
 
-            async with ClaudeSDKClient(options) as client:
-                await client.query(query)
-                return [msg async for msg in client.receive_response()]
+                async with ClaudeSDKClient(options) as client:
+                    await client.query(query)
+                    return [msg async for msg in client.receive_response()]
         else:
             # OpenCode CLI path — uses `opencode run` for full agentic loop
             # (including web search, tool use, multi-turn reasoning)

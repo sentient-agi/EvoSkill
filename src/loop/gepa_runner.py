@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Callable
 
 import dspy
+import logging as _logging
 import os
+
+# Suppress dspy's verbose prompt/instruction printing during GEPA compilation
+_logging.getLogger("dspy").setLevel(_logging.WARNING)
 
 from src.agent_profiles.skill_generator import get_project_root
 from src.registry import ProgramManager
@@ -266,8 +270,15 @@ class GEPALoop:
             ),
         )
 
-        # 7. Store optimized module for export_best_skills()
+        # 7. Store optimized module and immediately save prompt to disk
         self._optimized_module = optimized
+        inner_predict = object.__getattribute__(optimized, '__dict__')['predict']
+        prompt_text = inner_predict.signature.instructions
+        out_dir = self.session_dir if self.session_dir is not None else self.prompt_path.parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+        prompt_path = out_dir / "gepa_prompt.txt"
+        prompt_path.write_text(prompt_text)
+        _log("GEPA SAVE", f"Optimized prompt saved to {prompt_path}")
 
         # 8. Evaluate optimized module on val_data
         _log("GEPA EVAL", f"Evaluating on {len(self.val_data)} val samples...")

@@ -17,6 +17,7 @@ def get_gdpval_agent_options(
     provider: str | None = None,
     data_dir: str | None = None,
     prompt_file: Path | None = None,
+    cwd: str | None = None,
 ) -> Union[ClaudeAgentOptions, dict]:
     """
     Factory function that creates agent options with the current prompt.
@@ -24,8 +25,11 @@ def get_gdpval_agent_options(
     Args:
         model: Model to use. If None, uses SDK default.
         provider: Provider ID for opencode SDK (e.g., 'gemini', 'arc').
-        data_dir: Path to the data directory to add (contains reference_files).
+        data_dir: Path to the data directory to add via add_dirs. Ignored when
+                  cwd is set (reference files are passed as absolute paths in prompt).
         prompt_file: Path to prompt file to use. If None, uses the default prompt.txt.
+        cwd: Working directory for the agent. When set, add_dirs is not used
+             (best-effort isolation from project data).
     """
     # Read prompt from disk
     prompt_text = (prompt_file or PROMPT_FILE).read_text().strip()
@@ -49,8 +53,10 @@ def get_gdpval_agent_options(
             "schema": AgentResponse.model_json_schema()
         }
 
+        # When cwd is explicitly set, skip add_dirs for isolation —
+        # reference files are passed as absolute paths in the prompt.
         add_dirs = []
-        if data_dir:
+        if not cwd and data_dir:
             add_dirs.append(data_dir)
 
         options = ClaudeAgentOptions(
@@ -60,7 +66,7 @@ def get_gdpval_agent_options(
             setting_sources=["user", "project"],
             permission_mode='acceptEdits',
             add_dirs=add_dirs,
-            cwd=get_project_root(),
+            cwd=cwd or get_project_root(),
             max_buffer_size=10 * 1024 * 1024,  # 10MB buffer (default is 1MB)
         )
 
@@ -70,7 +76,7 @@ def get_gdpval_agent_options(
         return options
 
 
-def make_gdpval_agent_options(model: str | None = None, provider: str | None = None, data_dir: str | None = None, prompt_file: Path | None = None):
+def make_gdpval_agent_options(model: str | None = None, provider: str | None = None, data_dir: str | None = None, prompt_file: Path | None = None, cwd: str | None = None):
     """Create a factory function for gdpval agent options with a specific model.
 
     Args:
@@ -78,12 +84,13 @@ def make_gdpval_agent_options(model: str | None = None, provider: str | None = N
         provider: Provider ID for opencode SDK (e.g., 'gemini', 'arc').
         data_dir: Path to the data directory to add (contains reference_files).
         prompt_file: Path to prompt file to use. If None, uses the default prompt.txt.
+        cwd: Working directory for the agent (best-effort isolation).
 
     Returns:
         A callable that returns ClaudeAgentOptions configured with the model and data_dir.
     """
     def factory() -> Union[ClaudeAgentOptions, dict]:
-        return get_gdpval_agent_options(model=model, provider=provider, data_dir=data_dir, prompt_file=prompt_file)
+        return get_gdpval_agent_options(model=model, provider=provider, data_dir=data_dir, prompt_file=prompt_file, cwd=cwd)
     return factory
 
 

@@ -180,7 +180,9 @@ async def main(settings: LoopSettings):
         scorer = _livecodebench_scorer
         prompt_path = (Path(get_project_root()) / "src" / "agent_profiles" / "livecodebench_agent" / "prompt.txt")
     elif dataset_name in ("frames.csv", "frames_filtered.csv"):
-        train_pools, val_data = build_train_val(data, "reasoning_types", "Answer", "Prompt", settings)
+        from scripts.load_dataset import prepare_frames_data
+        data = prepare_frames_data(data)
+        train_pools, val_data = build_train_val(data, "category", "ground_truth", "question", settings)
         agent_options = make_frames_agent_options(model=settings.model, provider=settings.provider)
         scorer = _sealqa_scorer
     elif dataset_name == "gdpval.csv":
