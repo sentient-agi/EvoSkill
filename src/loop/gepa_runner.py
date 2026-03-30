@@ -222,7 +222,7 @@ class GEPALoop:
                 max_tokens=32000,
                 api_key=arc_key,
                 api_base="https://llm-api.arc.vt.edu/api/v1",
-                cache=True,
+                cache=False,
             )
         else:
             student_lm = dspy.LM(
@@ -232,7 +232,7 @@ class GEPALoop:
                 f"{self.provider}/{self.reflection_model}",
                 temperature=1.0,
                 max_tokens=32000,
-                cache=True,
+                cache=False,
             )
             
         dspy.configure(lm=student_lm)
@@ -299,7 +299,10 @@ class GEPALoop:
             _log("EXPORT", "No optimized module — run() must be called first")
             return []
 
-        prompt_text = self._optimized_module.predict.signature.instructions
+        predict_obj = self._optimized_module.predict
+        # ChainOfThought wraps an inner Predict at .predict; Predict exposes .signature directly
+        inner = getattr(predict_obj, "predict", predict_obj)
+        prompt_text = inner.signature.instructions
         out_dir = self.session_dir if self.session_dir is not None else self.prompt_path.parent
         out_path = out_dir / "gepa_prompt.txt"
         out_path.write_text(prompt_text)
