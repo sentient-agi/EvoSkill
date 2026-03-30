@@ -268,8 +268,34 @@ def load_livecode(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     return items
 
 
+def _simplify_reasoning_category_frames(reasoning_types: str) -> str:
+    """Collapse fine-grained reasoning_types into broad categories.
+
+    Priority order (first match wins):
+      1. 4+ types → "Complex reasoning"
+      2. Contains "Post processing" → "Post processing"
+      3. Contains "Tabular reasoning" → "Tabular reasoning"
+      4. Contains "Temporal reasoning" → "Temporal reasoning"
+      5. Contains "Numerical reasoning" → "Numerical reasoning"
+      6. Everything else → "Multiple constraints"
+    """
+    parts = [p.strip() for p in reasoning_types.split("|")]
+    if len(parts) >= 4:
+        return "Complex reasoning"
+    if "Post processing" in parts:
+        return "Post processing"
+    if "Tabular reasoning" in parts:
+        return "Tabular reasoning"
+    if "Temporal reasoning" in parts:
+        return "Temporal reasoning"
+    if "Numerical reasoning" in parts:
+        return "Numerical reasoning"
+    return "Multiple constraints"
+
+
 def load_frames(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     data.rename(columns={"Prompt": "question", "Answer": "answer", "reasoning_types": "category"}, inplace=True)
+    data["category"] = data["category"].apply(_simplify_reasoning_category_frames)
 
     if settings.dataset_slice is not None:
         data = data.head(settings.dataset_slice)

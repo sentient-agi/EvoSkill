@@ -181,7 +181,7 @@ async def main(settings: LoopSettings):
     elif dataset_name in ("frames.csv", "frames_filtered.csv"):
         train_pools, val_data = build_train_val(data, "reasoning_types", "Answer", "Prompt", settings)
         agent_options = make_frames_agent_options(model=settings.model, provider=settings.provider)
-        scorer = _officeqa_scorer
+        scorer = _sealqa_scorer
     elif dataset_name == "gdpval.csv":
         # GDPval dataset - treated as CSV
         train_pools, val_data = build_train_val(

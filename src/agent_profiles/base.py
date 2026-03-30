@@ -318,36 +318,11 @@ class Agent(Generic[T]):
             # OpenCode CLI: parse parts from `opencode run --format json`
             message = messages[0]
 
-            # Extract structured output from tool parts or info
+            # OpenCode CLI does not support structured output;
+            # the grader uses trace.result (plain text) instead.
             output = None
             parse_error = None
             raw_structured_output = None
-
-            # Check StructuredOutput tool part first
-            if hasattr(message, "parts"):
-                for part in message.parts:
-                    if isinstance(part, dict) and part.get("tool") == "StructuredOutput":
-                        state = part.get("state", {})
-                        inp = state.get("input")
-                        if inp:
-                            raw_structured_output = inp
-                            break
-
-            # Fall back to info.structured
-            if raw_structured_output is None:
-                info_dict = message.info if hasattr(message, "info") else {}
-                if isinstance(info_dict, dict):
-                    raw_structured_output = info_dict.get("structured")
-
-            if raw_structured_output is not None:
-                try:
-                    output = self.response_model.model_validate(raw_structured_output)
-                except (ValidationError, json.JSONDecodeError, TypeError) as e:
-                    parse_error = f"{type(e).__name__}: {str(e)}"
-            else:
-                parse_error = (
-                    "No structured output returned (context limit likely exceeded)"
-                )
 
             # Extract text from parts
             result_text = ""
@@ -391,7 +366,7 @@ class Agent(Generic[T]):
                 num_turns=num_turns,
                 usage=usage,
                 result=result_text,
-                is_error=parse_error is not None,
+                is_error=not result_text,
                 output=output,
                 parse_error=parse_error,
                 raw_structured_output=raw_structured_output,
