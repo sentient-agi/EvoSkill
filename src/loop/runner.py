@@ -319,8 +319,8 @@ class SelfImprovingLoop:
                 try:
                     avg_score = self.scorer(
                         question,
-                        agent_answer.strip().lower(),
-                        answer.strip().lower(),
+                        agent_answer.strip(),
+                        answer.strip(),
                     )
                 except Exception as e:
                     _log("", f"    [SCORER ERROR] {question[:40]}... ({type(e).__name__}: {e})")
