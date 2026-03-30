@@ -43,8 +43,8 @@ class GEPAFeedbackMetric:
         try:
             score = self._scorer(
                 question,
-                predicted.strip().lower(),
-                ground_truth.strip().lower(),
+                predicted,
+                ground_truth,
             )
         except Exception:
             score = 0.0
@@ -78,6 +78,18 @@ class QASignature(dspy.Signature):
     )
 
 
+class CodeQASignature(dspy.Signature):
+    """Solve the given coding problem following the instructions exactly."""
+
+    question: str = dspy.InputField()
+    answer: str = dspy.OutputField(
+        desc=(
+            "Your complete Python solution enclosed in a ```python ... ``` code block. "
+            "No explanation outside the code block."
+        )
+    )
+
+
 class QAModule(dspy.Module):
     """dspy module whose instructions GEPA will evolve into skill content.
 
@@ -86,18 +98,17 @@ class QAModule(dspy.Module):
     discovering and adding skills to address observed failures.
     """
 
-    def __init__(self, initial_instructions: str):
+    def __init__(self, initial_instructions: str, code_task: bool = False):
         super().__init__()
-        sig = QASignature.with_instructions(initial_instructions)
-        self.predict = dspy.ChainOfThought(sig)
+        sig_class = CodeQASignature if code_task else QASignature
+        sig = sig_class.with_instructions(initial_instructions)
+        # Code tasks: use Predict (single answer field) — ChainOfThought's separate
+        # reasoning field causes models to embed the solution in reasoning and omit
+        # the answer field, causing AdapterParseError on every example.
+        self.predict = dspy.Predict(sig) if code_task else dspy.ChainOfThought(sig)
 
     def forward(self, question: str):
-        try:
-            return self.predict(question=question)
-        except Exception:
-            # Parse failures (AdapterParseError, etc.) score as 0 rather than
-            # crashing the whole evaluation batch.
-            return dspy.Prediction(answer="", reasoning="")
+        return self.predict(question=question)
 
 
 class GEPALoop:
@@ -121,6 +132,9 @@ class GEPALoop:
         reflection_model: str | None = None,
         provider: str = "anthropic",
         prompt_path: Path = _PROMPT_PATH,
+        session_dir: Path | None = None,
+        code_task: bool = False,
+        question_preprocessor: Callable[[str], str] | None = None,
     ):
         self.config = config
         self.train_pools = train_pools
@@ -130,6 +144,9 @@ class GEPALoop:
         self.reflection_model = reflection_model or student_model
         self.provider = provider
         self.prompt_path = prompt_path
+        self.session_dir = session_dir
+        self.code_task = code_task
+        self.question_preprocessor = question_preprocessor
 
         # Set after compile() for use by export_best_skills
         self._optimized_module: QAModule | None = None
@@ -140,13 +157,17 @@ class GEPALoop:
         base_prompt = self.prompt_path.read_text().strip()
         return base_prompt + _INITIAL_SKILLS_PLACEHOLDER
 
+    def _preprocess(self, question: str) -> str:
+        """Apply question_preprocessor if set, otherwise return as-is."""
+        return self.question_preprocessor(question) if self.question_preprocessor else question
+
     def _to_dspy_examples(self) -> list[dspy.Example]:
         """Flatten train_pools into dspy.Example list."""
         examples = []
         for category, pool in self.train_pools.items():
             for question, answer in pool:
                 ex = dspy.Example(
-                    question=question, answer=answer, category=category
+                    question=self._preprocess(question), answer=answer, category=category
                 ).with_inputs("question")
                 examples.append(ex)
         return examples
@@ -154,7 +175,7 @@ class GEPALoop:
     def _to_dspy_val(self) -> list[dspy.Example]:
         """Convert val_data tuples to dspy.Example list."""
         return [
-            dspy.Example(question=q, answer=a, category=c).with_inputs("question")
+            dspy.Example(question=self._preprocess(q), answer=a, category=c).with_inputs("question")
             for q, a, c in self.val_data
         ]
 
@@ -164,33 +185,14 @@ class GEPALoop:
         total = 0
         for question, answer, _ in self.val_data:
             try:
-                pred = module(question=question)
+                pred = module(question=self._preprocess(question))
                 predicted = getattr(pred, "answer", str(pred))
-                correct += self.scorer(
-                    question,
-                    predicted.strip().lower(),
-                    answer.strip().lower(),
-                )
+                correct += self.scorer(question, predicted, answer)
             except Exception as e:
                 _log("", f"  [EVAL ERROR] {question[:40]}... ({type(e).__name__}: {e})")
             total += 1
         return correct / total if total > 0 else 0.0
 
-    def _extract_skill_content(self, optimized: QAModule) -> str:
-        """Extract the skill additions from the optimized module's instructions.
-
-        Returns the portion of instructions after the static base prompt —
-        the skill content GEPA discovered. Falls back to full instructions
-        if the diff cannot be computed.
-        """
-        optimized_instructions = optimized.predict.signature.instructions
-        base_prefix = self._initial_instructions.split("\n\n## Skills")[0]
-        if optimized_instructions.startswith(base_prefix):
-            skill_start = optimized_instructions.find("\n\n## Skills")
-            if skill_start != -1:
-                return optimized_instructions[skill_start + 2:]  # strip leading \n\n
-        # Fallback: return full optimized instructions as skill content
-        return optimized_instructions
 
     async def run(self) -> LoopResult:
         """Run dspy.GEPA skill optimization and return LoopResult."""
@@ -236,7 +238,7 @@ class GEPALoop:
         _log("GEPA DATA", f"trainset={len(trainset)}, valset={len(valset)}")
 
         # 4. Create module (static prompt + empty skills) and metric
-        module = QAModule(self._initial_instructions)
+        module = QAModule(self._initial_instructions, code_task=self.code_task)
         metric = GEPAFeedbackMetric(self.scorer)
 
         # 5. Instantiate dspy.GEPA — budget maps to max_iterations full eval passes
@@ -279,32 +281,22 @@ class GEPALoop:
         target_branch: str | None = None,
         run_dir: str | Path | None = None,
     ) -> list[str]:
-        """Export GEPA-optimized skill instructions to run_dir as SKILL.md.
-
-        Mirrors export_best_skills() in runner.py — writes to
-        run_dir/.claude/skills/gepa-learned-skill/SKILL.md.
+        """Save the full GEPA-optimized prompt to gepa_prompt.txt next to prompt.txt.
 
         Args:
             target_branch: Unused (kept for interface compatibility with SelfImprovingLoop).
-            run_dir: Path to .evoskill-runs/<session>/ dir.
+            run_dir: Unused (kept for interface compatibility with SelfImprovingLoop).
 
         Returns:
-            List of skill names exported.
+            List containing "gepa_prompt" if successful, else [].
         """
         if self._optimized_module is None:
             _log("EXPORT", "No optimized module — run() must be called first")
             return []
 
-        skill_content = self._extract_skill_content(self._optimized_module)
-        skill_name = "gepa-learned-skill"
-
-        if run_dir:
-            dest = Path(run_dir) / ".claude" / "skills" / skill_name
-            dest.mkdir(parents=True, exist_ok=True)
-            (dest / "SKILL.md").write_text(skill_content)
-            _log("EXPORT", f"Exported GEPA skill to {run_dir}: [{skill_name}]")
-        else:
-            _log("EXPORT", "No run_dir provided — skill not exported")
-            return []
-
-        return [skill_name]
+        prompt_text = self._optimized_module.predict.signature.instructions
+        out_dir = self.session_dir if self.session_dir is not None else self.prompt_path.parent
+        out_path = out_dir / "gepa_prompt.txt"
+        out_path.write_text(prompt_text)
+        _log("EXPORT", f"Saved best prompt to {out_path}")
+        return ["gepa_prompt"]

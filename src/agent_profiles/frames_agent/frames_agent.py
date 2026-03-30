@@ -18,6 +18,7 @@ PROMPT_FILE = Path(__file__).parent / "prompt.txt"
 def get_frames_agent_options(
     model: str | None = None,
     provider: str | None = None,
+    prompt_file: Path | None = None,
 ) -> Union[ClaudeAgentOptions, dict]:
     """
     Factory function that creates agent options with the current prompt.
@@ -25,9 +26,10 @@ def get_frames_agent_options(
     Args:
         model: Model to use. If None, uses SDK default.
         provider: Provider ID for opencode SDK (e.g., 'gemini', 'arc').
+        prompt_file: Path to prompt file to use. If None, uses the default prompt.txt.
     """
     # Read prompt from disk
-    prompt_text = PROMPT_FILE.read_text().strip()
+    prompt_text = (prompt_file or PROMPT_FILE).read_text().strip()
 
     if is_opencode_sdk():
         return {
@@ -62,11 +64,11 @@ def get_frames_agent_options(
         return options
 
 
-def make_frames_agent_options(model: str | None = None, provider: str | None = None):
+def make_frames_agent_options(model: str | None = None, provider: str | None = None, prompt_file: Path | None = None):
     """Create a factory function for agent options."""
 
     def factory() -> Union[ClaudeAgentOptions, dict]:
-        return get_frames_agent_options(model=model, provider=provider)
+        return get_frames_agent_options(model=model, provider=provider, prompt_file=prompt_file)
 
     return factory
 

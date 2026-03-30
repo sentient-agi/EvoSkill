@@ -151,6 +151,9 @@ class EvalSettings(BaseSettings):
     session: Optional[str] = Field(
         default=None, description="Session name for isolated run dir (e.g., 'gemini_baseline'). Auto-generated if not set.",
     )
+    prompt_file: Optional[Path] = Field(
+        default=None, description="Path to a prompt file to use instead of the default prompt.txt (e.g. .evoskill-runs/<session>/gepa_prompt.txt)"
+    )
 
 def load_officeqa(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     data.rename(columns={"answer": "ground_truth", "difficulty": "category"}, inplace=True)

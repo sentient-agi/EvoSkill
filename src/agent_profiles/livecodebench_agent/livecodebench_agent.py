@@ -29,6 +29,7 @@ PROMPT_FILE = Path(__file__).parent / "prompt.txt"
 def get_livecodebench_agent_options(
     model: str | None = None,
     provider: str | None = None,
+    prompt_file: Path | None = None,
 ) -> Union[Any, dict[str, Any]]:
     """
     Factory function that creates agent options for LiveCodeBench evaluation.
@@ -38,9 +39,10 @@ def get_livecodebench_agent_options(
 
     Args:
         model: Model to use (e.g., "opus", "sonnet"). If None, uses SDK default.
+        prompt_file: Path to prompt file to use. If None, uses the default prompt.txt.
     """
     # Read prompt from disk
-    prompt_text = PROMPT_FILE.read_text().strip()
+    prompt_text = (prompt_file or PROMPT_FILE).read_text().strip()
 
     if is_claude_sdk():
         from claude_agent_sdk import ClaudeAgentOptions
@@ -81,18 +83,19 @@ def get_livecodebench_agent_options(
         }
 
 
-def make_livecodebench_agent_options(model: str | None = None, provider: str | None = None):
+def make_livecodebench_agent_options(model: str | None = None, provider: str | None = None, prompt_file: Path | None = None):
     """Create a factory function for LiveCodeBench agent options with a specific model.
 
     Args:
         model: Model to use (e.g., "opus", "sonnet"). If None, uses SDK default.
+        prompt_file: Path to prompt file to use. If None, uses the default prompt.txt.
 
     Returns:
         A callable that returns ClaudeAgentOptions configured with the model.
     """
 
     def factory() -> Union[Any, dict[str, Any]]:
-        return get_livecodebench_agent_options(model=model, provider=provider)
+        return get_livecodebench_agent_options(model=model, provider=provider, prompt_file=prompt_file)
 
     return factory
 

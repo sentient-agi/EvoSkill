@@ -257,6 +257,16 @@ async def main(settings: LoopSettings):
         reflection_model = settings.gepa_reflection_model or student_model
         provider = settings.provider or "anthropic"
         print(f"Optimizer: dspy.GEPA (model={student_model}, reflection={reflection_model}, provider={provider})")
+
+        # LiveCodeBench questions end with "### Answer: ..." which conflicts with
+        # dspy's output format delimiters — strip it before passing to the dspy module.
+        _LIVECODEBENCH_ANSWER_SUFFIX = "\n\n### Answer: (use the provided format with backticks)"
+        gepa_code_task = dataset_name == "livecodebench_v6.csv"
+        gepa_question_preprocessor = (
+            (lambda q: q.rstrip().removesuffix(_LIVECODEBENCH_ANSWER_SUFFIX.rstrip()))
+            if gepa_code_task else None
+        )
+
         loop = GEPALoop(
             config, agents, manager, train_pools, val_data,
             scorer=scorer,
@@ -264,6 +274,9 @@ async def main(settings: LoopSettings):
             reflection_model=reflection_model,
             provider=provider,
             prompt_path=prompt_path,
+            session_dir=run_dir,
+            code_task=gepa_code_task,
+            question_preprocessor=gepa_question_preprocessor,
         )
     else:
         print(f"Optimizer: EvoSkill (two-step proposer+generator)")

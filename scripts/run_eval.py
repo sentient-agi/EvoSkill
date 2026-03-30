@@ -59,29 +59,29 @@ async def main(settings: EvalSettings):
     if dataset_name == "officeqa.csv":
         items = load_officeqa(data, settings)
         agent_options = (
-            make_base_agent_options(model=settings.model, provider=settings.provider)
+            make_base_agent_options(model=settings.model, provider=settings.provider, prompt_file=settings.prompt_file)
             if settings.model
             else base_agent_options
         )
     elif dataset_name == "seal-0.csv":
         items = load_sealqa(data, settings)
-        agent_options = make_sealqa_agent_options(model=settings.model, provider=settings.provider)
+        agent_options = make_sealqa_agent_options(model=settings.model, provider=settings.provider, prompt_file=settings.prompt_file)
     elif dataset_name == "dabstep_data.csv":
         items = load_dabstep(data, settings, PROMPT)
         agent_options = make_dabstep_agent_options(model=settings.model, data_dir=settings.data_dir)
     elif dataset_name == "livecodebench_v6.csv":
         items = load_livecode(data, settings)
-        agent_options = make_livecodebench_agent_options(model=settings.model, provider=settings.provider)
+        agent_options = make_livecodebench_agent_options(model=settings.model, provider=settings.provider, prompt_file=settings.prompt_file)
     elif dataset_name in ("frames.csv", "frames_filtered.csv"):
         items = load_frames(data, settings)
-        agent_options = make_frames_agent_options(model=settings.model, provider=settings.provider)
+        agent_options = make_frames_agent_options(model=settings.model, provider=settings.provider, prompt_file=settings.prompt_file)
     elif dataset_name == "gdpval.csv":
         # Set up output directory for GDPval deliverables
         gdpval_output_dir = Path(get_project_root()) / "output" / "gdpval_deliverables"
         items = load_gdpval(data, settings, output_base_dir=gdpval_output_dir)
         # GDPval reference files are in data_directories/reference_files
         gdpval_ref_dir = str(Path(get_project_root()) / "data_directories" / "reference_files")
-        agent_options = make_gdpval_agent_options(model=settings.model, data_dir=gdpval_ref_dir)
+        agent_options = make_gdpval_agent_options(model=settings.model, data_dir=gdpval_ref_dir, prompt_file=settings.prompt_file)
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
