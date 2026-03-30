@@ -95,12 +95,15 @@ async def main(settings: EvalSettings):
     run_dir = prepare_run_dir(session_name)
     print(f"Run directory: {run_dir}")
 
-    # Wrap agent_options to inject run_dir for opencode
+    # Wrap agent_options to inject run_dir for both opencode and Claude SDK
     original_factory = agent_options
     def agent_factory():
         opts = original_factory() if callable(original_factory) else original_factory
         if isinstance(opts, dict):
             opts["run_dir"] = str(run_dir)
+        else:
+            # Claude SDK: set cwd so it picks up skills from the session dir
+            opts.cwd = str(run_dir)
         return opts
 
     agent = Agent(agent_factory, AgentResponse)
