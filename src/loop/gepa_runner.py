@@ -1,6 +1,7 @@
 """dspy.GEPA skill optimizer loop — naive reflective baseline for EvoSkill comparison."""
 
 import asyncio
+import http.client
 from pathlib import Path
 from typing import Callable
 
@@ -93,6 +94,27 @@ def _load_provider_config(provider: str, model: str) -> dict:
     }
 
 
+def _web_search(query: str) -> str:
+    """Search Google via Serper and return top organic results."""
+    api_key = os.environ.get("SERPER_API_KEY")
+    if not api_key:
+        return "Error: SERPER_API_KEY environment variable is not set."
+    conn = http.client.HTTPSConnection("google.serper.dev")
+    payload = json.dumps({"q": query})
+    headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
+    conn.request("POST", "/search", payload, headers)
+    res = conn.getresponse()
+    data = json.loads(res.read().decode("utf-8"))
+    conn.close()
+    results = []
+    for item in data.get("organic", [])[:5]:
+        title = item.get("title", "")
+        snippet = item.get("snippet", "")
+        link = item.get("link", "")
+        results.append(f"{title}\n{snippet}\n{link}")
+    return "\n\n".join(results) if results else "No results found."
+
+
 class GEPAFeedbackMetric:
     """Wraps the deep_agents scorer for dspy.GEPA.
 
@@ -165,14 +187,24 @@ class QAModule(dspy.Module):
     discovering and adding skills to address observed failures.
     """
 
-    def __init__(self, initial_instructions: str, code_task: bool = False):
+    def __init__(
+        self,
+        initial_instructions: str,
+        code_task: bool = False,
+        tools: list[Callable] | None = None,
+    ):
         super().__init__()
         sig_class = CodeQASignature if code_task else QASignature
         sig = sig_class.with_instructions(initial_instructions)
-        # Code tasks: use Predict (single answer field) — ChainOfThought's separate
-        # reasoning field causes models to embed the solution in reasoning and omit
-        # the answer field, causing AdapterParseError on every example.
-        self.predict = dspy.Predict(sig) if code_task else dspy.ChainOfThought(sig)
+        if tools:
+            self.predict = dspy.ReAct(sig, tools=tools)
+        elif code_task:
+            # Code tasks: use Predict (single answer field) — ChainOfThought's separate
+            # reasoning field causes models to embed the solution in reasoning and omit
+            # the answer field, causing AdapterParseError on every example.
+            self.predict = dspy.Predict(sig)
+        else:
+            self.predict = dspy.ChainOfThought(sig)
 
     def forward(self, question: str):
         return self.predict(question=question)
@@ -202,6 +234,7 @@ class GEPALoop:
         session_dir: Path | None = None,
         code_task: bool = False,
         question_preprocessor: Callable[[str], str] | None = None,
+        web_search: bool = False,
     ):
         self.config = config
         self.train_pools = train_pools
@@ -214,6 +247,7 @@ class GEPALoop:
         self.session_dir = session_dir
         self.code_task = code_task
         self.question_preprocessor = question_preprocessor
+        self.web_search = web_search
 
         # Set after compile() for use by export_best_skills
         self._optimized_module: QAModule | None = None
@@ -305,7 +339,8 @@ class GEPALoop:
         _log("GEPA DATA", f"trainset={len(trainset)}, valset={len(valset)}")
 
         # 4. Create module (static prompt + empty skills) and metric
-        module = QAModule(self._initial_instructions, code_task=self.code_task)
+        tools = [_web_search] if self.web_search else None
+        module = QAModule(self._initial_instructions, code_task=self.code_task, tools=tools)
         metric = GEPAFeedbackMetric(self.scorer)
 
         # 5. Instantiate dspy.GEPA — budget maps to max_iterations full eval passes
@@ -362,9 +397,14 @@ class GEPALoop:
             return []
 
         predict_obj = self._optimized_module.predict
-        # ChainOfThought wraps an inner Predict at .predict; Predict exposes .signature directly
-        inner = getattr(predict_obj, "predict", predict_obj)
-        prompt_text = inner.signature.instructions
+        # ReAct: GEPA optimizes .react.signature (the inner Predict driving the tool loop)
+        # ChainOfThought: wraps an inner Predict at .predict
+        # Predict: exposes .signature directly
+        if isinstance(predict_obj, dspy.ReAct):
+            prompt_text = predict_obj.react.signature.instructions
+        else:
+            inner = getattr(predict_obj, "predict", predict_obj)
+            prompt_text = inner.signature.instructions
         out_dir = self.session_dir if self.session_dir is not None else self.prompt_path.parent
         out_path = out_dir / "gepa_prompt.txt"
         out_path.write_text(prompt_text)
