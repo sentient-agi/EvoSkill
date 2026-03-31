@@ -37,6 +37,10 @@ def get_sealqa_agent_options(
             "model_id": model or "gpt-oss-120b",
             "provider_id": provider or "arc",
             "tools": {tool: True for tool in SEALQA_AGENT_TOOLS},
+            "format": {
+                "type": "json_schema",
+                "schema": AgentResponse.model_json_schema(),
+            },
         }
     else:
         # system_prompt = {

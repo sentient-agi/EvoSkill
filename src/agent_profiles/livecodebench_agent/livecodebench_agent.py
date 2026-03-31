@@ -56,6 +56,7 @@ def get_livecodebench_agent_options(
 
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
+            
             output_format=output_format,
             allowed_tools=LIVECODEBENCH_AGENT_TOOLS,
             setting_sources=["user", "project"],
@@ -72,6 +73,10 @@ def get_livecodebench_agent_options(
         # OpenCode SDK - return dict with default system prompt and tools
         return {
             "system": prompt_text,  # Use default system prompt
+            "format": {
+                "type": "json_schema",
+                "schema": AgentResponse.model_json_schema(),
+            },
             "tools": {tool: True for tool in LIVECODEBENCH_AGENT_TOOLS},
             "mode": "build",
             "model_id": model or "gpt-oss-120b",
