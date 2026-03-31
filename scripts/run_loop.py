@@ -198,6 +198,10 @@ async def main(settings: LoopSettings):
         gdpval_ref_dir = str(Path(get_project_root()) / "data_directories" / "reference_files")
         agent_options = make_gdpval_agent_options(model=settings.model, data_dir=gdpval_ref_dir)
         scorer = score_gdpval
+    elif dataset_name == "browsecomp.csv":
+        train_pools, val_data = build_train_val(data, "category", "answer", "question", settings)
+        agent_options = make_sealqa_agent_options(model=settings.model, provider=settings.provider)
+        scorer = _sealqa_scorer
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 

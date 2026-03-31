@@ -33,7 +33,7 @@ from src.evaluation.reward import score_answer
 from src.evaluation.dabstep_scorer import question_scorer
 from src.evaluation.livecodebench.livecodebench_scorer import score_livecodebench
 from src.evaluation.gdpval_scorer import score_gdpval_with_judge
-from scripts.load_dataset import load_dabstep, load_livecode, load_officeqa, load_sealqa, load_gdpval, load_frames, prepare_run_dir, list_active_skills, EvalSettings
+from scripts.load_dataset import load_dabstep, load_livecode, load_officeqa, load_sealqa, load_gdpval, load_frames, load_browsecomp, prepare_run_dir, list_active_skills, EvalSettings
 
 PROMPT = """You are an expert data analyst and you will answer factoid questions by loading and referencing the files/documents listed below.
 You have these files available:
@@ -83,6 +83,9 @@ async def main(settings: EvalSettings):
         # Use output dir as cwd for best-effort isolation (agent won't browse project/dataset)
         # Reference files are passed as absolute paths in the prompt
         agent_options = make_gdpval_agent_options(model=settings.model, prompt_file=settings.prompt_file, cwd=str(gdpval_output_dir))
+    elif dataset_name == "browsecomp.csv":
+        items = load_browsecomp(data, settings)
+        agent_options = make_sealqa_agent_options(model=settings.model, provider=settings.provider, prompt_file=settings.prompt_file)
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
@@ -160,6 +163,10 @@ async def main(settings: EvalSettings):
                     correct += 1
             elif dataset_name == "livecodebench_v6.csv":
                 score = score_livecodebench(r.question, str(r.ground_truth), predicted)
+                if score > 0:
+                    correct += 1
+            elif dataset_name == "browsecomp.csv":
+                score = score_sealqa(r.question, str(r.ground_truth), predicted)
                 if score > 0:
                     correct += 1
             # elif dataset_name == "gdpval.csv":

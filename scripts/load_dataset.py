@@ -305,6 +305,22 @@ def load_livecode(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     return items
 
 
+def load_browsecomp(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
+    data = data.rename(columns={"answer": "ground_truth"})
+    test_df = split_held_out(data, settings, category_col="category")
+
+    active = list_active_skills()
+    mode = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
+    print(f"Evaluating: {len(test_df)} samples ({mode})")
+
+    items = [
+        (idx, row["question"], row["ground_truth"])
+        for idx, row in test_df.iterrows()
+    ]
+
+    return items
+
+
 def _simplify_reasoning_category_frames(reasoning_types: str) -> str:
     """Collapse fine-grained reasoning_types into broad categories.
 
