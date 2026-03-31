@@ -96,6 +96,9 @@ async def main(settings: EvalSettings):
     # Exclude .dataset symlink for gdpval to prevent ground-truth contamination
     run_dir = prepare_run_dir(session_name, exclude_dataset=(dataset_name == "gdpval.csv"))
     print(f"Run directory: {run_dir}")
+    active = list_active_skills(run_dir)
+    mode_label = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
+    print(f"Agent configured ({mode_label})")
 
     # Wrap agent_options to inject run_dir for both opencode and Claude SDK
     original_factory = agent_options

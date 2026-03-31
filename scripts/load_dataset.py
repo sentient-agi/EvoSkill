@@ -88,14 +88,24 @@ def prepare_run_dir(session_name: str, exclude_dataset: bool = False) -> Path:
     return run_dir
 
 
-def list_active_skills() -> list[str]:
-    """List non-meta skills currently on disk."""
-    if not SKILLS_DIR.exists():
-        return []
-    return [
-        d.name for d in SKILLS_DIR.iterdir()
-        if d.is_dir() and d.name not in META_SKILLS and (d / "SKILL.md").exists()
-    ]
+def list_active_skills(run_dir: Path | None = None) -> list[str]:
+    """List non-meta skills active in the run directory.
+
+    Checks both .claude/skills/ and .opencode/skills/ within the run dir.
+    Falls back to project-level .claude/skills/ if no run_dir is given.
+    """
+    skills: set[str] = set()
+    if run_dir is not None:
+        dirs = [run_dir / ".claude" / "skills", run_dir / ".opencode" / "skills"]
+    else:
+        dirs = [SKILLS_DIR]
+    for skills_dir in dirs:
+        if not skills_dir.exists():
+            continue
+        for d in skills_dir.iterdir():
+            if d.is_dir() and d.name not in META_SKILLS and (d / "SKILL.md").exists():
+                skills.add(d.name)
+    return sorted(skills)
 
 
 def split_held_out(
@@ -235,9 +245,7 @@ def load_sealqa(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
     if settings.offset:
         items = items[settings.offset:]
 
-    active = list_active_skills()
-    mode = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
-    print(f"Evaluating: {len(items)} samples (topic={settings.topic}, {mode})")
+    print(f"Evaluating: {len(items)} samples (topic={settings.topic})")
     print(f"  sdk={settings.sdk} model={settings.model} provider={settings.provider or 'default'}")
 
     return items
@@ -344,19 +352,17 @@ def load_frames(data: pd.DataFrame, settings: EvalSettings) -> list[tuple]:
         data, train_ratio=settings.train_ratio, val_ratio=settings.val_ratio,
         max_examples=settings.dataset_slice,
     )
-    data = pd.DataFrame(test_data, columns=["question", "answer", "category"])
+    data = pd.DataFrame(test_data, columns=["question", "ground_truth", "category"])
     print(f"Sampled dataset: {settings.dataset_slice}, Held-out test set: {len(data)} samples (train={settings.train_ratio:.0%}, val={settings.val_ratio:.0%})")
 
     items = [
         (idx, row["question"], row["ground_truth"])
-        for idx, row in test_df.iterrows()
+        for idx, row in data.iterrows()
     ]
 
     if settings.offset:
         items = items[settings.offset:]
-    active = list_active_skills()
-    mode = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
-    print(f"Evaluating: {len(items)} samples ({mode})")
+    print(f"Evaluating: {len(items)} samples")
     print(f"  sdk={settings.sdk} model={settings.model} provider={settings.provider or 'default'}")
 
     return items
@@ -380,8 +386,6 @@ def load_gdpval(data: pd.DataFrame, settings: EvalSettings, output_base_dir: Pat
     extra = ["task_id", "deliverable_files", "reference_files"]
     test_df = split_held_out(data, settings, category_col="sector", extra_cols=extra)
 
-    active = list_active_skills()
-    mode = "baseline (no skills)" if settings.no_skills else f"skills: {active or 'none'}"
     print(f"  sdk={settings.sdk} model={settings.model} provider={settings.provider or 'default'}")
 
     # Set up output directory for generated deliverables
