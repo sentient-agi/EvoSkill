@@ -54,6 +54,48 @@ def get_base_agent_options(model: str | None = None) -> ClaudeAgentOptions:
     return options
 
 
+def make_base_agent_options_from_task(
+    task_description: str,
+    model: str | None = None,
+    data_dirs: list[str] | None = None,
+):
+    """Create a factory that uses task_description as the agent system prompt.
+
+    Args:
+        task_description: The task description from task.md (replaces prompt.txt).
+        model: Model to use. If None, uses SDK default.
+        data_dirs: Extra data directories to mount for the agent.
+
+    Returns:
+        A callable that returns ClaudeAgentOptions configured for this task.
+    """
+    def factory() -> ClaudeAgentOptions:
+        system_prompt = {
+            "type": "preset",
+            "preset": "claude_code",
+            "append": task_description,
+        }
+        output_format = {
+            "type": "json_schema",
+            "schema": AgentResponse.model_json_schema(),
+        }
+        add_dirs = [os.path.join(get_project_root(), d) for d in (data_dirs or [])]
+        options = ClaudeAgentOptions(
+            system_prompt=system_prompt,
+            output_format=output_format,
+            allowed_tools=BASE_AGENT_TOOLS,
+            setting_sources=["user", "project"],
+            permission_mode='acceptEdits',
+            add_dirs=add_dirs,
+            cwd=get_project_root(),
+            max_buffer_size=10 * 1024 * 1024,
+        )
+        if model:
+            options.model = model
+        return options
+    return factory
+
+
 def make_base_agent_options(model: str | None = None):
     """Create a factory function for base agent options with a specific model.
 

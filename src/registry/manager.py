@@ -175,6 +175,47 @@ class ProgramManager:
                 children.append(program)
         return children
 
+    def reset_all(self) -> dict[str, int]:
+        """Delete all program branches, frontier tags, and loop state files.
+
+        Returns:
+            Dict with counts: {"branches": N, "tags": N, "files": N}
+        """
+        # Detect a safe branch to land on (first non-program local branch)
+        all_branches = self._git_list_branches()
+        safe_branch = next(
+            (b for b in all_branches if not b.startswith(self.BRANCH_PREFIX)),
+            "main",
+        )
+        self._git_checkout(safe_branch)
+
+        # Delete all frontier/* tags
+        tags_deleted = 0
+        for tag in self._git_list_tags():
+            if tag.startswith(self.FRONTIER_PREFIX):
+                self._git_tag_delete(tag)
+                tags_deleted += 1
+
+        # Delete all program/* branches
+        branches_deleted = 0
+        for branch in self._git_list_branches():
+            if branch.startswith(self.BRANCH_PREFIX):
+                self._git_branch_delete(branch)
+                branches_deleted += 1
+
+        # Delete loop state files
+        files_deleted = 0
+        for rel_path in [
+            ".claude/loop_checkpoint.json",
+            ".claude/feedback_history.md",
+        ]:
+            p = self.cwd / rel_path
+            if p.exists():
+                p.unlink()
+                files_deleted += 1
+
+        return {"branches": branches_deleted, "tags": tags_deleted, "files": files_deleted}
+
     def discard(self, name: str) -> None:
         """
         Delete a program branch.

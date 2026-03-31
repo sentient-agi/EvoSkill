@@ -1,0 +1,24 @@
+[harness]
+name = "claude"
+model = "sonnet"
+data_dirs = [
+    "/Users/arihantbarjatya/Documents/EvoSkill_v2/treasury_bulletins_parsed",
+]
+
+[evolution]
+mode = "skill_only"
+iterations = 20
+frontier_size = 3
+concurrency = 4
+no_improvement_limit = 5
+
+[dataset]
+path = "/Users/arihantbarjatya/Documents/EvoSkill_v2/EvoSkill/.dataset/officeqa.csv"
+question_column = "question"
+ground_truth_column = "answer"
+category_column = "difficulty"
+train_ratio = 0.18
+val_ratio = 0.12
+
+[scorer]
+type = "exact"
