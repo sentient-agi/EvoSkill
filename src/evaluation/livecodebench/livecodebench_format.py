@@ -26,7 +26,7 @@ def format_livecodebench_question(
         return f"""### Question:
 {question_content}
 
-### Format: You will use the following starter code to write the solution to the problem and enclose your code within delimiters.
+### Format: You will use the following starter code to write the solution to the problem and enclose your code within delimiters. Your code must be a complete runnable program. After the class definition, add an `if __name__ == "__main__":` block that reads each method argument from stdin (one per line, parse each with `json.loads(input())`), creates a Solution instance, calls the method, and prints the result with `print(result)`.
 ```python
 {starter_code}
 ```

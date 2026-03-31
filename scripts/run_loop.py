@@ -77,6 +77,10 @@ class LoopSettings(EvalSettings):
         default=None,
         description="Model for dspy.GEPA reflection LM. Defaults to --model if not set.",
     )
+    gepa_web_search: bool = Field(
+        default=False,
+        description="Enable web search tool for dspy.GEPA student model via Serper API.",
+    )
 
 
 # Scorer wrappers matching (question, predicted, ground_truth) -> float
@@ -280,6 +284,7 @@ async def main(settings: LoopSettings):
             session_dir=run_dir,
             code_task=gepa_code_task,
             question_preprocessor=gepa_question_preprocessor,
+            web_search=settings.gepa_web_search,
         )
     else:
         print(f"Optimizer: EvoSkill (two-step proposer+generator)")
