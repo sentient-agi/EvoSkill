@@ -118,6 +118,7 @@ class SelfImprovingLoop:
         val_data: list[tuple[str, str, str]],
         scorer: Callable[[str, str, str], float] | None = None,
         session: str | None = None,
+        session_dir: Path | str | None = None,
     ):
         """Initialize the self-improving loop.
 
@@ -129,6 +130,8 @@ class SelfImprovingLoop:
             val_data: Validation data as list of (question, answer, category) tuples.
             scorer: Scoring function (question, predicted, ground_truth) -> float.
                     Defaults to _score_multi_tolerance for backward compatibility.
+            session_dir: Isolated directory for this session's artifacts (feedback,
+                checkpoints, traces, skills). Defaults to project root for backward compat.
         """
         self.config = config
         self.agents = agents
@@ -144,7 +147,8 @@ class SelfImprovingLoop:
 
         # Paths
         self._project_root = Path(get_project_root())
-        self._feedback_path = self._project_root / ".claude" / f"feedback_history_{self.session}.md"
+        self._session_dir = Path(session_dir) if session_dir else self._project_root
+        self._feedback_path = self._session_dir / ".claude" / f"feedback_history_{self.session}.md"
         self._prompt_path = (
             self._project_root / "src" / "agent_profiles" / "base_agent" / "prompt.txt"
         )
@@ -165,7 +169,7 @@ class SelfImprovingLoop:
         self._iteration_offset = 0
 
         # Checkpoint file for exact resume
-        self._checkpoint_path = self._project_root / ".claude" / f"loop_checkpoint_{self.session}.json"
+        self._checkpoint_path = self._session_dir / ".claude" / f"loop_checkpoint_{self.session}.json"
 
     def _save_checkpoint(self, iteration: int) -> None:
         """Save sampling state for exact resume.
@@ -494,7 +498,7 @@ class SelfImprovingLoop:
 
     def _save_error_trace(self, iteration: int, question: str, error: Exception) -> None:
         """Save error trace to disk for debugging timeouts and crashes."""
-        trace_dir = self._project_root / ".claude" / "traces" / f"iter_{iteration:03d}"
+        trace_dir = self._session_dir / ".claude" / "traces" / f"iter_{iteration:03d}"
         trace_dir.mkdir(parents=True, exist_ok=True)
 
         existing = list(trace_dir.glob("error_*.json"))
@@ -771,7 +775,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
         Returns:
             List of skill names that have SKILL.md files.
         """
-        skills_dir = self._project_root / ".claude" / "skills"
+        skills_dir = self._session_dir / ".claude" / "skills"
         active_skills = []
         if skills_dir.exists():
             for skill_dir in skills_dir.iterdir():

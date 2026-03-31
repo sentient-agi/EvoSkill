@@ -191,10 +191,10 @@ class EvalSettings(BaseSettings):
        description="Run baseline without evolved skills (temporarily hides .claude/skills/)" 
     )
     train_ratio: float = Field(
-        default=0.15, description="Train ratio for stratified split"
+        default=0.13, description="Train ratio for stratified split"
     )
     val_ratio: float = Field(
-        default=0.15, description="Val ratio for stratified split"
+        default=0.13, description="Val ratio for stratified split"
     )
     session: Optional[str] = Field(
         default=None, description="Session name for isolated run dir (e.g., 'gemini_baseline'). Auto-generated if not set.",

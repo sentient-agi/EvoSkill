@@ -33,11 +33,15 @@ def get_base_agent_options(
     prompt_text = (prompt_file or PROMPT_FILE).read_text().strip()
 
     if is_opencode_sdk():
-        file_path = os.path.join(get_project_root(), "data_directories/treasury_bulletins_parsed/")
+        file_path = os.path.join(get_project_root(), "data_directories/treasury_bulletins_parsed/transformed/")
         system_with_dir = (
             f"{prompt_text}\n\n"
             f"The treasury bulletins data directory is at: {file_path}\n"
-            f"Use Read, Glob, or Bash tools to access files in that directory."
+            f"Files are named treasury_bulletin_YYYY_MM.txt (e.g., treasury_bulletin_1941_01.txt).\n"
+            f"Each file is large (~272KB of OCR text). Use Grep to search for specific terms "
+            f"rather than reading entire files.\n"
+            f"IMPORTANT: Save any scratch/temporary files in the current working directory, "
+            f"not in the data directory or project root."
         )
         return {
             "system": system_with_dir,
@@ -61,7 +65,7 @@ def get_base_agent_options(
         "schema": AgentResponse.model_json_schema()
     }
 
-    file_path = os.path.join(get_project_root(), "data_directories/treasury_bulletins_parsed/")
+    file_path = os.path.join(get_project_root(), "data_directories/treasury_bulletins_parsed/transformed/")
 
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,

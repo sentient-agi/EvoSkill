@@ -288,7 +288,7 @@ async def main(settings: LoopSettings):
         )
     else:
         print(f"Optimizer: EvoSkill (two-step proposer+generator)")
-        loop = SelfImprovingLoop(config, agents, manager, train_pools, val_data, scorer=scorer, session=session_name)
+        loop = SelfImprovingLoop(config, agents, manager, train_pools, val_data, scorer=scorer, session=session_name, session_dir=run_dir)
 
     result = await loop.run()
 
