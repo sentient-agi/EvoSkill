@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Type, TypeVar, Union
 
 from pydantic import BaseModel, ValidationError
@@ -127,6 +128,42 @@ class Agent(Generic[T]):
     MAX_RETRIES = 3
     INITIAL_BACKOFF = 30  # seconds
 
+    @staticmethod
+    def _extract_json_from_text(text: str) -> dict | None:
+        """Try to extract a JSON object from text that may contain markdown fences or prose."""
+        # Strategy 1: Extract from ```json ... ``` or ``` ... ``` fenced blocks
+        for match in re.finditer(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL):
+            candidate = match.group(1).strip()
+            try:
+                obj = json.loads(candidate)
+                if isinstance(obj, dict):
+                    return obj
+            except json.JSONDecodeError:
+                continue
+
+        # Strategy 2: Try parsing the entire text as JSON
+        stripped = text.strip()
+        try:
+            obj = json.loads(stripped)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 3: Find the outermost { ... } pair
+        first_brace = stripped.find("{")
+        last_brace = stripped.rfind("}")
+        if first_brace != -1 and last_brace > first_brace:
+            candidate = stripped[first_brace : last_brace + 1]
+            try:
+                obj = json.loads(candidate)
+                if isinstance(obj, dict):
+                    return obj
+            except json.JSONDecodeError:
+                pass
+
+        return None
+
     def __init__(self, options: OptionsProvider, response_model: Type[T]):
         self._options = options
         self.response_model = response_model
@@ -183,6 +220,26 @@ class Agent(Generic[T]):
             model = options.get("model_id")
             provider = options.get("provider_id")
             model_flag = f"{provider}/{model}" if provider and model else model
+
+            # Prepend system prompt and output schema to query
+            # (opencode CLI has no --system or --output-schema flags)
+            system_prompt = options.get("system")
+            format_spec = options.get("format")
+            if system_prompt or format_spec:
+                preamble_parts = []
+                if system_prompt:
+                    preamble_parts.append(
+                        f"<system_instructions>\n{system_prompt}\n</system_instructions>"
+                    )
+                if format_spec and format_spec.get("type") == "json_schema":
+                    schema = format_spec.get("schema", {})
+                    schema_str = json.dumps(schema, indent=2)
+                    preamble_parts.append(
+                        f"<output_format>\nYou MUST respond with a JSON object conforming to this schema:\n"
+                        f"```json\n{schema_str}\n```\n"
+                        f"Return ONLY the JSON object, no other text outside it.\n</output_format>"
+                    )
+                query = "\n\n".join(preamble_parts) + "\n\n" + query
 
             opencode_bin = "opencode.cmd" if os.name == "nt" else "opencode"
             cmd = [opencode_bin, "run", "--format", "json"]
@@ -323,12 +380,6 @@ class Agent(Generic[T]):
             # OpenCode CLI: parse parts from `opencode run --format json`
             message = messages[0]
 
-            # OpenCode CLI does not support structured output;
-            # the grader uses trace.result (plain text) instead.
-            output = None
-            parse_error = None
-            raw_structured_output = None
-
             # Extract text from parts
             result_text = ""
             tools_used = []
@@ -353,6 +404,23 @@ class Agent(Generic[T]):
 
             usage = total_tokens
             cost = total_cost
+
+            # Attempt to parse structured output from text response
+            output = None
+            parse_error = None
+            raw_structured_output = None
+            if result_text:
+                extracted = self._extract_json_from_text(result_text)
+                if extracted is not None:
+                    raw_structured_output = extracted
+                    try:
+                        output = self.response_model.model_validate(extracted)
+                    except (ValidationError, TypeError) as e:
+                        parse_error = f"{type(e).__name__}: {str(e)}"
+                else:
+                    parse_error = "No JSON object found in opencode response text"
+            else:
+                parse_error = "Empty response from opencode"
 
             options = self._get_options()
             model_name = (

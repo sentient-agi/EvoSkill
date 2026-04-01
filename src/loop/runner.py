@@ -148,7 +148,7 @@ class SelfImprovingLoop:
         # Paths
         self._project_root = Path(get_project_root())
         self._session_dir = Path(session_dir) if session_dir else self._project_root
-        self._feedback_path = self._session_dir / ".claude" / f"feedback_history_{self.session}.md"
+        self._feedback_path = self._project_root / ".claude" / f"feedback_history_{self.session}.md"
         self._prompt_path = (
             self._project_root / "src" / "agent_profiles" / "base_agent" / "prompt.txt"
         )
@@ -169,7 +169,7 @@ class SelfImprovingLoop:
         self._iteration_offset = 0
 
         # Checkpoint file for exact resume
-        self._checkpoint_path = self._session_dir / ".claude" / f"loop_checkpoint_{self.session}.json"
+        self._checkpoint_path = self._project_root / ".claude" / f"loop_checkpoint_{self.session}.json"
 
     def _save_checkpoint(self, iteration: int) -> None:
         """Save sampling state for exact resume.
@@ -498,7 +498,7 @@ class SelfImprovingLoop:
 
     def _save_error_trace(self, iteration: int, question: str, error: Exception) -> None:
         """Save error trace to disk for debugging timeouts and crashes."""
-        trace_dir = self._session_dir / ".claude" / "traces" / f"iter_{iteration:03d}"
+        trace_dir = self._project_root / ".claude" / "traces" / f"iter_{iteration:03d}"
         trace_dir.mkdir(parents=True, exist_ok=True)
 
         existing = list(trace_dir.glob("error_*.json"))
