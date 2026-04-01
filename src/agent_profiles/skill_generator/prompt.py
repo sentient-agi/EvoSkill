@@ -23,7 +23,8 @@ Work through these steps for each skill implementation:
 2. **Implement and Validate**: Build, test, and package the skill following skill-creator guidelines
 </implementation_steps>
 
-## Quality Reminder
+## Critical Rules
 
-The context window is a shared resource. Every token in your skill competes with conversation history, other skills, and user requests. Challenge each piece of content: "Does Claude really need this?" Keep skills concise and let Claude's intelligence fill in the gaps.
+1. **Write skills ONLY to `.claude/skills/<skill-name>/`** — never to `.opencode/skills/` or any other directory.
+2. The context window is a shared resource. Keep skills concise and let the agent's intelligence fill in the gaps.
 """
