@@ -144,7 +144,7 @@ class Agent(Generic[T]):
         # Determine SDK per-agent: use Claude SDK if options is ClaudeAgentOptions,
         # opencode if options is dict. Global setting is the fallback.
         from claude_agent_sdk import ClaudeAgentOptions as _CAO
-        use_claude = isinstance(options, _CAO) or (is_claude_sdk() and not isinstance(options, dict))
+        use_claude = is_claude_sdk()
 
         if use_claude:
             # Claude SDK path — serialized via lock to prevent ~/.claude.json corruption
@@ -281,7 +281,7 @@ class Agent(Generic[T]):
         # Detect which SDK was used based on the options type (same logic as _execute_query)
         options = self._get_options()
         from claude_agent_sdk import ClaudeAgentOptions as _CAO
-        use_claude = isinstance(options, _CAO) or (is_claude_sdk() and not isinstance(options, dict))
+        use_claude = is_claude_sdk()
 
         if use_claude:
             # Claude SDK: messages list with SystemMessage, AssistantMessage, ResultMessage

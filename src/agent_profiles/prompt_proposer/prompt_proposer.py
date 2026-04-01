@@ -1,7 +1,9 @@
+from typing import Union
 from claude_agent_sdk import ClaudeAgentOptions
 from src.schemas import PromptProposerResponse
 from src.agent_profiles.prompt_proposer.prompt import PROMPT_PROPOSER_SYSTEM_PROMPT
 from src.agent_profiles.skill_generator import get_project_root
+from src.agent_profiles.sdk_config import is_opencode_sdk
 
 
 PROMPT_PROPOSER_TOOLS = [
@@ -16,20 +18,54 @@ PROMPT_PROPOSER_TOOLS = [
 ]
 
 
-prompt_proposer_system_prompt = {
-    "type": "preset",
-    "preset": "claude_code",
-    "append": PROMPT_PROPOSER_SYSTEM_PROMPT.strip(),
-}
+def get_prompt_proposer_options(
+    model: str | None = None,
+    provider: str | None = None,
+) -> Union[ClaudeAgentOptions, dict]:
+    prompt_text = PROMPT_PROPOSER_SYSTEM_PROMPT.strip()
 
-prompt_proposer_output_format = {
-    "type": "json_schema",
-    "schema": PromptProposerResponse.model_json_schema(),
-}
+    if is_opencode_sdk():
+        return {
+            "system": prompt_text,
+            "model_id": model or "gpt-oss-120b",
+            "provider_id": provider or "arc",
+            "tools": {tool: True for tool in PROMPT_PROPOSER_TOOLS},
+            "format": {
+                "type": "json_schema",
+                "schema": PromptProposerResponse.model_json_schema(),
+            },
+        }
 
+    system_prompt = {
+        "type": "preset",
+        "preset": "claude_code",
+        "append": prompt_text,
+    }
+    output_format = {
+        "type": "json_schema",
+        "schema": PromptProposerResponse.model_json_schema(),
+    }
+    options = ClaudeAgentOptions(
+        output_format=output_format,
+        system_prompt=system_prompt,
+        allowed_tools=PROMPT_PROPOSER_TOOLS,
+        cwd=get_project_root(),
+    )
+    if model:
+        options.model = model
+    return options
+
+
+def make_prompt_proposer_options(model: str | None = None, provider: str | None = None):
+    def factory() -> Union[ClaudeAgentOptions, dict]:
+        return get_prompt_proposer_options(model=model, provider=provider)
+    return factory
+
+
+# Backward compat
 prompt_proposer_options = ClaudeAgentOptions(
-    output_format=prompt_proposer_output_format,
-    system_prompt=prompt_proposer_system_prompt,
+    output_format={"type": "json_schema", "schema": PromptProposerResponse.model_json_schema()},
+    system_prompt={"type": "preset", "preset": "claude_code", "append": PROMPT_PROPOSER_SYSTEM_PROMPT.strip()},
     allowed_tools=PROMPT_PROPOSER_TOOLS,
     cwd=get_project_root(),
 )

@@ -16,10 +16,10 @@ from src.agent_profiles import (
     make_livecodebench_agent_options,
     make_gdpval_agent_options,
     make_frames_agent_options,
-    skill_proposer_options,
-    prompt_proposer_options,
-    skill_generator_options,
-    prompt_generator_options,
+    make_skill_proposer_options,
+    make_prompt_proposer_options,
+    make_skill_generator_options,
+    make_prompt_generator_options,
 )
 from src.agent_profiles.skill_generator import get_project_root
 from src.api.data_utils import stratified_split
@@ -231,18 +231,29 @@ async def main(settings: LoopSettings):
             opts["run_dir"] = run_dir_str
         return opts
 
-    # Claude SDK agents: set cwd to run dir
-    skill_proposer_options.cwd = run_dir_str
-    prompt_proposer_options.cwd = run_dir_str
-    skill_generator_options.cwd = run_dir_str
-    prompt_generator_options.cwd = run_dir_str
+    # Create proposer/generator with same model/provider as base agent
+    sp = make_skill_proposer_options(model=settings.model, provider=settings.provider)
+    pp = make_prompt_proposer_options(model=settings.model, provider=settings.provider)
+    sg = make_skill_generator_options(model=settings.model, provider=settings.provider)
+    pg = make_prompt_generator_options(model=settings.model, provider=settings.provider)
+
+    # Wrap all support agents to inject run_dir
+    def _wrap(factory):
+        def wrapped():
+            opts = factory() if callable(factory) else factory
+            if isinstance(opts, dict):
+                opts["run_dir"] = run_dir_str
+            else:
+                opts.cwd = run_dir_str
+            return opts
+        return wrapped
 
     agents = LoopAgents(
         base=Agent(agent_factory, AgentResponse),
-        skill_proposer=Agent(skill_proposer_options, SkillProposerResponse),
-        prompt_proposer=Agent(prompt_proposer_options, PromptProposerResponse),
-        skill_generator=Agent(skill_generator_options, ToolGeneratorResponse),
-        prompt_generator=Agent(prompt_generator_options, PromptGeneratorResponse),
+        skill_proposer=Agent(_wrap(sp), SkillProposerResponse),
+        prompt_proposer=Agent(_wrap(pp), PromptProposerResponse),
+        skill_generator=Agent(_wrap(sg), ToolGeneratorResponse),
+        prompt_generator=Agent(_wrap(pg), PromptGeneratorResponse),
     )
     manager = ProgramManager(cwd=run_dir_str)
 
