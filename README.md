@@ -315,9 +315,7 @@ If accuracy stops improving, try the following:
 
 1. **Check the feedback log** — `.claude/feedback_history.md` records what the proposer tried each iteration and why it succeeded or failed.
 2. **Resume instead of restarting** — `evoskill run --continue` picks up from the last frontier rather than discarding progress.
-3. **Adjust `failure_samples`** in `config.toml` — increasing it gives the proposer more signal per iteration.
-4. **Switch evolution mode** — if `skill_only` is plateauing, try `prompt_only` (or vice versa).
-5. **Reset and start fresh** — `evoskill reset` clears all branches and lets you start over with a revised `task.md`.
+3. **Reset and start fresh** — `evoskill reset` clears all branches and lets you start over with a revised `task.md`.
 
 ---
 
@@ -409,14 +407,6 @@ summary = await EvalRunner(
 ).run()
 ```
 
-### Built-in tasks
-
-```python
-from src.api import list_tasks
-print(list_tasks())  # ['base', 'dabstep', 'sealqa']
-```
-
----
 
 ## Citation
 
