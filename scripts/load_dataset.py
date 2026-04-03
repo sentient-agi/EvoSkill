@@ -45,6 +45,31 @@ def prepare_run_dir(session_name: str, exclude_dataset: bool = False) -> Path:
     if opencode_json.exists():
         shutil.copy2(str(opencode_json), str(run_dir / "opencode.json"))
 
+    # If VLLM_BASE_URL is set, inject a local vLLM provider into the session copy
+    vllm_base_url = os.environ.get("VLLM_BASE_URL")
+    vllm_model = os.environ.get("VLLM_MODEL")
+    if vllm_base_url and vllm_model:
+        import json
+        session_config_path = run_dir / "opencode.json"
+        with open(session_config_path) as f:
+            config = json.load(f)
+        vllm_ctx = int(os.environ.get("VLLM_MAX_MODEL_LEN", "65536"))
+        config["provider"]["vllm"] = {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "Local vLLM",
+            "options": {"baseURL": vllm_base_url, "apiKey": "EMPTY"},
+            "models": {
+                vllm_model: {
+                    "name": vllm_model,
+                    "reasoning": True,
+                    "limit": {"context": vllm_ctx, "output": vllm_ctx // 2},
+                }
+            },
+        }
+        with open(session_config_path, "w") as f:
+            json.dump(config, f, indent=2)
+            f.write("\n")
+
     env_file = PROJECT_ROOT / ".env"
     if env_file.exists():
         shutil.copy2(str(env_file), str(run_dir / ".env"))

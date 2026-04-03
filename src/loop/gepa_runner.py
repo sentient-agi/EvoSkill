@@ -63,6 +63,18 @@ def _load_provider_config(provider: str, model: str) -> dict:
         config = json.load(f)
 
     providers = config.get("provider", {})
+
+    # If VLLM_BASE_URL is set and provider is 'vllm', synthesize config on the fly
+    if provider == "vllm" and provider not in providers:
+        vllm_base_url = os.environ.get("VLLM_BASE_URL")
+        if vllm_base_url:
+            vllm_ctx = int(os.environ.get("VLLM_MAX_MODEL_LEN", "65536"))
+            providers["vllm"] = {
+                "npm": "@ai-sdk/openai-compatible",
+                "options": {"baseURL": vllm_base_url, "apiKey": "EMPTY"},
+                "models": {model: {"limit": {"context": vllm_ctx, "output": vllm_ctx // 2}}},
+            }
+
     if provider not in providers:
         raise ValueError(
             f"Provider '{provider}' not found in opencode.json. "
