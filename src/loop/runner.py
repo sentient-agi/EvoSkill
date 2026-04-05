@@ -4,7 +4,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar
 
 from src.agent_profiles.base import Agent, AgentTrace
 from src.cache import RunCache, CacheConfig
@@ -96,6 +96,7 @@ class LoopResult:
     best_program: str
     best_score: float
     iterations_completed: int
+    total_cost_usd: float = 0.0
 
 
 class SelfImprovingLoop:
@@ -117,6 +118,8 @@ class SelfImprovingLoop:
         train_pools: dict[str, list[tuple[str, str]]],
         val_data: list[tuple[str, str, str]],
         scorer: Callable[[str, str, str], float] | None = None,
+        on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        task_constraints: str = "",
     ):
         """Initialize the self-improving loop.
 
@@ -135,6 +138,8 @@ class SelfImprovingLoop:
         self.train_pools = train_pools
         self.val_data = val_data
         self.scorer = scorer or _score_multi_tolerance
+        self.on_event = on_event
+        self.task_constraints = task_constraints
 
         # Round-robin sampling state
         self._category_offset = 0  # Which category to start with next iteration
@@ -164,6 +169,15 @@ class SelfImprovingLoop:
 
         # Checkpoint file for exact resume
         self._checkpoint_path = self._project_root / ".claude" / "loop_checkpoint.json"
+
+        # Cost tracking
+        self._total_cost: float = 0.0
+        self._iter_cost: float = 0.0
+
+    def _emit(self, event: str, **data: Any) -> None:
+        """Fire an event to the display callback if one is registered."""
+        if self.on_event is not None:
+            self.on_event(event, data)
 
     def _save_checkpoint(self, iteration: int) -> None:
         """Save sampling state for exact resume.
@@ -255,7 +269,9 @@ class SelfImprovingLoop:
             # Select parent from frontier using configured strategy
             parent = self._select_parent(iteration_count)
             self.manager.switch_to(parent)
+            self._iter_cost = 0.0  # Reset per-iteration cost
             _log(f"ITER {iteration_count}/{self.config.max_iterations}", f"Parent: {parent}")
+            self._emit("iter_start", iteration=actual_iteration, total=self.config.max_iterations, parent=parent)
 
             # Round-robin sampling: pick samples_per_category from each of N categories (cycling)
             n_cats_this_iter = min(self.config.categories_per_batch, n_cats)
@@ -285,6 +301,7 @@ class SelfImprovingLoop:
             traces = await asyncio.gather(*[
                 self.agents.base.run(question) for question, _, _ in test_samples
             ])
+            self._iter_cost += sum(t.total_cost_usd for t in traces)
 
             # Collect failures
             failures: list[tuple[AgentTrace, str, str, str]] = []  # (trace, agent_answer, ground_truth, category)
@@ -299,6 +316,7 @@ class SelfImprovingLoop:
                 )
                 status = "[OK]" if avg_score >= 0.8 else "[FAIL]"
                 _log("", f"    {status} [{category}] {question[:40]}...")
+                self._emit("sample", question=question, category=category, score=avg_score, passed=avg_score >= 0.8)
                 if avg_score < 0.8:
                     failures.append((trace, agent_answer, answer, category))
 
@@ -325,7 +343,7 @@ class SelfImprovingLoop:
 
                 # Evaluate child
                 _log("", f"  -> Evaluating {child_name}...")
-                child_score = await self._evaluate(self.val_data)
+                child_score = await self._evaluate(self.val_data)  # accumulates to self._iter_cost
 
                 # Update frontier or discard
                 added = self.manager.update_frontier(
@@ -341,6 +359,16 @@ class SelfImprovingLoop:
                     outcome = "discarded"
                     self.manager.discard(child_name)
                     no_improvement_count += 1
+
+                self._emit(
+                    "eval_result",
+                    child_name=child_name,
+                    score=child_score,
+                    parent_score=parent_score,
+                    added=added,
+                    frontier=self.manager.get_frontier_with_scores(),
+                    n_skills=len(self._get_active_skills()),
+                )
 
                 # Record feedback with outcome for future proposers to learn from
                 active_skills = self._get_active_skills()
@@ -364,6 +392,10 @@ class SelfImprovingLoop:
             frontier_str = ", ".join(f"{n}:{s:.2f}" for n, s in self.manager.get_frontier_with_scores())
             _log("", f"  Frontier: [{frontier_str}]")
 
+            # Report per-iteration and cumulative cost
+            self._total_cost += self._iter_cost
+            _log("COST", f"Iter {iteration_count} cost: ${self._iter_cost:.4f} | Running total: ${self._total_cost:.4f}")
+
             # Save checkpoint at end of each successful iteration
             self._save_checkpoint(actual_iteration)
 
@@ -373,12 +405,15 @@ class SelfImprovingLoop:
         best_score = frontier[0][1] if frontier else 0.0
 
         _log("DONE", f"{iteration_count} iterations, best: {best or 'base'} ({best_score:.4f})")
+        _log("COST", f"Total cost: ${self._total_cost:.4f}")
+        self._emit("loop_done", best=best or "base", best_score=best_score, iterations=iteration_count)
 
         return LoopResult(
             frontier=frontier,
             best_program=best or "base",
             best_score=best_score,
             iterations_completed=iteration_count,
+            total_cost_usd=self._total_cost,
         )
 
     async def _ensure_base_program(self) -> None:
@@ -404,12 +439,16 @@ class SelfImprovingLoop:
         # Evaluate and add base to frontier
         self.manager.switch_to("base")
         _log("", f"  -> Evaluating on {len(self.val_data)} samples...")
+        self._iter_cost = 0.0
         base_score = await self._evaluate(self.val_data)
+        self._total_cost += self._iter_cost
         self.manager.update_frontier(
             "base", base_score, max_size=self.config.frontier_size
         )
         _log("", f"  -> Base score: {base_score:.4f}")
         _log("", f"  -> Frontier: {self.manager.get_frontier()}")
+        _log("COST", f"Base eval cost: ${self._iter_cost:.4f} | Total: ${self._total_cost:.4f}")
+        self._emit("baseline", score=base_score)
 
     async def _evaluate(self, data: list[tuple[str, str, str]]) -> float:
         """Evaluate base agent on data.
@@ -428,6 +467,8 @@ class SelfImprovingLoop:
 
         score = 0.0
         for result in results:
+            if result.trace is not None:
+                self._iter_cost += result.trace.total_cost_usd
             if result.trace is None or result.trace.output is None:
                 continue  # Timeout/error/parse failed = 0 score
             score += self.scorer(
@@ -462,10 +503,11 @@ class SelfImprovingLoop:
         evolution_mode = self.config.evolution_mode
         _log("", f"  -> Running {evolution_mode.replace('_only', '')} proposer with {len(failures)} failures...")
         feedback_history = read_feedback_history(self._feedback_path)
-        proposer_query = build_proposer_query(failures, feedback_history, evolution_mode, truncation_level)
+        proposer_query = build_proposer_query(failures, feedback_history, evolution_mode, truncation_level, self.task_constraints)
 
         if evolution_mode == "skill_only":
             proposer_trace = await self.agents.skill_proposer.run(proposer_query)
+            self._iter_cost += proposer_trace.total_cost_usd
 
             if proposer_trace.output is None:
                 _log("", f"  [WARN] Skill proposer failed: {proposer_trace.parse_error}")
@@ -479,6 +521,7 @@ class SelfImprovingLoop:
 
             action_label = f"edit:{target_skill}" if action_type == "edit" else "create"
             _log("", f"  -> Proposal: skill ({action_label}) - {proposed[:50]}...")
+            self._emit("proposal", action=action_type, target_skill=target_skill, summary=proposed[:80])
 
             # Create child program branch
             child_name = f"iter-skill-{actual_iteration}"
@@ -502,12 +545,19 @@ and modify it to add these capabilities. Preserve all existing content that is s
                 _log("", f"  -> Generating new skill...")
                 skill_query = build_skill_query_from_skill_proposer(proposer_trace)
 
+            skills_before = set(self._get_active_skills())
             skill_trace = await self.agents.skill_generator.run(skill_query)
+            self._iter_cost += skill_trace.total_cost_usd
             if skill_trace.output:
-                pass  # Skill is written to file by the generator
+                # Detect newly created skill by diffing skills dir before/after
+                skills_after = set(self._get_active_skills())
+                new_skills = skills_after - skills_before
+                created_skill = next(iter(new_skills)) if new_skills else None
+                self._emit("skill_written", name=created_skill, action=action_type, target=target_skill)
 
         else:  # prompt_only
             proposer_trace = await self.agents.prompt_proposer.run(proposer_query)
+            self._iter_cost += proposer_trace.total_cost_usd
 
             if proposer_trace.output is None:
                 _log("", f"  [WARN] Prompt proposer failed: {proposer_trace.parse_error}")
@@ -530,6 +580,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
                 proposer_trace, original_prompt
             )
             prompt_trace = await self.agents.prompt_generator.run(prompt_query)
+            self._iter_cost += prompt_trace.total_cost_usd
             if prompt_trace.output:
                 update_prompt_file(
                     self._prompt_path, prompt_trace.output.optimized_prompt

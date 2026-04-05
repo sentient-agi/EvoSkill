@@ -13,6 +13,7 @@ def build_proposer_query(
     feedback_history: str,
     evolution_mode: str = "skill_only",
     truncation_level: int = 0,
+    task_constraints: str = "",
 ) -> str:
     """Build the query for the proposer agent from multiple failure traces.
 
@@ -21,6 +22,7 @@ def build_proposer_query(
         feedback_history: Previous feedback history.
         evolution_mode: "skill_only" or "prompt_only" - affects trace truncation.
         truncation_level: Context reduction level (0=full, 1=moderate, 2=aggressive).
+        task_constraints: Optional task-specific constraints to include in the query.
 
     Returns:
         Formatted query string for the proposer.
@@ -82,9 +84,11 @@ Ground Truth: {ground_truth}
 
     failures_text = "\n".join(failure_sections)
 
+    constraints_section = f"\n## Task Constraints\n{task_constraints}\n" if task_constraints else ""
+
     return f"""## Existing Skills (check before proposing new ones)
 {skills_list}
-
+{constraints_section}
 ## Previous Attempts Feedback
 {feedback_history}
 

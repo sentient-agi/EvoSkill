@@ -11,7 +11,7 @@ BASE_AGENT_TOOLS = ["Read", "Write", "Bash", "Glob", "Grep", "Edit", "WebFetch",
 PROMPT_FILE = Path(__file__).parent / "prompt.txt"
 
 
-def get_base_agent_options(model: str | None = None) -> ClaudeAgentOptions:
+def get_base_agent_options(model: str | None = None, data_dirs: list[str] | None = None) -> ClaudeAgentOptions:
     """
     Factory function that creates ClaudeAgentOptions with the current prompt.
 
@@ -20,6 +20,7 @@ def get_base_agent_options(model: str | None = None) -> ClaudeAgentOptions:
 
     Args:
         model: Model to use (e.g., "opus", "sonnet"). If None, uses SDK default.
+        data_dirs: Extra data directories to mount for the agent (from config harness.data_dirs).
     """
     # Read prompt from disk
     prompt_text = PROMPT_FILE.read_text().strip()
@@ -35,7 +36,7 @@ def get_base_agent_options(model: str | None = None) -> ClaudeAgentOptions:
         "schema": AgentResponse.model_json_schema()
     }
 
-    file_path = os.path.join(get_project_root(), "treasury_bulletins_parsed/")
+    add_dirs = [os.path.join(get_project_root(), d) for d in (data_dirs or [])]
 
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
@@ -43,7 +44,7 @@ def get_base_agent_options(model: str | None = None) -> ClaudeAgentOptions:
         allowed_tools=BASE_AGENT_TOOLS,
         setting_sources=["user", "project"],  # Load Skills from filesystem
         permission_mode='acceptEdits',
-        add_dirs=[file_path],
+        add_dirs=add_dirs,
         cwd=get_project_root(),
         max_buffer_size=10 * 1024 * 1024,  # 10MB buffer (default is 1MB)
     )
@@ -54,17 +55,60 @@ def get_base_agent_options(model: str | None = None) -> ClaudeAgentOptions:
     return options
 
 
-def make_base_agent_options(model: str | None = None):
+def make_base_agent_options_from_task(
+    task_description: str,
+    model: str | None = None,
+    data_dirs: list[str] | None = None,
+):
+    """Create a factory that uses task_description as the agent system prompt.
+
+    Args:
+        task_description: The task description from task.md (replaces prompt.txt).
+        model: Model to use. If None, uses SDK default.
+        data_dirs: Extra data directories to mount for the agent.
+
+    Returns:
+        A callable that returns ClaudeAgentOptions configured for this task.
+    """
+    def factory() -> ClaudeAgentOptions:
+        system_prompt = {
+            "type": "preset",
+            "preset": "claude_code",
+            "append": task_description,
+        }
+        output_format = {
+            "type": "json_schema",
+            "schema": AgentResponse.model_json_schema(),
+        }
+        add_dirs = [os.path.join(get_project_root(), d) for d in (data_dirs or [])]
+        options = ClaudeAgentOptions(
+            system_prompt=system_prompt,
+            output_format=output_format,
+            allowed_tools=BASE_AGENT_TOOLS,
+            setting_sources=["user", "project"],
+            permission_mode='acceptEdits',
+            add_dirs=add_dirs,
+            cwd=get_project_root(),
+            max_buffer_size=10 * 1024 * 1024,
+        )
+        if model:
+            options.model = model
+        return options
+    return factory
+
+
+def make_base_agent_options(model: str | None = None, data_dirs: list[str] | None = None):
     """Create a factory function for base agent options with a specific model.
 
     Args:
         model: Model to use (e.g., "opus", "sonnet"). If None, uses SDK default.
+        data_dirs: Extra data directories to mount for the agent (from config harness.data_dirs).
 
     Returns:
         A callable that returns ClaudeAgentOptions configured with the model.
     """
     def factory() -> ClaudeAgentOptions:
-        return get_base_agent_options(model=model)
+        return get_base_agent_options(model=model, data_dirs=data_dirs)
     return factory
 
 
