@@ -21,7 +21,7 @@
 
 Install into <b>any coding agent</b> in seconds, and supercharge it with <b>AI-created skills</b> automatically. Depending on the agent, you are free to use <b>any model provider</b> of your choice ([OpenRouter](https://openrouter.ai/models?q=g), [Anthropic](https://platform.claude.com/docs/en/about-claude/models/overview), [OpenAI](https://platform.openai.com/), [Fireworks](https://fireworks.ai/), and more) and <b>any model</b> you want (Claude, GLM, Minimax, Kimi, GPT, Gemini, Qwen, and others).
 
-## 🤖 Supported coding agents:
+## 🤖 Supported agents
 
 <table>
   <thead>
@@ -55,7 +55,7 @@ Install into <b>any coding agent</b> in seconds, and supercharge it with <b>AI-c
   </tbody>
 </table>   
 
-## 🤖 Features
+## 🎨 Features
 
 <table>
   <thead>
