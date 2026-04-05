@@ -38,18 +38,18 @@ Install into <b>any coding agent</b> in seconds, and supercharge it with <b>AI-c
       <td></td>
     </tr>
     <tr>
-      <td><a href="https://github.com/OpenHands/OpenHands">OpenHands</a></td>
-      <td>✅</td>
-      <td></td>
-    </tr>
-    <tr>
       <td><a href="https://opencode.ai/">OpenCode</a></td>
       <td>✅</td>
       <td></td>
     </tr>
     <tr>
+      <td><a href="https://github.com/OpenHands/OpenHands">OpenHands</a></td>
+      <td>🛠️</td>
+      <td></td>
+    </tr>
+    <tr>
       <td><a href="https://github.com/block/goose">Goose</a></td>
-      <td>✅</td>
+      <td>🛠️</td>
       <td></td>
     </tr>
   </tbody>
