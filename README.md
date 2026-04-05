@@ -1,6 +1,6 @@
 <div align="center">
     <img src="./assets/evoskill.png" alt="alt text" width="100%"/>
-    <h1>EvoSkill: Automated Skill Creation for Coding Agents</h1>
+    <h1>EvoSkill: Automated Skill Discovery for Coding Agents</h1>
 </div>
 
 <p align="center">
@@ -11,15 +11,105 @@
   <a href="https://github.com/sentient-agi/EvoSkill/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache 2.0-007ec6?style=for-the-badge" alt="License: Apache 2.0"></a>
 </p>
 
-<b>EvoSkill is a harness-agnostic toolkit for automatically creating and improving skills from benchmarks for coding agents: Claude Code, OpenCode, OpenHands, Goose, and others.</b>
+<b>Supercharge your coding agents with EvoSkill, an agent-agnostic toolkit for automatically creating and improving AI skills, compatible with Claude Code, OpenCode, OpenHands, Goose, and more.</b>
 
-EvoSkill uses a [GEPA](https://github.com/sentient-agi/gepa-plus)/[DSPy](https://github.com/stanfordnlp/dspy)-style self-improvement loop that tests an agent on benchmark questions, identifies failure patterns, proposes skill or prompt improvements, evaluates the changes, and keeps the best-performing variants, similar to <b>Karpathy's autoresearch</b>.
+<b>EvoSkill</b> uses <b>[GEPA](https://github.com/sentient-agi/gepa-plus)/[DSPy](https://github.com/stanfordnlp/dspy)-style self-improvement algorithms</b> that identify agent failure patterns, propose skill or prompt improvements, evaluate the changes, and keep the best-performing variants, similar to [<b>Karpathy's autoresearch</b>](https://github.com/karpathy/autoresearch).
 
 <p align="center">
   <img src="./assets/examples.png" alt="EvoSkill Architecture" style="width: 75%;">
 </p>
 
-Install into <b>any coding agent</b> ([Claude Code](https://code.claude.com/docs/en/overview), [OpenHands](https://github.com/OpenHands/OpenHands), [OpenCode](https://github.com/anomalyco/opencode), [Goose](https://github.com/block/goose)) in seconds, run it against <b>any benchmark</b> (full or subset) and supercharge your agent with <b>AI-created skills</b> automatically. Depending on the harness, you are free to use <b>any model provider</b> of your choice ([OpenRouter](https://openrouter.ai/models?q=g), [Anthropic](https://platform.claude.com/docs/en/about-claude/models/overview), [OpenAI](https://platform.openai.com/), [Fireworks](https://fireworks.ai/), and more) and <b>any model</b> you want (Claude, GLM, Minimax, Kimi, GPT, Gemini, Qwen, and others). 
+Install into <b>any coding agent</b> in seconds, and supercharge it with <b>AI-created skills</b> automatically. Depending on the agent, you are free to use <b>any model provider</b> of your choice ([OpenRouter](https://openrouter.ai/models?q=g), [Anthropic](https://platform.claude.com/docs/en/about-claude/models/overview), [OpenAI](https://platform.openai.com/), [Fireworks](https://fireworks.ai/), and more) and <b>any model</b> you want (Claude, GLM, Minimax, Kimi, GPT, Gemini, Qwen, and others).
+
+## 🤖 Supported coding agents:
+
+<table>
+  <thead>
+    <tr>
+      <th>Agent</th>
+      <th>Support</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><a href="https://www.anthropic.com/claude-code">Claude Code</a></td>
+      <td>✅</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td><a href="https://github.com/OpenHands/OpenHands">OpenHands</a></td>
+      <td>✅</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td><a href="https://opencode.ai/">OpenCode</a></td>
+      <td>✅</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td><a href="https://github.com/block/goose">Goose</a></td>
+      <td>✅</td>
+      <td></td>
+    </tr>
+  </tbody>
+</table>   
+
+## 🤖 Features
+
+<table>
+  <thead>
+    <tr>
+      <th>Capability</th>
+      <th>Status</th>
+      <th>Explanation</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>Evolution with a benchmark</b></td>
+      <td>✅</td>
+      <td>
+        Skills can be effectively improved against your own or academic benchmarks.
+      </td>
+    </tr>
+    <tr>
+      <td><b>Cross-agent transferability</b></td>
+      <td>✅</td>
+      <td>
+        <a href="https://agentskills.io">Skills</a> are packaged as reusable folders with instructions, metadata, and helper scripts, compatible with many coding agents.
+      </td>
+    </tr>
+    <tr>
+      <td><b>Cross-model transferability</b></td>
+      <td>✅</td>
+      <td>
+        Demonstrated in <a href="https://arxiv.org/html/2604.01687v1">EvoSkills</a>, skills evolved with a fixed LLM can transfer their performance increase to other LLMs.
+      </td>
+    </tr>
+    <tr>
+      <td><b>Cross-task transferability</b></td>
+      <td>✅</td>
+      <td>
+        Generated skills can be generic enough to transfer across tasks, for instance a SealQA skill improving BrowseComp performance (as shown in <a href="https://arxiv.org/abs/2603.02766">EvoSkill</a>).
+      </td>
+    </tr>
+    <tr>
+      <td><b>Evolution without a benchmark</b></td>
+      <td>🛠️</td>
+      <td>
+        An open research direction: evolving skills without reliance on any benchmark.
+      </td>
+    </tr>
+    <tr>
+      <td><b>Continuous evolution</b></td>
+      <td>🛠️</td>
+      <td>
+        Integrating the ability to improve skills from regular usage, as demonstrated by projects like <a href="https://github.com/NousResearch/hermes-agent-self-evolution">Hermes-Agent</a>.
+      </td>
+    </tr>
+  </tbody>
+</table>
 
 ## Table of Contents
 
@@ -63,7 +153,7 @@ export ANTHROPIC_API_KEY=your-key-here
 
 Run `evoskill init` inside any git repository:
 
-```
+```bash
 $ evoskill init
 
   EvoSkill — Project Setup
@@ -105,7 +195,7 @@ evoskill run
 
 EvoSkill will run the evolutionary loop and print a live progress table:
 
-```
+```bash
   Iter  Accuracy  Δ          Skills  Frontier  Status
   1     42.0%     —          0       [1]       baseline
   2     51.3%     +9.3%      1       [1, 2]    ★ new best
