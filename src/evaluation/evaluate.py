@@ -2,8 +2,6 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, TypeVar
 
-from tqdm.asyncio import tqdm_asyncio
-
 from src.agent_profiles.base import Agent, AgentTrace
 
 if TYPE_CHECKING:
@@ -66,5 +64,5 @@ async def evaluate_agent_parallel(
             return EvalResult(question=question, ground_truth=ground_truth, trace=trace)
 
     tasks = [run_one(q, gt) for q, gt in items]
-    results = await tqdm_asyncio.gather(*tasks, desc="Evaluating")
-    return results
+    results = await asyncio.gather(*tasks)
+    return list(results)

@@ -34,6 +34,7 @@ class CacheConfig(BaseModel):
     store_messages: bool = False  # Whether to cache the full messages list
     hash_length: int = 12  # Length of hash prefix for filenames
     cwd: Path = Path(".")  # Working directory for git commands
+    harness: str = "claude"  # Which harness to use for finding skills
 
     class Config:
         arbitrary_types_allowed = True
@@ -96,11 +97,22 @@ class RunCache:
         Returns:
             Combined hash of behavior-affecting files.
         """
-        # Define paths that affect agent behavior
+        # Define paths that affect agent behavior based on harness
+        harness = self.config.harness
+        if harness == "openhands":
+            skills_path = ".agents/skills"
+            prompt_path = ".evoskill/prompts/openhands.md"
+        elif harness == "opencode":
+            skills_path = ".opencode/skills"
+            prompt_path = "src/agent_profiles/base_agent/prompt.txt"
+        else:
+            skills_path = ".claude/skills"
+            prompt_path = "src/agent_profiles/base_agent/prompt.txt"
+
         # (directory, glob_pattern) tuples
         behavior_paths = [
-            (".claude/skills", "**/*"),  # All skill files
-            ("src/agent_profiles/base_agent", "prompt.txt"),  # Prompt text
+            (skills_path, "**/*"),  # All skill files
+            (str(Path(prompt_path).parent), Path(prompt_path).name),  # Prompt text
         ]
 
         content_hashes = []

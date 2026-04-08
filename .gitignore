@@ -8,9 +8,10 @@ wheels/
 treasury_bulletins_parsed/
 *.skill
 *.log
-# Claude Code config (ignore all except skills folder)
+# Claude Code config (ignore all except skills folder and program metadata)
 .claude/*
 !.claude/skills/
+!.claude/program.yaml
 results/
 DABstep-data/
 .evoskill/

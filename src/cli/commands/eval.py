@@ -10,9 +10,10 @@ from rich.table import Table
 
 from src.cli.config import load_config
 from src.cli.commands.run import _load_and_split, _make_scorer
-from src.agent_profiles import Agent, make_base_agent_options, set_sdk
+from src.agent_profiles import Agent
 from src.agent_profiles.skill_generator import get_project_root
 from src.evaluation import evaluate_agent_parallel
+from src.harness import build_base_agent_factory
 from src.registry import ProgramManager
 from src.schemas import AgentResponse
 
@@ -24,8 +25,6 @@ console = Console()
 def eval_cmd(verbose: bool):
     """Evaluate the best skills on the validation set."""
     cfg = load_config()
-    sdk = cfg.harness.name
-    set_sdk(sdk)
 
     try:
         _, val_data = _load_and_split(cfg)
@@ -43,7 +42,15 @@ def eval_cmd(verbose: bool):
 
     console.print(f'\n  Evaluating [bold]{best}[/bold] on {len(val_data)} samples...\n')
 
-    agent = Agent(make_base_agent_options(data_dirs=cfg.harness.data_dirs), AgentResponse)
+    agent = Agent(
+        build_base_agent_factory(
+            harness=cfg.harness.name,
+            task_description=cfg.task_description,
+            model=cfg.harness.model,
+            data_dirs=cfg.harness.data_dirs,
+        ),
+        AgentResponse,
+    )
     scorer = _make_scorer(cfg)
 
     qa_data = [(q, a) for q, a, _ in val_data]

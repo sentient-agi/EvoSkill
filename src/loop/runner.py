@@ -49,6 +49,7 @@ def _score_multi_tolerance(question: str, predicted: str, ground_truth: str) -> 
 from src.agent_profiles.base_agent import get_base_agent_options
 from src.agent_profiles.skill_generator import get_project_root
 from src.evaluation import score_answer, evaluate_agent_parallel
+from src.harness import get_prompt_artifact_path
 from src.registry import ProgramManager, ProgramConfig
 from src.schemas import (
     AgentResponse,
@@ -147,10 +148,15 @@ class SelfImprovingLoop:
 
         # Paths
         self._project_root = Path(get_project_root())
-        self._feedback_path = self._project_root / ".claude" / "feedback_history.md"
-        self._prompt_path = (
-            self._project_root / "src" / "agent_profiles" / "base_agent" / "prompt.txt"
-        )
+        _harness = config.harness
+        if _harness == "openhands":
+            _state_dir = self._project_root / ".agents"
+        elif _harness == "opencode":
+            _state_dir = self._project_root / ".opencode"
+        else:
+            _state_dir = self._project_root / ".claude"
+        self._feedback_path = _state_dir / "feedback_history.md"
+        self._prompt_path = get_prompt_artifact_path(config.harness, self._project_root)
 
         # Initialize cache
         if config.cache_enabled:
@@ -159,6 +165,7 @@ class SelfImprovingLoop:
                 enabled=True,
                 store_messages=config.cache_store_messages,
                 cwd=self._project_root,
+                harness=config.harness,
             )
             self.cache: RunCache | None = RunCache(cache_config)
         else:
@@ -168,7 +175,7 @@ class SelfImprovingLoop:
         self._iteration_offset = 0
 
         # Checkpoint file for exact resume
-        self._checkpoint_path = self._project_root / ".claude" / "loop_checkpoint.json"
+        self._checkpoint_path = _state_dir / "loop_checkpoint.json"
 
         # Cost tracking
         self._total_cost: float = 0.0
@@ -416,20 +423,52 @@ class SelfImprovingLoop:
             total_cost_usd=self._total_cost,
         )
 
+    def _get_skills_dir(self) -> Path:
+        """Get the skills directory based on the configured harness."""
+        harness = self.config.harness
+        if harness == "openhands":
+            return self._project_root / ".agents" / "skills"
+        elif harness == "opencode":
+            return self._project_root / ".opencode" / "skills"
+        else:
+            return self._project_root / ".claude" / "skills"
+
     async def _ensure_base_program(self) -> None:
         """Create and evaluate base program if it doesn't exist."""
         if "base" not in self.manager.list_programs():
-            current_options = get_base_agent_options()
-
-            base_config = ProgramConfig(
-                name="base",
-                parent=None,
-                generation=0,
-                system_prompt=current_options.system_prompt,
-                allowed_tools=current_options.allowed_tools,
-                output_format=current_options.output_format,
-                metadata={},
-            ).with_timestamp()
+            harness = self.config.harness
+            if harness != "claude":
+                # Non-claude harnesses: store the actual active prompt text from the
+                # harness factory so prompt evolution can reason over the real prompt.
+                current_options = self.agents.base._get_options()
+                system_text = (
+                    current_options.get("system", "")
+                    if isinstance(current_options, dict)
+                    else harness
+                )
+                allowed_tools = []
+                if isinstance(current_options, dict) and current_options.get("tools"):
+                    allowed_tools = list(current_options["tools"].keys())
+                base_config = ProgramConfig(
+                    name="base",
+                    parent=None,
+                    generation=0,
+                    system_prompt={"type": "text", "content": system_text},
+                    allowed_tools=allowed_tools,
+                    output_format=None,
+                    metadata={},
+                ).with_timestamp()
+            else:
+                current_options = get_base_agent_options()
+                base_config = ProgramConfig(
+                    name="base",
+                    parent=None,
+                    generation=0,
+                    system_prompt=current_options.system_prompt,
+                    allowed_tools=current_options.allowed_tools,
+                    output_format=current_options.output_format,
+                    metadata={},
+                ).with_timestamp()
 
             self.manager.create_program("base", base_config)
             _log("INIT", "Created base program")
@@ -503,7 +542,10 @@ class SelfImprovingLoop:
         evolution_mode = self.config.evolution_mode
         _log("", f"  -> Running {evolution_mode.replace('_only', '')} proposer with {len(failures)} failures...")
         feedback_history = read_feedback_history(self._feedback_path)
-        proposer_query = build_proposer_query(failures, feedback_history, evolution_mode, truncation_level, self.task_constraints)
+        proposer_query = build_proposer_query(
+            failures, feedback_history, evolution_mode, truncation_level, self.task_constraints,
+            harness=self.config.harness, project_root=self._project_root
+        )
 
         if evolution_mode == "skill_only":
             proposer_trace = await self.agents.skill_proposer.run(proposer_query)
@@ -529,6 +571,15 @@ class SelfImprovingLoop:
             child_config = parent_config.mutate(child_name)
             self.manager.create_program(child_name, child_config, parent=parent)
 
+            # Determine harness-specific skill path
+            harness = self.config.harness
+            if harness == "openhands":
+                skill_rel_path = f".agents/skills/{target_skill}/SKILL.md"
+            elif harness == "opencode":
+                skill_rel_path = f".opencode/skills/{target_skill}/SKILL.md"
+            else:
+                skill_rel_path = f".claude/skills/{target_skill}/SKILL.md"
+
             # Generate skill - use different query for edit vs create
             if action_type == "edit" and target_skill:
                 _log("", f"  -> Editing existing skill: {target_skill}...")
@@ -539,7 +590,7 @@ Modifications needed:
 
 Justification: {justification}
 
-Read the existing skill at .claude/skills/{target_skill}/SKILL.md
+Read the existing skill at {skill_rel_path}
 and modify it to add these capabilities. Preserve all existing content that is still relevant."""
             else:
                 _log("", f"  -> Generating new skill...")
@@ -673,7 +724,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
         Returns:
             List of skill names that have SKILL.md files.
         """
-        skills_dir = self._project_root / ".claude" / "skills"
+        skills_dir = self._get_skills_dir()
         active_skills = []
         if skills_dir.exists():
             for skill_dir in skills_dir.iterdir():

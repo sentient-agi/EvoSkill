@@ -224,11 +224,13 @@ git checkout program/iter-skill-3   # switch to the best one
 From there you can inspect what the loop discovered:
 
 ```bash
-cat .claude/program.yaml       # system prompt, tools, score
-ls .claude/skills/             # all learned skills
+cat .claude/program.yaml       # program metadata (shared across harnesses)
+ls .claude/skills/             # Claude harness skills
+ls .opencode/skills/           # OpenCode harness skills
+ls .agents/skills/             # OpenHands harness skills
 ```
 
-Copy `.claude/program.yaml` and `.claude/skills/` into your deployment to use the evolved agent configuration.
+For OpenHands prompt evolution, EvoSkill stores the active prompt artifact at `.evoskill/prompts/openhands.md`.
 
 ## CLI Reference
 
@@ -261,7 +263,7 @@ evoskill diff              # baseline → current best
 evoskill diff 3 7          # iteration 3 vs iteration 7
 ```
 
-The diff is scoped to the `.claude/` directory — it shows changes to skills and the system prompt, not your source code.
+The diff covers harness-managed agent artifacts (`.claude/`, `.opencode/`, `.agents/`) rather than your application source code.
 
 ### `evoskill logs`
 
@@ -276,7 +278,7 @@ evoskill logs --last 10    # last 10 runs
 evoskill reset             # prompts for confirmation
 ```
 
-Deletes all `program/*` branches, `frontier/*` tags, the loop checkpoint, and feedback history. Your source code, `config.toml`, `task.md`, and any skills in `.claude/skills/` are left untouched.
+Deletes all `program/*` branches, `frontier/*` tags, the loop checkpoint, and feedback history. Your source code, `config.toml`, `task.md`, and harness skill directories are left untouched.
 
 ## Configuration Reference
 
@@ -284,7 +286,7 @@ Deletes all `program/*` branches, `frontier/*` tags, the loop checkpoint, and fe
 
 ```toml
 [harness]
-name = "claude"        # "claude" or "opencode"
+name = "claude"        # "claude", "opencode", or "openhands"
 model = "sonnet"       # model alias or full model ID (e.g. "claude-sonnet-4-6")
 data_dirs = []         # extra directories the agent can read
 

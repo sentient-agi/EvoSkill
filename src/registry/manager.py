@@ -82,10 +82,11 @@ class ProgramManager:
 
         # Stage and commit
         self._git_add(self.PROGRAM_FILE)
-        # Also stage any skills that might exist
-        skills_dir = self.cwd / ".claude" / "skills"
-        if skills_dir.exists():
-            self._git_add(".claude/skills/")
+        # Also stage any skills that might exist (all three harness dirs)
+        for skills_rel in [".claude/skills/", ".opencode/skills/", ".agents/skills/"]:
+            skills_dir = self.cwd / skills_rel.rstrip("/")
+            if skills_dir.exists():
+                self._git_add(skills_rel)
         self._git_commit(f"Create program: {name}")
 
         return branch_name
@@ -208,6 +209,10 @@ class ProgramManager:
         for rel_path in [
             ".claude/loop_checkpoint.json",
             ".claude/feedback_history.md",
+            ".opencode/loop_checkpoint.json",
+            ".opencode/feedback_history.md",
+            ".agents/loop_checkpoint.json",
+            ".agents/feedback_history.md",
         ]:
             p = self.cwd / rel_path
             if p.exists():

@@ -16,6 +16,17 @@ def get_project_root() -> str:
     return str(current.parent.parent.parent)
 
 
+_JSON_INSTRUCTIONS = """
+
+## Output Format
+
+Respond with a JSON object with these fields:
+- "skill_name": the name of the skill created or edited
+- "skill_path": relative path to the SKILL.md file
+- "description": brief description of what the skill does
+- "success": true if the skill was written successfully, false otherwise
+"""
+
 skill_generator_system_prompt = {
     "type": "preset",
     "preset": "claude_code",
@@ -38,3 +49,64 @@ skill_generator_options = ClaudeAgentOptions(
     permission_mode='acceptEdits',
     cwd=get_project_root(),
 )
+
+
+def make_skill_generator_options(harness: str, model: str | None = None):
+    """Create skill generator options factory for the given harness.
+
+    Args:
+        harness: One of "claude", "opencode", or "openhands".
+        model: Model identifier to use. If None, uses harness default.
+
+    Returns:
+        For claude: the static skill_generator_options ClaudeAgentOptions.
+        For opencode/openhands: a callable returning a dict.
+    """
+    if harness == "claude":
+        if model:
+            opts = ClaudeAgentOptions(
+                output_format=skill_generator_output_format,
+                system_prompt=skill_generator_system_prompt,
+                setting_sources=["user", "project"],
+                allowed_tools=SKILL_GENERATOR_TOOLS,
+                permission_mode='acceptEdits',
+                cwd=get_project_root(),
+            )
+            opts.model = model
+            return opts
+        return skill_generator_options
+
+    elif harness == "opencode":
+        project_root = get_project_root()
+        _model = model or "zai-org/GLM-5"
+        system = (SKILL_GENERATOR_SYSTEM_PROMPT + _JSON_INSTRUCTIONS).strip()
+
+        def opencode_factory() -> dict:
+            return {
+                "provider_id": "togetherai",
+                "model_id": _model,
+                "system": system,
+                "mode": "build",
+            }
+
+        return opencode_factory
+
+    elif harness == "openhands":
+        project_root = get_project_root()
+        _model = model or os.environ.get("OPENHANDS_MODEL", "claude-sonnet-4-6")
+        _api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        system = (SKILL_GENERATOR_SYSTEM_PROMPT + _JSON_INSTRUCTIONS).strip()
+
+        def openhands_factory() -> dict:
+            return {
+                "model_id": _model,
+                "api_key": _api_key,
+                "system": system,
+                "cwd": project_root,
+                "workspace": project_root,  # must write skills to .agents/skills/
+            }
+
+        return openhands_factory
+
+    else:
+        raise ValueError(f"Unknown harness: {harness!r}. Must be 'claude', 'opencode', or 'openhands'.")

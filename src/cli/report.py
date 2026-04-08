@@ -26,6 +26,7 @@ class RunReport:
     skills_proposed: int
     project_root: Path = field(default_factory=Path.cwd)
     total_cost_usd: float = 0.0
+    harness: str = 'claude'
 
     @property
     def improvement(self) -> float:
@@ -34,6 +35,15 @@ class RunReport:
     @property
     def evoskill_dir(self) -> Path:
         return self.project_root / '.evoskill'
+
+    def _get_skills_dir(self) -> Path:
+        """Get the skills directory based on the configured harness."""
+        if self.harness == 'openhands':
+            return self.project_root / '.agents' / 'skills'
+        elif self.harness == 'opencode':
+            return self.project_root / '.opencode' / 'skills'
+        else:
+            return self.project_root / '.claude' / 'skills'
 
     def print_summary(self) -> None:
         sign = '+' if self.improvement >= 0 else ''
@@ -79,6 +89,7 @@ class RunReport:
             f'| Skills kept | {len(self.skills_kept)} of {self.skills_proposed} proposed |',
             f'| Best program | `{self.best_program}` |',
             f'| Total cost | ${self.total_cost_usd:.4f} |',
+            f'| Harness | {self.harness} |',
             '',
             '## Iteration Log',
             '',
@@ -93,6 +104,7 @@ class RunReport:
             lines.append(f'| {row["iter"]} | {row["score"]:.1%} | {delta_str} | {row["n_skills"]} | {row["status"]} |')
 
         lines += ['', '## Skills', '']
+        skills_dir = self._get_skills_dir()
         for sk in sorted(self.skills_kept, key=lambda s: s.score_delta, reverse=True):
             sign_sk = '+' if sk.score_delta >= 0 else ''
             action_label = 'Edited' if sk.action == 'edit' else 'Created'
@@ -100,7 +112,7 @@ class RunReport:
             lines.append(f'- {action_label} at iteration {sk.iteration}')
             lines.append(f'- Accuracy impact: **{sign_sk}{sk.score_delta:.1%}**')
             lines.append('')
-            skill_path = self.project_root / '.claude' / 'skills' / sk.name / 'SKILL.md'
+            skill_path = skills_dir / sk.name / 'SKILL.md'
             if skill_path.exists():
                 lines.append('```markdown')
                 lines.append(skill_path.read_text().strip())

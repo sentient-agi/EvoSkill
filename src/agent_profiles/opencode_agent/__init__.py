@@ -1,0 +1,1 @@
+from .opencode_agent import make_opencode_agent_options_from_task

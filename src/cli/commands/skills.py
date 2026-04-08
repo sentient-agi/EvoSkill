@@ -11,11 +11,22 @@ from src.cli.config import load_config
 console = Console()
 
 
+def _get_skills_dir(cfg) -> Path:
+    """Get the skills directory based on the configured harness."""
+    harness = cfg.harness.name
+    if harness == "openhands":
+        return cfg.project_root / ".agents" / "skills"
+    elif harness == "opencode":
+        return cfg.project_root / ".opencode" / "skills"
+    else:
+        return cfg.project_root / ".claude" / "skills"
+
+
 @click.command('skills')
 def skills_cmd():
     """List all skills learned so far."""
     cfg = load_config()
-    skills_dir = cfg.project_root / '.claude' / 'skills'
+    skills_dir = _get_skills_dir(cfg)
 
     if not skills_dir.exists() or not any(skills_dir.iterdir()):
         console.print('  No skills yet. Run [bold]evoskill run[/bold] first.')

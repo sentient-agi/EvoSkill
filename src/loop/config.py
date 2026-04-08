@@ -7,6 +7,7 @@ from typing import Literal
 
 EvolutionMode = Literal["prompt_only", "skill_only"]
 SelectionStrategy = Literal["best", "random", "round_robin"]
+Harness = Literal["claude", "opencode", "openhands"]
 
 
 @dataclass
@@ -67,3 +68,6 @@ class LoopConfig:
 
     # Multi-sample per category: collect N samples per category before proposing
     samples_per_category: int = 2  # Helps identify patterns within categories
+
+    # Harness: which execution backend to use for all agents
+    harness: Harness = "claude"

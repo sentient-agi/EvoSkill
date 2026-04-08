@@ -1,5 +1,5 @@
 from .proposer import proposer_options
-from .skill_generator import skill_generator_options
+from .skill_generator import skill_generator_options, get_project_root
 from .base_agent import base_agent_options, make_base_agent_options
 from .dabstep_agent import dabstep_agent_options, make_dabstep_agent_options
 from .sealqa_agent import sealqa_agent_options, make_sealqa_agent_options
@@ -12,10 +12,15 @@ from .skill_proposer import skill_proposer_options
 from .prompt_proposer import prompt_proposer_options
 from .base import Agent, AgentTrace
 from .sdk_config import set_sdk, get_sdk, is_claude_sdk, is_opencode_sdk
+from .skill_proposer.skill_proposer import make_skill_proposer_options
+from .skill_generator.skill_generator import make_skill_generator_options
+from .prompt_proposer.prompt_proposer import make_prompt_proposer_options
+from .prompt_generator.prompt_generator import make_prompt_generator_options
 
 __all__ = [
     "proposer_options",
     "skill_generator_options",
+    "get_project_root",
     "base_agent_options",
     "make_base_agent_options",
     "dabstep_agent_options",
@@ -33,4 +38,8 @@ __all__ = [
     "get_sdk",
     "is_claude_sdk",
     "is_opencode_sdk",
+    "make_skill_proposer_options",
+    "make_skill_generator_options",
+    "make_prompt_proposer_options",
+    "make_prompt_generator_options",
 ]

@@ -11,11 +11,22 @@ import asyncio
 from typing import Callable, Any
 
 from src.agent_profiles import Agent
-from src.agent_profiles.skill_generator import get_project_root, skill_generator_options
-from src.agent_profiles import (
+from src.agent_profiles.skill_generator import get_project_root
+from src.agent_profiles.skill_proposer.skill_proposer import (
     skill_proposer_options,
+    make_skill_proposer_options,
+)
+from src.agent_profiles.skill_generator.skill_generator import (
+    skill_generator_options,
+    make_skill_generator_options,
+)
+from src.agent_profiles.prompt_proposer.prompt_proposer import (
     prompt_proposer_options,
+    make_prompt_proposer_options,
+)
+from src.agent_profiles.prompt_generator.prompt_generator import (
     prompt_generator_options,
+    make_prompt_generator_options,
 )
 from src.loop import SelfImprovingLoop, LoopConfig, LoopAgents, LoopResult
 from src.registry import ProgramManager
@@ -39,6 +50,7 @@ class EvoSkill:
         task: Registered task name (e.g. "base", "dabstep", "sealqa").
         model: Model for the base agent (e.g. "opus", "sonnet", "haiku").
         mode: Evolution mode — "skill_only" or "prompt_only".
+        harness: Execution harness — "claude", "opencode", or "openhands".
         max_iterations: Maximum number of improvement iterations.
         frontier_size: Number of top-performing programs to keep.
         no_improvement_limit: Stop after this many iterations without improvement.
@@ -62,6 +74,7 @@ class EvoSkill:
         *,
         model: str | None = None,
         mode: str = "skill_only",
+        harness: str = "claude",
         max_iterations: int = 20,
         frontier_size: int = 3,
         no_improvement_limit: int = 5,
@@ -84,6 +97,7 @@ class EvoSkill:
             )
         self._model = model
         self._mode = mode
+        self._harness = harness
         self._max_iterations = max_iterations
         self._frontier_size = frontier_size
         self._no_improvement_limit = no_improvement_limit
@@ -111,6 +125,7 @@ class EvoSkill:
             reset_feedback=self._reset_feedback,
             continue_mode=self._continue_mode,
             selection_strategy=self._selection_strategy,
+            harness=self._harness,
         )
 
     def _build_agents(self) -> LoopAgents:
@@ -118,10 +133,22 @@ class EvoSkill:
         base_options = self._task_config.make_agent_options(model=self._model)
         return LoopAgents(
             base=Agent(base_options, AgentResponse),
-            skill_proposer=Agent(skill_proposer_options, SkillProposerResponse),
-            prompt_proposer=Agent(prompt_proposer_options, PromptProposerResponse),
-            skill_generator=Agent(skill_generator_options, ToolGeneratorResponse),
-            prompt_generator=Agent(prompt_generator_options, PromptGeneratorResponse),
+            skill_proposer=Agent(
+                make_skill_proposer_options(self._harness, self._model),
+                SkillProposerResponse,
+            ),
+            prompt_proposer=Agent(
+                make_prompt_proposer_options(self._harness, self._model),
+                PromptProposerResponse,
+            ),
+            skill_generator=Agent(
+                make_skill_generator_options(self._harness, self._model),
+                ToolGeneratorResponse,
+            ),
+            prompt_generator=Agent(
+                make_prompt_generator_options(self._harness, self._model),
+                PromptGeneratorResponse,
+            ),
         )
 
     def _load_data(
@@ -173,7 +200,7 @@ class EvoSkill:
         )
         print(f"Total training samples: {total_train}")
         print(f"Validation samples: {len(val_data)}")
-        print(f"Running loop with evolution_mode={self._mode}")
+        print(f"Running loop with evolution_mode={self._mode}, harness={self._harness}")
 
         scorer = self._scorer_override or self._task_config.scorer
         loop = SelfImprovingLoop(

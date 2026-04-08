@@ -68,10 +68,17 @@ def diff_cmd(iter_a: int, iter_b: int):
             return
         label = f'iter {iter_a} → iter {iter_b}'
 
-    diff_output = _git('diff', f'{branch_a}..{branch_b}', '--', '.claude/', cwd=cwd).strip()
+    # Diff all three skill directories
+    diff_outputs = []
+    for skills_dir in ['.claude/', '.opencode/', '.agents/']:
+        out = _git('diff', f'{branch_a}..{branch_b}', '--', skills_dir, cwd=cwd).strip()
+        if out:
+            diff_outputs.append(out)
+
+    combined_diff = "\n".join(diff_outputs).strip()
 
     console.print(f'\n  [bold]{label}[/bold]\n')
-    if not diff_output:
+    if not combined_diff:
         console.print('  No differences found.')
     else:
-        console.print(Syntax(diff_output, 'monokai', line_numbers=False))
+        console.print(Syntax(combined_diff, 'monokai', line_numbers=False))

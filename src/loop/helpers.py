@@ -14,6 +14,8 @@ def build_proposer_query(
     evolution_mode: str = "skill_only",
     truncation_level: int = 0,
     task_constraints: str = "",
+    harness: str = "claude",
+    project_root: "Path | None" = None,
 ) -> str:
     """Build the query for the proposer agent from multiple failure traces.
 
@@ -23,6 +25,8 @@ def build_proposer_query(
         evolution_mode: "skill_only" or "prompt_only" - affects trace truncation.
         truncation_level: Context reduction level (0=full, 1=moderate, 2=aggressive).
         task_constraints: Optional task-specific constraints to include in the query.
+        harness: Which harness to use for finding skills ("claude", "opencode", "openhands").
+        project_root: Project root path; if None, uses current working directory.
 
     Returns:
         Formatted query string for the proposer.
@@ -47,8 +51,15 @@ def build_proposer_query(
         if len(feedback_lines_list) > feedback_lines:
             feedback_history = "\n".join(feedback_lines_list[-feedback_lines:])
 
-    # Get existing skills for context
-    skills_dir = Path(".claude/skills")
+    # Determine skills directory based on harness
+    base_path = Path(project_root) if project_root else Path(".")
+    if harness == "openhands":
+        skills_dir = base_path / ".agents" / "skills"
+    elif harness == "opencode":
+        skills_dir = base_path / ".opencode" / "skills"
+    else:
+        skills_dir = base_path / ".claude" / "skills"
+
     existing_skills = []
     if skills_dir.exists():
         for skill_dir in skills_dir.iterdir():
@@ -218,6 +229,7 @@ def update_prompt_file(file_path: Path, new_prompt: str) -> None:
         file_path: Path to the prompt file.
         new_prompt: The new prompt content.
     """
+    file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_text(new_prompt.strip())
 
 

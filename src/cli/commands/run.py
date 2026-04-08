@@ -23,10 +23,13 @@ from src.agent_profiles import (
     prompt_proposer_options,
     skill_generator_options,
     prompt_generator_options,
-    set_sdk,
 )
-from src.agent_profiles.base_agent.base_agent import make_base_agent_options_from_task
 from src.agent_profiles.skill_generator import get_project_root
+from src.agent_profiles.skill_proposer.skill_proposer import make_skill_proposer_options
+from src.agent_profiles.skill_generator.skill_generator import make_skill_generator_options
+from src.agent_profiles.prompt_proposer.prompt_proposer import make_prompt_proposer_options
+from src.agent_profiles.prompt_generator.prompt_generator import make_prompt_generator_options
+from src.harness import build_base_agent_factory
 from src.loop import SelfImprovingLoop, LoopConfig, LoopAgents
 from src.registry import ProgramManager
 from src.schemas import (
@@ -131,6 +134,21 @@ class LoopDisplay:
                 self._live.console.print(
                     f"\n── Iteration {data['iteration']} {'─' * 40}",
                     style="bold",
+                )
+
+        elif event == "status":
+            # Generic status message from harness
+            if not self.quiet and self._live:
+                msg = data.get("message", "")
+                if msg:
+                    self._live.console.print(f"  [dim]{msg}[/dim]")
+
+        elif event == "sample_start":
+            # Fired when a sample evaluation begins
+            if self.verbose and self._live:
+                question = data.get("question", "")
+                self._live.console.print(
+                    f"  [dim]→ {question[:60]}...[/dim]"
                 )
 
         elif event == "sample":
@@ -353,11 +371,8 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
     if not cfg.task_constraints and not quiet:
         console.print("[yellow]Warning:[/yellow] No constraints defined in task.md — skills may be unconstrained.")
 
-    console.print(f"\n  [bold]EvoSkill[/bold] — {cfg.evolution.mode}  |  {cfg.harness.name}  |  {cfg.evolution.iterations} iterations\n")
-
-    # Map harness to sdk
-    sdk = cfg.harness.name  # "claude" or "opencode"
-    set_sdk(sdk)
+    harness = cfg.harness.name  # "claude", "opencode", or "openhands"
+    console.print(f"\n  [bold]EvoSkill[/bold] — {cfg.evolution.mode}  |  {harness}  |  {cfg.evolution.iterations} iterations\n")
 
     # Load dataset
     try:
@@ -368,16 +383,22 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
 
     console.print(f"  Dataset: {cfg.dataset_path}  ({len(val_data)} val samples)\n")
 
-    # Build agents — use task.md description as the base agent prompt
-    base_factory = make_base_agent_options_from_task(
-        cfg.task_description, model=cfg.harness.model, data_dirs=cfg.harness.data_dirs
+    # Build base agent factory through the shared harness builder
+    model = cfg.harness.model
+    base_factory = build_base_agent_factory(
+        harness=harness,
+        task_description=cfg.task_description,
+        model=model,
+        data_dirs=cfg.harness.data_dirs,
     )
+
+    # Build meta-agents through harness factories
     agents = LoopAgents(
         base=Agent(base_factory, AgentResponse),
-        skill_proposer=Agent(skill_proposer_options, SkillProposerResponse),
-        prompt_proposer=Agent(prompt_proposer_options, PromptProposerResponse),
-        skill_generator=Agent(skill_generator_options, ToolGeneratorResponse),
-        prompt_generator=Agent(prompt_generator_options, PromptGeneratorResponse),
+        skill_proposer=Agent(make_skill_proposer_options(harness, model), SkillProposerResponse),
+        prompt_proposer=Agent(make_prompt_proposer_options(harness, model), PromptProposerResponse),
+        skill_generator=Agent(make_skill_generator_options(harness, model), ToolGeneratorResponse),
+        prompt_generator=Agent(make_prompt_generator_options(harness, model), PromptGeneratorResponse),
     )
     manager = ProgramManager(cwd=get_project_root())
 
@@ -390,6 +411,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
         failure_sample_count=cfg.evolution.failure_samples,
         categories_per_batch=cfg.evolution.failure_samples,
         continue_mode=continue_loop,
+        harness=harness,
     )
 
     display = LoopDisplay(verbose=verbose, quiet=quiet)
@@ -417,6 +439,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
         skills_proposed=display.skills_proposed,
         project_root=cfg.project_root,
         total_cost_usd=result.total_cost_usd,
+        harness=harness,
     )
     report.print_summary()
 
