@@ -56,28 +56,9 @@ def list_tasks() -> list[str]:
     return sorted(_REGISTRY.keys())
 
 
-def _sealqa_scorer(question: str, predicted: str, ground_truth: str) -> float:
-    """Wrapper around score_sealqa matching the runner's (question, predicted, ground_truth) signature."""
-    from src.evaluation.sealqa_scorer import score_sealqa
-
-    return score_sealqa(question, ground_truth, predicted)
-
-
-def _livecodebench_scorer(question: str, predicted: str, ground_truth: str) -> float:
-    """Wrapper around score_livecodebench matching the runner's signature."""
-    from src.evaluation.livecodebench import score_livecodebench
-
-    return score_livecodebench(question, ground_truth, predicted)
-
-
 def _register_builtins() -> None:
-    """Register built-in task configurations."""
-    from src.agent_profiles import (
-        make_base_agent_options,
-        make_dabstep_agent_options,
-        make_livecodebench_agent_options,
-        make_sealqa_agent_options,
-    )
+    """Register only the base built-in task."""
+    from src.agent_profiles import make_base_agent_options
 
     register_task(
         TaskConfig(
@@ -85,43 +66,6 @@ def _register_builtins() -> None:
             make_agent_options=make_base_agent_options,
             scorer=None,
             default_dataset=".dataset/new_runs_base/solved_dataset.csv",
-        )
-    )
-
-    register_task(
-        TaskConfig(
-            name="dabstep",
-            make_agent_options=make_dabstep_agent_options,
-            scorer=None,
-            column_renames={"level": "category", "answer": "ground_truth"},
-            default_dataset=".dataset/dabstep_data.csv",
-        )
-    )
-
-    register_task(
-        TaskConfig(
-            name="sealqa",
-            make_agent_options=make_sealqa_agent_options,
-            scorer=_sealqa_scorer,
-            column_renames={"topic": "category", "answer": "ground_truth"},
-            default_dataset=".dataset/seal-0.csv",
-        )
-    )
-
-    # Ensure LiveCodeBench dataset is downloaded
-    from src.evaluation.livecodebench import ensure_livecodebench_dataset
-
-    livecodebench_dataset = str(ensure_livecodebench_dataset())
-
-    register_task(
-        TaskConfig(
-            name="livecodebench",
-            make_agent_options=make_livecodebench_agent_options,
-            scorer=_livecodebench_scorer,
-            question_col="formatted_question",
-            answer_col="public_test_cases",
-            category_col="platform",
-            default_dataset=livecodebench_dataset,
         )
     )
 

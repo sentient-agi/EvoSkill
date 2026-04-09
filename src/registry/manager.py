@@ -226,13 +226,39 @@ class ProgramManager:
         branch = f"{self.BRANCH_PREFIX}{name}"
         # Switch away if currently on this branch
         if self._git_current_branch() == branch:
-            self._git_checkout("main")
+            checkout_target = self._get_discard_checkout_target(branch)
+            self._git_checkout(checkout_target)
         self._git_branch_delete(branch)
 
         # Also remove frontier tag if exists
         tag = f"{self.FRONTIER_PREFIX}{name}"
         if tag in self._git_list_tags():
             self._git_tag_delete(tag)
+
+    def _get_discard_checkout_target(self, branch: str) -> str:
+        """Choose a safe checkout target before deleting the current branch."""
+        branches = self._git_list_branches()
+
+        non_program_branches = [
+            candidate
+            for candidate in branches
+            if candidate != branch and not candidate.startswith(self.BRANCH_PREFIX)
+        ]
+        if non_program_branches:
+            return non_program_branches[0]
+
+        try:
+            config = self._read_config_from_branch(branch)
+            if config.parent and config.parent != branch and config.parent in branches:
+                return config.parent
+        except Exception:
+            pass
+
+        sibling_programs = [candidate for candidate in branches if candidate != branch]
+        if sibling_programs:
+            return sibling_programs[0]
+
+        raise RuntimeError(f"Cannot discard the only remaining branch: {branch}")
 
     def mark_frontier(self, name: str) -> None:
         """
@@ -287,16 +313,17 @@ class ProgramManager:
             Programs without scores are excluded.
         """
         frontier = self.get_frontier()
-        scored: list[tuple[str, float]] = []
-        for name in frontier:
+        scored: list[tuple[str, float, int]] = []
+        for index, name in enumerate(frontier):
             try:
                 config = self._read_config_from_branch(f"{self.BRANCH_PREFIX}{name}")
                 score = config.get_score()
                 if score is not None:
-                    scored.append((name, score))
+                    scored.append((name, score, index))
             except Exception:
                 continue
-        return sorted(scored, key=lambda x: x[1], reverse=True)
+        scored.sort(key=lambda item: (item[1], item[2]), reverse=True)
+        return [(name, score) for name, score, _ in scored]
 
     def select_from_frontier(self, strategy: str, iteration: int = 0) -> str | None:
         """Select a program from the frontier using the given strategy.

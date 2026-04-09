@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import socket
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Type, TypeVar, Union
 
 from pydantic import BaseModel, ValidationError
@@ -10,6 +12,8 @@ from .sdk_config import is_claude_sdk
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+_OPENCODE_SERVER_PORTS: dict[str, int] = {}
+_OPENCODE_REQUEST_TIMEOUT_SECONDS = 600
 
 # Import ClaudeAgentOptions at module level for type hints only
 if TYPE_CHECKING:
@@ -101,6 +105,38 @@ class AgentTrace(BaseModel, Generic[T]):
         return "\n".join(lines)
 
 
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+async def _server_matches_project(client: Any, expected_cwd: str | None) -> bool:
+    app_api = getattr(client, "app", None)
+    if app_api is None or not hasattr(app_api, "get"):
+        return False
+
+    try:
+        app_info = await app_api.get()
+    except Exception:
+        return False
+
+    if not expected_cwd:
+        return True
+
+    if isinstance(app_info, dict):
+        path_info = app_info.get("path", {})
+        directory = path_info.get("cwd")
+    else:
+        path_info = getattr(app_info, "path", None)
+        directory = getattr(path_info, "cwd", None)
+
+    if not directory:
+        return False
+
+    return Path(directory).resolve() == Path(expected_cwd).resolve()
+
+
 class Agent(Generic[T]):
     """Simple wrapper for running Claude agents.
 
@@ -163,20 +199,35 @@ class Agent(Generic[T]):
             import subprocess
             import time
 
-            try:
-                # Quick check if server is running
-                client = AsyncOpencode(base_url="http://127.0.0.1:4096")
-                await client.session.create(extra_body={})
-            except Exception:
-                # Start server
+            requested_cwd = options.get("cwd")
+            if requested_cwd:
+                requested_cwd = str(Path(requested_cwd).resolve())
+
+            port = _OPENCODE_SERVER_PORTS.get(requested_cwd or "", 4096)
+            client = AsyncOpencode(
+                base_url=f"http://127.0.0.1:{port}",
+                timeout=_OPENCODE_REQUEST_TIMEOUT_SECONDS,
+            )
+
+            if not await _server_matches_project(client, requested_cwd):
+                if requested_cwd:
+                    port = _OPENCODE_SERVER_PORTS.get(requested_cwd, port)
+                    if port == 4096:
+                        port = _find_free_port()
+                        _OPENCODE_SERVER_PORTS[requested_cwd] = port
+
                 subprocess.Popen(
-                    ["opencode", "serve", "--port", "4096", "--hostname", "127.0.0.1"],
+                    ["opencode", "serve", "--port", str(port), "--hostname", "127.0.0.1"],
+                    cwd=requested_cwd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,
                 )
                 time.sleep(2)
-                client = AsyncOpencode(base_url="http://127.0.0.1:4096")
+                client = AsyncOpencode(
+                    base_url=f"http://127.0.0.1:{port}",
+                    timeout=_OPENCODE_REQUEST_TIMEOUT_SECONDS,
+                )
 
             session = await client.session.create(extra_body={})
 
@@ -275,7 +326,9 @@ class Agent(Generic[T]):
             raw_structured_output = None
 
             if hasattr(message, "info") and message.info:
-                raw_structured_output = message.info.get("structured")
+                raw_structured_output = message.info.get("structured_output")
+                if raw_structured_output is None:
+                    raw_structured_output = message.info.get("structured")
 
             if raw_structured_output is not None:
                 try:

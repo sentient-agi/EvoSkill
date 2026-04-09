@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any, Callable, Generic, TypeVar
 
 from src.agent_profiles.base import Agent, AgentTrace
+from src.agent_profiles.sdk_config import is_claude_sdk
 from src.cache import RunCache, CacheConfig
+from src.registry.sdk_utils import options_to_config
 
 
 def _log(phase: str, message: str = "", indent: int = 0) -> None:
@@ -46,10 +48,8 @@ def _score_multi_tolerance(question: str, predicted: str, ground_truth: str) -> 
     return weighted_sum / weight_total
 
 
-from src.agent_profiles.base_agent import get_base_agent_options
-from src.agent_profiles.skill_generator import get_project_root
 from src.evaluation import score_answer, evaluate_agent_parallel
-from src.registry import ProgramManager, ProgramConfig
+from src.registry import ProgramManager
 from src.schemas import (
     AgentResponse,
     ProposerResponse,
@@ -67,6 +67,7 @@ from .helpers import (
     build_skill_query_from_skill_proposer,
     build_prompt_query_from_prompt_proposer,
     append_feedback,
+    normalize_project_skill_frontmatter,
     read_feedback_history,
     update_prompt_file,
 )
@@ -146,7 +147,7 @@ class SelfImprovingLoop:
         self._per_cat_offset: dict[str, int] = {cat: 0 for cat in train_pools.keys()}
 
         # Paths
-        self._project_root = Path(get_project_root())
+        self._project_root = Path(getattr(self.manager, "cwd", Path.cwd())).resolve()
         self._feedback_path = self._project_root / ".claude" / "feedback_history.md"
         self._prompt_path = (
             self._project_root / "src" / "agent_profiles" / "base_agent" / "prompt.txt"
@@ -352,7 +353,7 @@ class SelfImprovingLoop:
 
                 if added:
                     _log("", f"  [OK] Added to frontier (score: {child_score:.4f})")
-                    outcome = "improved"
+                    outcome = "improved" if child_score > parent_score else "kept"
                     no_improvement_count = 0
                 else:
                     _log("", f"  [SKIP] Discarded (score: {child_score:.4f})")
@@ -419,18 +420,8 @@ class SelfImprovingLoop:
     async def _ensure_base_program(self) -> None:
         """Create and evaluate base program if it doesn't exist."""
         if "base" not in self.manager.list_programs():
-            current_options = get_base_agent_options()
-
-            base_config = ProgramConfig(
-                name="base",
-                parent=None,
-                generation=0,
-                system_prompt=current_options.system_prompt,
-                allowed_tools=current_options.allowed_tools,
-                output_format=current_options.output_format,
-                metadata={},
-            ).with_timestamp()
-
+            current_options = self.agents.base._get_options()
+            base_config = options_to_config(current_options, "base")
             self.manager.create_program("base", base_config)
             _log("INIT", "Created base program")
         else:
@@ -503,7 +494,14 @@ class SelfImprovingLoop:
         evolution_mode = self.config.evolution_mode
         _log("", f"  -> Running {evolution_mode.replace('_only', '')} proposer with {len(failures)} failures...")
         feedback_history = read_feedback_history(self._feedback_path)
-        proposer_query = build_proposer_query(failures, feedback_history, evolution_mode, truncation_level, self.task_constraints)
+        proposer_query = build_proposer_query(
+            failures,
+            feedback_history,
+            evolution_mode,
+            truncation_level,
+            self.task_constraints,
+            project_root=self._project_root,
+        )
 
         if evolution_mode == "skill_only":
             proposer_trace = await self.agents.skill_proposer.run(proposer_query)
@@ -548,11 +546,24 @@ and modify it to add these capabilities. Preserve all existing content that is s
             skills_before = set(self._get_active_skills())
             skill_trace = await self.agents.skill_generator.run(skill_query)
             self._iter_cost += skill_trace.total_cost_usd
+            skills_after = set(self._get_active_skills())
+            new_skills = skills_after - skills_before
+            created_skill = next(iter(new_skills)) if new_skills else None
+
+            if not is_claude_sdk():
+                skill_descriptions: dict[str, str] = {}
+                if target_skill:
+                    skill_descriptions[target_skill] = proposed
+                if created_skill:
+                    skill_descriptions[created_skill] = proposed
+                normalize_project_skill_frontmatter(
+                    self._project_root,
+                    descriptions=skill_descriptions,
+                    fallback_description=proposed,
+                    compatibility="opencode",
+                )
+
             if skill_trace.output:
-                # Detect newly created skill by diffing skills dir before/after
-                skills_after = set(self._get_active_skills())
-                new_skills = skills_after - skills_before
-                created_skill = next(iter(new_skills)) if new_skills else None
                 self._emit("skill_written", name=created_skill, action=action_type, target=target_skill)
 
         else:  # prompt_only

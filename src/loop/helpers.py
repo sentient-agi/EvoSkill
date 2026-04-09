@@ -1,11 +1,103 @@
 """Helper functions for the self-improving loop."""
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import yaml
 
 if TYPE_CHECKING:
     from src.agent_profiles.base import AgentTrace
     from src.schemas import ProposerResponse, SkillProposerResponse, PromptProposerResponse
+
+
+_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n?", re.DOTALL)
+
+
+def _normalize_skill_description(description: str) -> str:
+    cleaned = " ".join(description.split())
+    if not cleaned:
+        return "Reusable benchmark skill."
+    if len(cleaned) <= 1024:
+        return cleaned
+    truncated = cleaned[:1021].rstrip()
+    return f"{truncated}..."
+
+
+def ensure_skill_frontmatter(
+    skill_path: Path,
+    *,
+    description: str,
+    compatibility: str | None = None,
+) -> bool:
+    """Ensure a SKILL.md file has OpenCode-discoverable YAML frontmatter.
+
+    Returns True if the file was rewritten.
+    """
+    if not skill_path.exists():
+        return False
+
+    skill_name = skill_path.parent.name
+    normalized_description = _normalize_skill_description(description)
+    original_text = skill_path.read_text()
+    body = original_text
+    metadata: dict[str, str] = {}
+
+    match = _FRONTMATTER_RE.match(original_text)
+    if match:
+        body = original_text[match.end() :].lstrip("\n")
+        parsed = yaml.safe_load(match.group(1)) or {}
+        if isinstance(parsed, dict):
+            metadata = {str(key): str(value) for key, value in parsed.items()}
+
+    changed = False
+    if metadata.get("name") != skill_name:
+        metadata["name"] = skill_name
+        changed = True
+    if not metadata.get("description"):
+        metadata["description"] = normalized_description
+        changed = True
+    if compatibility and not metadata.get("compatibility"):
+        metadata["compatibility"] = compatibility
+        changed = True
+
+    if not match and not changed:
+        return False
+    if not match:
+        changed = True
+
+    if not changed:
+        return False
+
+    frontmatter = yaml.safe_dump(metadata, sort_keys=False).strip()
+    skill_path.write_text(f"---\n{frontmatter}\n---\n\n{body.lstrip()}")
+    return True
+
+
+def normalize_project_skill_frontmatter(
+    project_root: Path,
+    *,
+    descriptions: dict[str, str] | None = None,
+    fallback_description: str = "Reusable benchmark skill.",
+    compatibility: str | None = None,
+) -> list[str]:
+    """Normalize every project-local SKILL.md file under .claude/skills."""
+    skills_dir = project_root / ".claude" / "skills"
+    if not skills_dir.exists():
+        return []
+
+    descriptions = descriptions or {}
+    normalized: list[str] = []
+    for skill_path in sorted(skills_dir.glob("*/SKILL.md")):
+        skill_name = skill_path.parent.name
+        description = descriptions.get(skill_name, fallback_description)
+        if ensure_skill_frontmatter(
+            skill_path,
+            description=description,
+            compatibility=compatibility,
+        ):
+            normalized.append(skill_name)
+    return normalized
 
 
 def build_proposer_query(
@@ -14,6 +106,7 @@ def build_proposer_query(
     evolution_mode: str = "skill_only",
     truncation_level: int = 0,
     task_constraints: str = "",
+    project_root: str | Path | None = None,
 ) -> str:
     """Build the query for the proposer agent from multiple failure traces.
 
@@ -48,7 +141,7 @@ def build_proposer_query(
             feedback_history = "\n".join(feedback_lines_list[-feedback_lines:])
 
     # Get existing skills for context
-    skills_dir = Path(".claude/skills")
+    skills_dir = Path(project_root) / ".claude" / "skills" if project_root else Path(".claude/skills")
     existing_skills = []
     if skills_dir.exists():
         for skill_dir in skills_dir.iterdir():

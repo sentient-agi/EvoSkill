@@ -8,14 +8,6 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from src.cli.config import load_config
-from src.cli.commands.run import _load_and_split, _make_scorer
-from src.agent_profiles import Agent, make_base_agent_options, set_sdk
-from src.agent_profiles.skill_generator import get_project_root
-from src.evaluation import evaluate_agent_parallel
-from src.registry import ProgramManager
-from src.schemas import AgentResponse
-
 console = Console()
 
 
@@ -23,17 +15,25 @@ console = Console()
 @click.option('--verbose', is_flag=True, default=False, help='Show per-question results.')
 def eval_cmd(verbose: bool):
     """Evaluate the best skills on the validation set."""
+    from src.agent_profiles.base import Agent
+    from src.agent_profiles.base_agent.base_agent import make_base_agent_options
+    from src.agent_profiles.sdk_config import set_sdk
+    from src.cli.config import load_config
+    from src.cli.shared import load_and_split, make_scorer
+    from src.evaluation import evaluate_agent_parallel
+    from src.registry import ProgramManager
+    from src.schemas import AgentResponse
     cfg = load_config()
     sdk = cfg.harness.name
     set_sdk(sdk)
 
     try:
-        _, val_data = _load_and_split(cfg)
+        _, val_data = load_and_split(cfg)
     except FileNotFoundError:
         console.print(f'[red]Error:[/red] Dataset not found at {cfg.dataset_path}')
         raise SystemExit(1)
 
-    manager = ProgramManager(cwd=get_project_root())
+    manager = ProgramManager(cwd=cfg.project_root)
     best = manager.get_best_from_frontier()
     if best:
         manager.switch_to(best)
@@ -43,8 +43,15 @@ def eval_cmd(verbose: bool):
 
     console.print(f'\n  Evaluating [bold]{best}[/bold] on {len(val_data)} samples...\n')
 
-    agent = Agent(make_base_agent_options(data_dirs=cfg.harness.data_dirs), AgentResponse)
-    scorer = _make_scorer(cfg)
+    agent = Agent(
+        make_base_agent_options(
+            model=cfg.harness.model,
+            data_dirs=cfg.harness.data_dirs,
+            project_root=cfg.project_root,
+        ),
+        AgentResponse,
+    )
+    scorer = make_scorer(cfg)
 
     qa_data = [(q, a) for q, a, _ in val_data]
     results = asyncio.run(

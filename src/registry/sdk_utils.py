@@ -1,11 +1,8 @@
-"""
-Utilities for converting between ProgramConfig and ClaudeAgentOptions.
-
-These helpers allow seamless integration between the program registry
-and the Claude Agent SDK.
-"""
+"""Utilities for converting between ProgramConfig and runtime agent options."""
 
 from datetime import datetime
+from typing import Any
+
 from typing import Any
 
 from claude_agent_sdk import ClaudeAgentOptions
@@ -19,7 +16,7 @@ def config_to_options(
     *,
     add_dirs: list[Any] | None = None,
     permission_mode: str = "acceptEdits",
-) -> ClaudeAgentOptions:
+) -> ClaudeAgentOptions | dict[str, Any]:
     """
     Convert ProgramConfig to ClaudeAgentOptions.
 
@@ -32,6 +29,20 @@ def config_to_options(
     Returns:
         ClaudeAgentOptions ready for use with ClaudeSDKClient
     """
+    if config.metadata.get("sdk") == "opencode":
+        system_prompt = config.system_prompt
+        system_text = system_prompt.get("content") or system_prompt.get("append", "")
+        return {
+            "system": system_text,
+            "tools": {tool: True for tool in config.allowed_tools},
+            "format": config.output_format,
+            "cwd": cwd,
+            "add_dirs": add_dirs or [],
+            "mode": config.metadata.get("mode", "build"),
+            "provider_id": config.metadata.get("provider_id", "anthropic"),
+            "model_id": config.metadata.get("model_id", "claude-sonnet-4-6"),
+        }
+
     return ClaudeAgentOptions(
         system_prompt=config.system_prompt,
         allowed_tools=config.allowed_tools,
@@ -44,7 +55,7 @@ def config_to_options(
 
 
 def options_to_config(
-    options: ClaudeAgentOptions,
+    options: ClaudeAgentOptions | dict[str, Any],
     name: str,
     *,
     parent: str | None = None,
@@ -67,6 +78,39 @@ def options_to_config(
     base_metadata = {"created_at": datetime.now().isoformat()}
     if metadata:
         base_metadata.update(metadata)
+
+    if isinstance(options, dict):
+        system_text = options.get("system", "")
+        tools = options.get("tools", {})
+        if isinstance(tools, dict):
+            allowed_tools = list(tools.keys())
+        else:
+            allowed_tools = list(tools or [])
+
+        system_prompt = (
+            system_text
+            if isinstance(system_text, dict)
+            else {"type": "text", "content": system_text}
+        )
+        base_metadata.update(
+            {
+                "sdk": "opencode",
+                "mode": options.get("mode", "build"),
+                "provider_id": options.get("provider_id"),
+                "model_id": options.get("model_id"),
+                "cwd": options.get("cwd"),
+            }
+        )
+
+        return ProgramConfig(
+            name=name,
+            parent=parent,
+            generation=generation,
+            system_prompt=system_prompt,
+            allowed_tools=allowed_tools,
+            output_format=options.get("format"),
+            metadata=base_metadata,
+        )
 
     return ProgramConfig(
         name=name,
