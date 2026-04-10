@@ -8,15 +8,6 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from src.cli.config import load_config
-from src.cli.commands.run import _load_and_split, _make_scorer
-from src.agent_profiles import Agent
-from src.agent_profiles.skill_generator import get_project_root
-from src.evaluation import evaluate_agent_parallel
-from src.harness import build_base_agent_factory
-from src.registry import ProgramManager
-from src.schemas import AgentResponse
-
 console = Console()
 
 
@@ -24,10 +15,19 @@ console = Console()
 @click.option('--verbose', is_flag=True, default=False, help='Show per-question results.')
 def eval_cmd(verbose: bool):
     """Evaluate the best skills on the validation set."""
+    from src.agent_profiles import Agent
+    from src.agent_profiles.skill_generator import get_project_root
+    from src.cli.config import load_config
+    from src.cli.shared import load_and_split, make_scorer
+    from src.evaluation import evaluate_agent_parallel
+    from src.harness import build_base_agent_factory
+    from src.registry import ProgramManager
+    from src.schemas import AgentResponse
+
     cfg = load_config()
 
     try:
-        _, val_data = _load_and_split(cfg)
+        _, val_data = load_and_split(cfg)
     except FileNotFoundError:
         console.print(f'[red]Error:[/red] Dataset not found at {cfg.dataset_path}')
         raise SystemExit(1)
@@ -51,7 +51,7 @@ def eval_cmd(verbose: bool):
         ),
         AgentResponse,
     )
-    scorer = _make_scorer(cfg)
+    scorer = make_scorer(cfg)
 
     qa_data = [(q, a) for q, a, _ in val_data]
     results = asyncio.run(

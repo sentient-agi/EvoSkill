@@ -3,8 +3,6 @@
 from pathlib import Path
 
 import click
-import questionary
-import tomli_w
 
 EVOSKILL_DIR = '.evoskill'
 
@@ -24,6 +22,8 @@ TASK_MD_TEMPLATE = (
 
 
 def _write_config(path: Path, answers: dict) -> None:
+    import tomli_w
+
     config = {
         'harness': {
             'name': answers['harness'],
@@ -57,6 +57,8 @@ def _write_config(path: Path, answers: dict) -> None:
 @click.command('init')
 def init_cmd():
     """Initialize a new EvoSkill project in the current directory."""
+    import questionary
+
     cwd = Path.cwd()
     evoskill_dir = cwd / EVOSKILL_DIR
 

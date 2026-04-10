@@ -41,7 +41,7 @@ def build_openhands_agent_context(
     """Build OpenHands AgentContext with native project and repo skills."""
     AgentContext, load_project_skills, load_skills_from_dir = _get_openhands_context_api()
 
-    project_skills = load_project_skills(workspace_dir=str(workspace))
+    project_skills = load_project_skills(str(workspace))
 
     skills_dir = workspace / ".agents" / "skills"
     try:
@@ -134,7 +134,7 @@ def run_openhands_query(
         base_url=base_url,
     )
     tools = [
-        Tool(name=TerminalTool.name),
+        Tool(name=TerminalTool.name, params={"terminal_type": "subprocess"}),
         Tool(name=FileEditorTool.name),
         Tool(name=TaskTrackerTool.name),
     ]
