@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from src.harness import build_claudecode_options, build_opencode_options, is_claude_sdk
+from src.harness import build_options
 from src.schemas import AgentResponse
 
 
@@ -35,25 +35,15 @@ def get_dabstep_agent_options(
     without restarting the Python process.
     """
     prompt_text = PROMPT_FILE.read_text().strip()
-    data_dirs = [data_dir] if data_dir else None
-
-    if is_claude_sdk():
-        return build_claudecode_options(
-            system=prompt_text,
-            schema=AgentResponse.model_json_schema(),
-            tools=DABSTEP_AGENT_TOOLS,
-            model=model,
-            data_dirs=data_dirs,
-            setting_sources=["user", "project"],
-            permission_mode="acceptEdits",
-            max_buffer_size=10 * 1024 * 1024,
-        )
-    return build_opencode_options(
+    return build_options(
         system=prompt_text,
         schema=AgentResponse.model_json_schema(),
         tools=DABSTEP_AGENT_TOOLS,
         model=model,
-        data_dirs=data_dirs,
+        data_dirs=[data_dir] if data_dir else None,
+        setting_sources=["user", "project"],
+        permission_mode="acceptEdits",
+        max_buffer_size=10 * 1024 * 1024,
     )
 
 

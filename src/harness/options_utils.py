@@ -116,6 +116,53 @@ def to_opencode_tools(tools: Iterable[str]) -> dict[str, bool]:
     return converted
 
 
+def build_options(
+    *,
+    system: str,
+    schema: dict[str, Any],
+    tools: Iterable[str],
+    project_root: str | Path | None = None,
+    model: str | None = None,
+    data_dirs: Iterable[str] | None = None,
+    # Claude-specific extras — silently ignored on other harnesses
+    setting_sources: list[str] | None = None,
+    permission_mode: str | None = None,
+    max_buffer_size: int | None = None,
+) -> Any:
+    """Route to the correct builder for the active SDK.
+
+    Claude-specific parameters (setting_sources, permission_mode,
+    max_buffer_size) are forwarded only when the Claude SDK is active.
+    They are silently ignored on other harnesses because those runtimes
+    have no equivalent concept.
+    """
+    from .sdk_config import get_sdk
+
+    sdk = get_sdk()
+    if sdk == "claude":
+        return build_claudecode_options(
+            system=system,
+            schema=schema,
+            tools=tools,
+            project_root=project_root,
+            model=model,
+            data_dirs=data_dirs,
+            setting_sources=setting_sources,
+            permission_mode=permission_mode,
+            max_buffer_size=max_buffer_size,
+        )
+    if sdk == "opencode":
+        return build_opencode_options(
+            system=system,
+            schema=schema,
+            tools=tools,
+            project_root=project_root,
+            model=model,
+            data_dirs=data_dirs,
+        )
+    raise ValueError(f"Unknown SDK: {sdk!r}")
+
+
 def build_claudecode_options(
     *,
     system: str,

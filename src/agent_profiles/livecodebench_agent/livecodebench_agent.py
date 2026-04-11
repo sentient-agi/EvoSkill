@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.harness import build_claudecode_options, build_opencode_options, is_claude_sdk
+from src.harness import build_options
 from src.schemas import AgentResponse
 
 
@@ -30,21 +30,14 @@ def get_livecodebench_agent_options(model: str | None = None) -> Any:
 
     Uses default system prompts (no custom append) and full tool access.
     """
-    if is_claude_sdk():
-        return build_claudecode_options(
-            system="",
-            schema=AgentResponse.model_json_schema(),
-            tools=LIVECODEBENCH_AGENT_TOOLS,
-            model=model,
-            setting_sources=["user", "project"],
-            permission_mode="acceptEdits",
-            max_buffer_size=10 * 1024 * 1024,
-        )
-    return build_opencode_options(
+    return build_options(
         system="",
         schema=AgentResponse.model_json_schema(),
         tools=LIVECODEBENCH_AGENT_TOOLS,
         model=model,
+        setting_sources=["user", "project"],
+        permission_mode="acceptEdits",
+        max_buffer_size=10 * 1024 * 1024,
     )
 
 
