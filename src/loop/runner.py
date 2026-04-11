@@ -66,7 +66,6 @@ from .helpers import (
     build_skill_query_from_skill_proposer,
     build_prompt_query_from_prompt_proposer,
     append_feedback,
-    normalize_project_skill_frontmatter,
     read_feedback_history,
     update_prompt_file,
 )
@@ -550,6 +549,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
             created_skill = next(iter(new_skills)) if new_skills else None
 
             if not is_claude_sdk():
+                from src.harness.opencode.skill_utils import normalize_project_skill_frontmatter
                 skill_descriptions: dict[str, str] = {}
                 if target_skill:
                     skill_descriptions[target_skill] = proposed

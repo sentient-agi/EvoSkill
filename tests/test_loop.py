@@ -452,7 +452,7 @@ class TestBuildPromptQuery:
 
 class TestEnsureSkillFrontmatter:
     def test_adds_frontmatter_when_missing(self, tmp_path):
-        from src.loop.helpers import ensure_skill_frontmatter
+        from src.harness.opencode.skill_utils import ensure_skill_frontmatter
 
         skill_dir = tmp_path / "my-skill"
         skill_dir.mkdir()
@@ -468,7 +468,7 @@ class TestEnsureSkillFrontmatter:
         assert "my-skill" in content
 
     def test_returns_false_when_file_missing(self, tmp_path):
-        from src.loop.helpers import ensure_skill_frontmatter
+        from src.harness.opencode.skill_utils import ensure_skill_frontmatter
 
         result = ensure_skill_frontmatter(
             tmp_path / "nonexistent" / "SKILL.md",
@@ -477,7 +477,7 @@ class TestEnsureSkillFrontmatter:
         assert result is False
 
     def test_preserves_existing_description(self, tmp_path):
-        from src.loop.helpers import ensure_skill_frontmatter
+        from src.harness.opencode.skill_utils import ensure_skill_frontmatter
 
         skill_dir = tmp_path / "skill-a"
         skill_dir.mkdir()
@@ -491,7 +491,7 @@ class TestEnsureSkillFrontmatter:
         assert "Old description" in content
 
     def test_description_truncated_if_too_long(self, tmp_path):
-        from src.loop.helpers import ensure_skill_frontmatter
+        from src.harness.opencode.skill_utils import ensure_skill_frontmatter
 
         skill_dir = tmp_path / "long-skill"
         skill_dir.mkdir()
