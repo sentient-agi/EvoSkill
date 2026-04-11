@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 
 from tqdm.asyncio import tqdm_asyncio
 
-from src.agent_profiles.base import Agent, AgentTrace
+from src.harness import Agent, AgentTrace
 
 if TYPE_CHECKING:
     from src.cache import RunCache

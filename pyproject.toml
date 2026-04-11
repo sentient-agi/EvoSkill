@@ -38,7 +38,33 @@ evoskill = "src.cli.main:cli"
 [dependency-groups]
 dev = [
     "pytest>=9.0.0",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "src/cli/*",
+    "src/loop/runner.py",
+    "src/registry/manager.py",
+    "src/evaluation/eval_full.py",
+    "src/evaluation/evaluate.py",
+    "src/evaluation/dabstep_scorer.py",
+    "src/evaluation/sealqa_scorer.py",
+    "src/evaluation/livecodebench/*",
+    "src/api/eval_runner.py",
+    "src/api/evoskill.py",
+    "src/harness/_claude_executor.py",
+    "src/harness/_opencode_executor.py",
+    "src/agent_profiles/*",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true

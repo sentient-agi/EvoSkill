@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 if TYPE_CHECKING:
-    from src.agent_profiles.base import AgentTrace
+    from src.harness import AgentTrace
     from src.schemas import ProposerResponse, SkillProposerResponse, PromptProposerResponse
 
 

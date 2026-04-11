@@ -1,3 +1,9 @@
+"""Agent profile configurations — what each agent role does.
+
+Each subdirectory defines a specific agent role (system prompt, tools, schema).
+Harness/SDK logic lives in src.harness, not here.
+"""
+
 from .proposer import proposer_options
 from .skill_generator import skill_generator_options
 from .base_agent import base_agent_options, make_base_agent_options
@@ -10,8 +16,6 @@ from .livecodebench_agent import (
 from .prompt_generator import prompt_generator_options
 from .skill_proposer import skill_proposer_options
 from .prompt_proposer import prompt_proposer_options
-from .base import Agent, AgentTrace
-from .sdk_config import set_sdk, get_sdk, is_claude_sdk, is_opencode_sdk
 
 __all__ = [
     "proposer_options",
@@ -27,10 +31,4 @@ __all__ = [
     "prompt_generator_options",
     "skill_proposer_options",
     "prompt_proposer_options",
-    "Agent",
-    "AgentTrace",
-    "set_sdk",
-    "get_sdk",
-    "is_claude_sdk",
-    "is_opencode_sdk",
 ]

@@ -1,6 +1,6 @@
 from typing import Any, Union
 
-from src.agent_profiles.sdk_config import is_claude_sdk
+from src.harness import is_claude_sdk, resolve_project_root
 from src.agent_profiles.skill_generator import get_project_root
 from src.schemas import AgentResponse
 

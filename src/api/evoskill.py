@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from typing import Callable, Any
 
-from src.agent_profiles import Agent
+from src.harness import Agent
 from src.agent_profiles.skill_generator import get_project_root, skill_generator_options
 from src.agent_profiles import (
     skill_proposer_options,

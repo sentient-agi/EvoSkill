@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.agent_profiles.options_utils import build_claudecode_options, build_opencode_options
-from src.agent_profiles.sdk_config import is_claude_sdk
+from src.harness import build_claudecode_options, build_opencode_options, is_claude_sdk
 from src.schemas import PromptGeneratorResponse
 from src.agent_profiles.prompt_generator.prompt import PROMPT_GENERATOR_SYSTEM_PROMPT
 

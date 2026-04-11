@@ -195,7 +195,7 @@ class LoopDisplay:
               help="Show progress table only, no inline proposer output.")
 def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
     """Run the self-improvement loop."""
-    from src.agent_profiles.base import Agent
+    from src.harness import Agent, set_sdk
     from src.agent_profiles.base_agent.base_agent import make_base_agent_options_from_task
     from src.agent_profiles.prompt_generator.prompt_generator import (
         make_prompt_generator_options,
@@ -203,7 +203,6 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
     from src.agent_profiles.prompt_proposer.prompt_proposer import (
         make_prompt_proposer_options,
     )
-    from src.agent_profiles.sdk_config import set_sdk
     from src.agent_profiles.skill_generator.skill_generator import (
         make_skill_generator_options,
     )

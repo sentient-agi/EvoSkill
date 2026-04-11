@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.agent_profiles import Agent
+from src.harness import Agent
 from src.evaluation.eval_full import evaluate_full, load_results
 from src.schemas import AgentResponse
 

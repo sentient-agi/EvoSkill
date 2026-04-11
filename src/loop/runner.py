@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Generic, TypeVar
 
-from src.agent_profiles.base import Agent, AgentTrace
-from src.agent_profiles.sdk_config import is_claude_sdk
+from src.harness import Agent, AgentTrace, is_claude_sdk
 from src.cache import RunCache, CacheConfig
 from src.registry.sdk_utils import options_to_config
 

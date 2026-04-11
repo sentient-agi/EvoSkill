@@ -1,0 +1,397 @@
+"""Tests for src/harness/ — AgentTrace, Agent, sdk_config, options_utils."""
+
+import asyncio
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from src.harness.sdk_config import get_sdk, is_claude_sdk, is_opencode_sdk, set_sdk
+from src.harness.agent import AgentTrace, Agent
+
+
+# ===========================================================================
+# sdk_config — pure state-management functions
+# ===========================================================================
+
+class TestSdkConfig:
+    """Test the global SDK toggle — always reset after each test to avoid bleed."""
+
+    def setup_method(self):
+        """Ensure we start each test in Claude SDK mode."""
+        set_sdk("claude")
+
+    def teardown_method(self):
+        """Reset to Claude SDK after each test."""
+        set_sdk("claude")
+
+    def test_default_sdk_is_claude(self):
+        assert get_sdk() == "claude"
+
+    def test_is_claude_sdk_true_by_default(self):
+        assert is_claude_sdk() is True
+
+    def test_is_opencode_sdk_false_by_default(self):
+        assert is_opencode_sdk() is False
+
+    def test_set_sdk_to_opencode(self):
+        set_sdk("opencode")
+        assert get_sdk() == "opencode"
+        assert is_opencode_sdk() is True
+        assert is_claude_sdk() is False
+
+    def test_set_sdk_back_to_claude(self):
+        set_sdk("opencode")
+        set_sdk("claude")
+        assert is_claude_sdk() is True
+
+    def test_invalid_sdk_raises_value_error(self):
+        with pytest.raises(ValueError, match="Invalid SDK"):
+            set_sdk("unknown_sdk")  # type: ignore[arg-type]
+
+    def test_invalid_sdk_does_not_change_state(self):
+        try:
+            set_sdk("bad_value")  # type: ignore[arg-type]
+        except ValueError:
+            pass
+        assert get_sdk() == "claude"
+
+
+# ===========================================================================
+# AgentTrace — construction and methods
+# ===========================================================================
+
+class TestAgentTrace:
+    """Test AgentTrace data model construction and the summarize() method."""
+
+    def _make_trace(self, **overrides):
+        defaults = {
+            "duration_ms": 1000,
+            "total_cost_usd": 0.01,
+            "num_turns": 2,
+            "usage": {"input_tokens": 100, "output_tokens": 50},
+            "result": "The answer is 42.",
+            "is_error": False,
+            "messages": [],
+        }
+        defaults.update(overrides)
+        return AgentTrace(**defaults)
+
+    def test_minimal_construction(self):
+        trace = self._make_trace()
+        assert trace.is_error is False
+        assert trace.output is None
+
+    def test_default_uuid_is_empty_string(self):
+        trace = self._make_trace()
+        assert trace.uuid == ""
+
+    def test_default_model_is_empty_string(self):
+        trace = self._make_trace()
+        assert trace.model == ""
+
+    def test_default_tools_is_empty_list(self):
+        trace = self._make_trace()
+        assert trace.tools == []
+
+    def test_parse_error_defaults_to_none(self):
+        trace = self._make_trace()
+        assert trace.parse_error is None
+
+    def test_output_can_be_pydantic_model(self):
+        from src.schemas import AgentResponse
+
+        trace = self._make_trace(
+            output=AgentResponse(final_answer="42", reasoning="math")
+        )
+        assert trace.output.final_answer == "42"
+
+    # --- summarize() ---
+
+    def test_summarize_contains_model_info(self):
+        trace = self._make_trace(model="claude-opus-4-5")
+        summary = trace.summarize()
+        assert "claude-opus-4-5" in summary
+
+    def test_summarize_contains_turns(self):
+        trace = self._make_trace(num_turns=5)
+        summary = trace.summarize()
+        assert "5" in summary
+
+    def test_summarize_contains_full_result_when_no_error(self):
+        trace = self._make_trace(result="The answer is 42.")
+        summary = trace.summarize()
+        assert "The answer is 42." in summary
+
+    def test_summarize_shows_parse_error(self):
+        trace = self._make_trace(parse_error="JSON decode failed")
+        summary = trace.summarize()
+        assert "JSON decode failed" in summary
+
+    def test_summarize_truncates_large_result_on_parse_error(self):
+        big_result = "X" * 200_000
+        trace = self._make_trace(result=big_result, parse_error="failed")
+        summary = trace.summarize(head_chars=100, tail_chars=100)
+        assert "truncated" in summary.lower() or "omitted" in summary.lower()
+
+    def test_summarize_no_truncation_without_parse_error(self):
+        # Even a longish result should not be truncated when there is no parse_error
+        result = "A" * 500
+        trace = self._make_trace(result=result)
+        summary = trace.summarize(head_chars=100, tail_chars=100)
+        assert "truncated" not in summary.lower()
+
+    def test_summarize_shows_output_when_present(self):
+        from src.schemas import AgentResponse
+
+        trace = self._make_trace(
+            output=AgentResponse(final_answer="42", reasoning="Because")
+        )
+        summary = trace.summarize()
+        assert "42" in summary
+
+    def test_is_error_true_reflected(self):
+        trace = self._make_trace(is_error=True)
+        summary = trace.summarize()
+        assert "True" in summary
+
+
+# ===========================================================================
+# Agent._get_options — callable vs static resolution
+# ===========================================================================
+
+class TestAgentGetOptions:
+    """Test that Agent._get_options correctly resolves callable vs static options."""
+
+    def _make_agent(self, options):
+        from src.schemas import AgentResponse
+
+        return Agent(options=options, response_model=AgentResponse)
+
+    def test_static_dict_returned_as_is(self):
+        opts = {"system": "prompt", "tools": {}}
+        agent = self._make_agent(opts)
+        assert agent._get_options() is opts
+
+    def test_callable_is_called_on_each_access(self):
+        call_count = {"n": 0}
+
+        def factory():
+            call_count["n"] += 1
+            return {"system": "dynamic", "call": call_count["n"]}
+
+        agent = self._make_agent(factory)
+        result1 = agent._get_options()
+        result2 = agent._get_options()
+
+        assert call_count["n"] == 2
+        assert result1["call"] == 1
+        assert result2["call"] == 2
+
+    def test_mock_object_returned_directly(self):
+        mock_opts = MagicMock()
+        agent = self._make_agent(mock_opts)
+        # MagicMock is callable, so it will be called and return mock_opts()
+        # The factory pattern means callable options get invoked
+        result = agent._get_options()
+        mock_opts.assert_called_once()
+
+
+# ===========================================================================
+# Agent._run_with_retry — retry + timeout logic (no real API calls)
+# ===========================================================================
+
+class TestAgentRetryLogic:
+    """Test retry and timeout behaviour by mocking _execute_query."""
+
+    def _make_agent(self):
+        from src.schemas import AgentResponse
+
+        return Agent(options={"system": "x"}, response_model=AgentResponse)
+
+    def test_success_on_first_attempt(self):
+        agent = self._make_agent()
+        expected = [MagicMock()]
+
+        async def run():
+            with patch.object(agent, "_execute_query", AsyncMock(return_value=expected)):
+                return await agent._run_with_retry("hello?")
+
+        result = asyncio.run(run())
+        assert result is expected
+
+    def test_retries_on_failure_then_succeeds(self):
+        agent = self._make_agent()
+        expected = [MagicMock()]
+        call_count = {"n": 0}
+
+        async def flaky_execute(query):
+            call_count["n"] += 1
+            if call_count["n"] < 2:
+                raise RuntimeError("transient failure")
+            return expected
+
+        async def run():
+            with (
+                patch.object(agent, "_execute_query", side_effect=flaky_execute),
+                patch("asyncio.sleep", AsyncMock()),
+            ):
+                return await agent._run_with_retry("hello?")
+
+        result = asyncio.run(run())
+        assert result is expected
+        assert call_count["n"] == 2
+
+    def test_raises_after_all_retries_exhausted(self):
+        agent = self._make_agent()
+
+        async def always_fail(query):
+            raise RuntimeError("permanent failure")
+
+        async def run():
+            with (
+                patch.object(agent, "_execute_query", side_effect=always_fail),
+                patch("asyncio.sleep", AsyncMock()),
+            ):
+                return await agent._run_with_retry("hello?")
+
+        with pytest.raises(RuntimeError, match="permanent failure"):
+            asyncio.run(run())
+
+    def test_timeout_triggers_retry(self):
+        agent = self._make_agent()
+        call_count = {"n": 0}
+        expected = [MagicMock()]
+
+        async def timeout_then_succeed(query):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise asyncio.TimeoutError()
+            return expected
+
+        async def run():
+            with (
+                patch.object(agent, "_execute_query", side_effect=timeout_then_succeed),
+                patch("asyncio.sleep", AsyncMock()),
+            ):
+                return await agent._run_with_retry("hello?")
+
+        result = asyncio.run(run())
+        assert result is expected
+
+
+# ===========================================================================
+# options_utils — pure utility functions (no real SDK import needed)
+# ===========================================================================
+
+class TestOptionsUtils:
+    """Test options_utils helpers that don't require the Claude SDK."""
+
+    def test_resolve_project_root_explicit_path(self, tmp_path):
+        from src.harness.options_utils import resolve_project_root
+
+        result = resolve_project_root(tmp_path)
+        assert result == tmp_path.resolve()
+
+    def test_resolve_data_dirs_absolute_paths(self, tmp_path):
+        from src.harness.options_utils import resolve_data_dirs
+
+        abs_path = str(tmp_path)
+        result = resolve_data_dirs(tmp_path, [abs_path])
+        assert abs_path in result
+
+    def test_split_opencode_model_with_slash(self):
+        from src.harness.options_utils import split_opencode_model
+
+        provider, model = split_opencode_model("anthropic/claude-opus-4-5")
+        assert provider == "anthropic"
+        assert model == "claude-opus-4-5"
+
+    def test_split_opencode_model_without_slash_uses_default_provider(self):
+        from src.harness.options_utils import split_opencode_model
+
+        provider, model = split_opencode_model("claude-sonnet-4-6")
+        assert provider == "anthropic"
+        assert model == "claude-sonnet-4-6"
+
+    def test_split_opencode_model_none_uses_default(self):
+        from src.harness.options_utils import split_opencode_model, DEFAULT_OPENCODE_MODEL
+
+        provider, model = split_opencode_model(None)
+        full = f"{provider}/{model}"
+        assert full == DEFAULT_OPENCODE_MODEL
+
+    def test_to_opencode_tools_basic(self):
+        from src.harness.options_utils import to_opencode_tools
+
+        result = to_opencode_tools(["Read", "Bash", "Write"])
+        assert result["read"] is True
+        assert result["bash"] is True
+        assert result["write"] is True
+
+    def test_to_opencode_tools_skips_none_mappings(self):
+        from src.harness.options_utils import to_opencode_tools
+
+        # BashOutput maps to None → should be excluded
+        result = to_opencode_tools(["BashOutput", "Read"])
+        assert "bashoutput" not in result
+        assert "BashOutput" not in result
+        assert "read" in result
+
+    def test_to_opencode_tools_unknown_tool_lowercased(self):
+        from src.harness.options_utils import to_opencode_tools
+
+        result = to_opencode_tools(["CustomTool"])
+        assert "customtool" in result
+
+    def test_normalize_permission_block_none(self):
+        from src.harness.options_utils import _normalize_permission_block
+
+        assert _normalize_permission_block(None) == {}
+
+    def test_normalize_permission_block_string(self):
+        from src.harness.options_utils import _normalize_permission_block
+
+        assert _normalize_permission_block("allow") == {"*": "allow"}
+
+    def test_normalize_permission_block_dict(self):
+        from src.harness.options_utils import _normalize_permission_block
+
+        d = {"path": "allow"}
+        assert _normalize_permission_block(d) == d
+
+    def test_build_opencode_options_structure(self, tmp_path):
+        from src.harness.options_utils import build_opencode_options
+
+        result = build_opencode_options(
+            system="You are helpful.",
+            schema={"type": "object"},
+            tools=["Read", "Bash"],
+            project_root=tmp_path,
+            model="anthropic/claude-sonnet-4-6",
+        )
+
+        assert result["system"] == "You are helpful."
+        assert result["provider_id"] == "anthropic"
+        assert result["model_id"] == "claude-sonnet-4-6"
+        assert "read" in result["tools"]
+        assert "bash" in result["tools"]
+        assert result["format"] == {"type": "json_schema", "schema": {"type": "object"}}
+
+    def test_build_opencode_options_with_data_dirs(self, tmp_path):
+        from src.harness.options_utils import build_opencode_options
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        result = build_opencode_options(
+            system="prompt",
+            schema={},
+            tools=[],
+            project_root=tmp_path,
+            data_dirs=[str(data_dir)],
+        )
+
+        # Data dir paths should appear in system prompt
+        assert str(data_dir) in result["system"]
+        assert str(data_dir) in result["add_dirs"]

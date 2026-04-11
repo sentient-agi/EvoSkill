@@ -15,9 +15,8 @@ console = Console()
 @click.option('--verbose', is_flag=True, default=False, help='Show per-question results.')
 def eval_cmd(verbose: bool):
     """Evaluate the best skills on the validation set."""
-    from src.agent_profiles.base import Agent
+    from src.harness import Agent, set_sdk
     from src.agent_profiles.base_agent.base_agent import make_base_agent_options
-    from src.agent_profiles.sdk_config import set_sdk
     from src.cli.config import load_config
     from src.cli.shared import load_and_split, make_scorer
     from src.evaluation import evaluate_agent_parallel
