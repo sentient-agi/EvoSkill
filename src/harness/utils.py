@@ -68,6 +68,7 @@ def build_options(
     from .sdk_config import get_sdk
 
     sdk = get_sdk()
+    
     if sdk == "claude":
         from .claude.options import build_claudecode_options
         return build_claudecode_options(
@@ -81,6 +82,7 @@ def build_options(
             permission_mode=permission_mode,
             max_buffer_size=max_buffer_size,
         )
+    
     if sdk == "opencode":
         from .opencode.options import build_opencode_options
         return build_opencode_options(
@@ -91,6 +93,7 @@ def build_options(
             model=model,
             data_dirs=data_dirs,
         )
+    
     if sdk == "openhands":
         from .openhands.options import build_openhands_options
         return build_openhands_options(
@@ -101,4 +104,27 @@ def build_options(
             model=model,
             data_dirs=data_dirs,
         )
+     
+    if sdk == "codex":
+        from .codex.options import build_codex_options
+        return build_codex_options(
+            system=system,
+            schema=schema,
+            tools=tools,
+            project_root=project_root,
+            model=model,
+            data_dirs=data_dirs,
+        )
+    
+    if sdk == "goose":
+        from .goose.options import build_goose_options
+        return build_goose_options(
+            system=system,
+            schema=schema,
+            tools=tools,
+            project_root=project_root,
+            model=model,
+            data_dirs=data_dirs,
+        )
+    
     raise ValueError(f"Unknown SDK: {sdk!r}")

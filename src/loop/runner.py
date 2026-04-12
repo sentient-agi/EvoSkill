@@ -550,6 +550,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
 
             if is_opencode_sdk():
                 from src.harness.opencode.skill_utils import normalize_project_skill_frontmatter
+                from src.harness.sdk_config import get_sdk
                 skill_descriptions: dict[str, str] = {}
                 if target_skill:
                     skill_descriptions[target_skill] = proposed
@@ -559,7 +560,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
                     self._project_root,
                     descriptions=skill_descriptions,
                     fallback_description=proposed,
-                    compatibility="opencode",
+                    compatibility=get_sdk(),
                 )
 
             if skill_trace.output:

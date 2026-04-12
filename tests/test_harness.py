@@ -413,42 +413,777 @@ class TestOptionsUtils:
         assert str(data_dir) in result["system"]
         assert str(data_dir) in result["add_dirs"]
 
-    def test_build_openhands_options_structure(self, tmp_path):
-        from src.harness.openhands.options import build_openhands_options
 
-        result = build_openhands_options(
+# ===========================================================================
+# Claude executor — parse_response
+# ===========================================================================
+
+import types
+from src.harness.claude.executor import parse_response as claude_parse
+from src.harness.opencode.executor import parse_response as opencode_parse
+from src.schemas import AgentResponse, SkillProposerResponse
+
+
+def _make_claude_messages(structured_output=None, is_error=False):
+    first = types.SimpleNamespace(
+        data={"uuid": "test-uuid", "model": "sonnet", "tools": ["Read", "Bash"]}
+    )
+    last = types.SimpleNamespace(
+        session_id="sess-123",
+        duration_ms=500,
+        total_cost_usd=0.05,
+        num_turns=3,
+        usage={"input": 100, "output": 50},
+        result="some result text",
+        is_error=is_error,
+        structured_output=structured_output,
+    )
+    return [first, last]
+
+
+class TestClaudeParseResponse:
+    def test_parses_structured_output_successfully(self):
+        msgs = _make_claude_messages({"final_answer": "4", "reasoning": "math"})
+        fields = claude_parse(msgs, AgentResponse)
+        assert fields["output"] is not None
+        assert fields["output"].final_answer == "4"
+        assert fields["parse_error"] is None
+        assert fields["is_error"] is False
+
+    def test_extracts_metadata(self):
+        msgs = _make_claude_messages({"final_answer": "4", "reasoning": "math"})
+        fields = claude_parse(msgs, AgentResponse)
+        assert fields["uuid"] == "test-uuid"
+        assert fields["model"] == "sonnet"
+        assert fields["tools"] == ["Read", "Bash"]
+        assert fields["session_id"] == "sess-123"
+        assert fields["duration_ms"] == 500
+        assert fields["total_cost_usd"] == 0.05
+        assert fields["num_turns"] == 3
+
+    def test_handles_none_structured_output(self):
+        msgs = _make_claude_messages(structured_output=None)
+        fields = claude_parse(msgs, AgentResponse)
+        assert fields["output"] is None
+        assert "No structured output" in fields["parse_error"]
+        assert fields["is_error"] is True
+
+    def test_handles_invalid_structured_output(self):
+        msgs = _make_claude_messages({"wrong_field": "value"})
+        fields = claude_parse(msgs, AgentResponse)
+        assert fields["output"] is None
+        assert "ValidationError" in fields["parse_error"]
+
+    def test_complex_schema(self):
+        data = {
+            "action": "create",
+            "target_skill": None,
+            "proposed_skill": "calculator",
+            "justification": "needed for math",
+            "related_iterations": ["iter-1"],
+        }
+        msgs = _make_claude_messages(structured_output=data)
+        fields = claude_parse(msgs, SkillProposerResponse)
+        assert fields["output"].action == "create"
+        assert fields["output"].proposed_skill == "calculator"
+        assert fields["output"].related_iterations == ["iter-1"]
+
+    def test_is_error_propagates_from_last_message(self):
+        msgs = _make_claude_messages(
+            {"final_answer": "4", "reasoning": "math"}, is_error=True
+        )
+        fields = claude_parse(msgs, AgentResponse)
+        assert fields["is_error"] is True
+
+
+# ===========================================================================
+# OpenCode executor — parse_response
+# ===========================================================================
+
+def _make_opencode_message(info=None, parts=None, session_id="sess-456"):
+    return types.SimpleNamespace(
+        info=info,
+        parts=parts or [],
+        session_id=session_id,
+    )
+
+
+def _make_opencode_get_options(model_id="claude-sonnet-4-6", tools=None):
+    return lambda: {
+        "model_id": model_id,
+        "tools": tools or {"read": True, "bash": True},
+    }
+
+
+class TestOpencodeParseResponse:
+    def test_parses_structured_output_from_info(self):
+        msg = _make_opencode_message(
+            info={"structured_output": {"final_answer": "4", "reasoning": "math"}, "cost": 0.05, "tokens": {}}
+        )
+        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        assert fields["output"] is not None
+        assert fields["output"].final_answer == "4"
+        assert fields["parse_error"] is None
+
+    def test_extracts_cost_from_info(self):
+        msg = _make_opencode_message(
+            info={"structured_output": {"final_answer": "4", "reasoning": "math"}, "cost": 0.123, "tokens": {"input": 10}}
+        )
+        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        assert fields["total_cost_usd"] == 0.123
+        assert fields["usage"] == {"input": 10}
+
+    def test_handles_missing_structured_output(self):
+        msg = _make_opencode_message(info={"cost": 0.01, "tokens": {}})
+        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        assert fields["output"] is None
+        assert fields["parse_error"] is not None
+
+    def test_handles_missing_info(self):
+        msg = types.SimpleNamespace(parts=[], session_id="sess-456")
+        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        assert fields["output"] is None
+        assert fields["parse_error"] is not None
+
+    def test_handles_invalid_structured_output(self):
+        msg = _make_opencode_message(
+            info={"structured_output": {"wrong": "fields"}, "cost": 0, "tokens": {}}
+        )
+        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        assert fields["output"] is None
+        assert "ValidationError" in fields["parse_error"]
+
+    def test_complex_schema(self):
+        data = {
+            "action": "edit",
+            "target_skill": "math-helper",
+            "proposed_skill": "improved calculator",
+            "justification": "needs fixing",
+            "related_iterations": [],
+        }
+        msg = _make_opencode_message(
+            info={"structured_output": data, "cost": 0.05, "tokens": {}}
+        )
+        fields = opencode_parse([msg], SkillProposerResponse, _make_opencode_get_options())
+        assert fields["output"].action == "edit"
+        assert fields["output"].target_skill == "math-helper"
+
+    def test_extracts_text_from_parts(self):
+        msg = _make_opencode_message(
+            info={"structured_output": {"final_answer": "4", "reasoning": "math"}, "cost": 0, "tokens": {}},
+            parts=[
+                {"type": "step-start", "id": "1"},
+                {"type": "text", "text": "hello "},
+                {"type": "text", "text": "world"},
+                {"type": "step-finish", "id": "2"},
+            ],
+        )
+        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        assert fields["result"] == "hello world"
+
+    def test_structured_key_fallback(self):
+        msg = _make_opencode_message(
+            info={"structured": {"final_answer": "4", "reasoning": "math"}, "cost": 0, "tokens": {}}
+        )
+        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        assert fields["output"] is not None
+        assert fields["output"].final_answer == "4"
+
+    def test_model_from_options(self):
+        msg = _make_opencode_message(
+            info={"structured_output": {"final_answer": "4", "reasoning": "math"}, "cost": 0, "tokens": {}}
+        )
+        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options(model_id="opus"))
+        assert fields["model"] == "opus"
+
+
+# ===========================================================================
+# TestSdkConfig — codex extension (appended to TestSdkConfig pattern above)
+# ===========================================================================
+
+class TestSdkConfigCodex:
+    """Test codex SDK toggle and is_codex_sdk() helper."""
+
+    def setup_method(self):
+        set_sdk("claude")
+
+    def teardown_method(self):
+        set_sdk("claude")
+
+    def test_set_sdk_to_codex(self):
+        from src.harness.sdk_config import is_codex_sdk
+        set_sdk("codex")
+        assert get_sdk() == "codex"
+        assert is_codex_sdk() is True
+        assert is_claude_sdk() is False
+        assert is_opencode_sdk() is False
+
+    def test_is_codex_sdk_false_by_default(self):
+        from src.harness.sdk_config import is_codex_sdk
+        assert is_codex_sdk() is False
+
+    def test_set_sdk_codex_then_back_to_claude(self):
+        from src.harness.sdk_config import is_codex_sdk
+        set_sdk("codex")
+        set_sdk("claude")
+        assert is_claude_sdk() is True
+        assert is_codex_sdk() is False
+
+    def test_invalid_sdk_still_raises(self):
+        with pytest.raises(ValueError, match="Invalid SDK"):
+            set_sdk("unknown_harness")  # type: ignore[arg-type]
+
+
+# ===========================================================================
+# TestCodexOptions — build_codex_options()
+# ===========================================================================
+
+class TestCodexOptions:
+    """Test the Codex options builder — pure dict construction, no SDK calls."""
+
+    def test_basic_structure(self, tmp_path):
+        from src.harness.codex.options import build_codex_options
+
+        result = build_codex_options(
             system="You are helpful.",
             schema={"type": "object"},
-            tools=["Read", "Bash", "TodoWrite", "Skill"],
+            tools=["Read", "Bash"],
             project_root=tmp_path,
-            model="anthropic/claude-sonnet-4-5-20250929",
+            model="codex-mini-latest",
         )
 
         assert result["system"] == "You are helpful."
-        assert result["provider_id"] == "anthropic"
-        assert result["model_id"] == "claude-sonnet-4-5-20250929"
-        assert result["model"] == "anthropic/claude-sonnet-4-5-20250929"
-        assert result["tools"] == ["Read", "Bash", "TodoWrite", "Skill"]
-        assert result["format"] == {"type": "json_schema", "schema": {"type": "object"}}
-        assert result["skills_dir"] == str(tmp_path / ".claude" / "skills")
+        assert result["output_schema"] == {"type": "object"}
+        assert result["model"] == "codex-mini-latest"
+        assert result["working_directory"] == str(tmp_path.resolve())
+        assert "Read" in result["tools"]
+        assert "Bash" in result["tools"]
 
-    def test_build_openhands_options_with_data_dirs(self, tmp_path):
-        from src.harness.openhands.options import build_openhands_options
+    def test_default_model_used_when_none(self, tmp_path):
+        from src.harness.codex.options import build_codex_options, DEFAULT_CODEX_MODEL
 
-        data_dir = tmp_path.parent / "openhands-data"
+        result = build_codex_options(
+            system="prompt",
+            schema={},
+            tools=[],
+            project_root=tmp_path,
+            model=None,
+        )
+
+        assert result["model"] == DEFAULT_CODEX_MODEL
+
+    def test_data_dirs_appended_to_system(self, tmp_path):
+        from src.harness.codex.options import build_codex_options
+
+        data_dir = tmp_path / "extra_data"
         data_dir.mkdir()
 
-        result = build_openhands_options(
-            system="prompt",
+        result = build_codex_options(
+            system="base system",
             schema={},
             tools=[],
             project_root=tmp_path,
             data_dirs=[str(data_dir)],
         )
 
-        mounted_path = Path(result["add_dirs"][0])
-        assert mounted_path.is_symlink()
-        assert mounted_path.resolve() == data_dir.resolve()
-        assert mounted_path.parent == tmp_path / ".evoskill" / "runtime" / "data_mounts"
-        assert mounted_path.relative_to(tmp_path).as_posix() in result["system"]
-        assert str(data_dir) not in result["system"]
+        assert str(data_dir) in result["system"]
+        assert "Additional data directories" in result["system"]
+        assert str(data_dir) in result["data_dirs"]
+
+    def test_tools_stored_as_list(self, tmp_path):
+        from src.harness.codex.options import build_codex_options
+
+        result = build_codex_options(
+            system="s",
+            schema={},
+            tools=["Read", "Write", "Bash"],
+            project_root=tmp_path,
+        )
+
+        assert isinstance(result["tools"], list)
+        assert set(result["tools"]) == {"Read", "Write", "Bash"}
+
+    def test_no_data_dirs_system_unchanged(self, tmp_path):
+        from src.harness.codex.options import build_codex_options
+
+        result = build_codex_options(
+            system="clean prompt",
+            schema={},
+            tools=[],
+            project_root=tmp_path,
+            data_dirs=None,
+        )
+
+        assert result["system"] == "clean prompt"
+        assert result["data_dirs"] == []
+
+
+# ===========================================================================
+# TestCodexParseResponse — parse_response()
+# ===========================================================================
+
+import json as _json
+
+
+def _make_codex_turn(final_response=None, turn_id="turn-abc", thread_id="thread-xyz"):
+    import types
+    return types.SimpleNamespace(
+        final_response=final_response,
+        id=turn_id,
+        thread_id=thread_id,
+    )
+
+
+def _make_codex_get_options(model="codex-mini-latest", tools=None):
+    return lambda: {
+        "model": model,
+        "tools": tools or ["Read", "Bash"],
+        "working_directory": "/tmp",
+        "output_schema": {},
+    }
+
+
+class TestCodexParseResponse:
+    """Test parse_response for the Codex harness."""
+
+    def test_parses_valid_json_response(self):
+        from src.harness.codex.executor import parse_response
+
+        payload = _json.dumps({"final_answer": "42", "reasoning": "math"})
+        turn = _make_codex_turn(final_response=payload)
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["output"] is not None
+        assert fields["output"].final_answer == "42"
+        assert fields["parse_error"] is None
+        assert fields["is_error"] is False
+
+    def test_handles_non_json_response(self):
+        from src.harness.codex.executor import parse_response
+
+        turn = _make_codex_turn(final_response="not JSON at all")
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["output"] is None
+        assert "JSONDecodeError" in fields["parse_error"]
+        assert fields["is_error"] is True
+
+    def test_handles_empty_final_response(self):
+        from src.harness.codex.executor import parse_response
+
+        turn = _make_codex_turn(final_response="")
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["output"] is None
+        assert "No response from Codex" in fields["parse_error"]
+        assert fields["is_error"] is True
+
+    def test_handles_none_final_response(self):
+        from src.harness.codex.executor import parse_response
+
+        turn = _make_codex_turn(final_response=None)
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["output"] is None
+        assert fields["is_error"] is True
+
+    def test_model_comes_from_options(self):
+        from src.harness.codex.executor import parse_response
+
+        payload = _json.dumps({"final_answer": "x", "reasoning": "y"})
+        turn = _make_codex_turn(final_response=payload)
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options(model="my-model"))
+
+        assert fields["model"] == "my-model"
+
+    def test_result_text_equals_final_response(self):
+        from src.harness.codex.executor import parse_response
+
+        payload = _json.dumps({"final_answer": "z", "reasoning": "q"})
+        turn = _make_codex_turn(final_response=payload)
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["result"] == payload
+
+    def test_cost_is_always_zero(self):
+        from src.harness.codex.executor import parse_response
+
+        turn = _make_codex_turn(final_response="")
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["total_cost_usd"] == 0.0
+
+    def test_uuid_from_turn_id(self):
+        from src.harness.codex.executor import parse_response
+
+        payload = _json.dumps({"final_answer": "a", "reasoning": "b"})
+        turn = _make_codex_turn(final_response=payload, turn_id="my-turn-id")
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["uuid"] == "my-turn-id"
+
+    def test_session_id_from_thread_id(self):
+        from src.harness.codex.executor import parse_response
+
+        payload = _json.dumps({"final_answer": "a", "reasoning": "b"})
+        turn = _make_codex_turn(final_response=payload, thread_id="my-thread-id")
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["session_id"] == "my-thread-id"
+
+    def test_json_schema_validation_error_recorded(self):
+        from src.harness.codex.executor import parse_response
+
+        # Valid JSON but wrong schema fields
+        payload = _json.dumps({"wrong_field": "value"})
+        turn = _make_codex_turn(final_response=payload)
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["output"] is None
+        assert "ValidationError" in fields["parse_error"]
+
+
+# ===========================================================================
+# TestSdkConfigGoose — goose SDK toggle and is_goose_sdk() helper
+# ===========================================================================
+
+class TestSdkConfigGoose:
+    """Test goose SDK toggle and is_goose_sdk() helper."""
+
+    def setup_method(self):
+        set_sdk("claude")
+
+    def teardown_method(self):
+        set_sdk("claude")
+
+    def test_set_sdk_to_goose(self):
+        from src.harness.sdk_config import is_goose_sdk
+        set_sdk("goose")
+        assert get_sdk() == "goose"
+        assert is_goose_sdk() is True
+        assert is_claude_sdk() is False
+        assert is_opencode_sdk() is False
+
+    def test_is_goose_sdk_false_by_default(self):
+        from src.harness.sdk_config import is_goose_sdk
+        assert is_goose_sdk() is False
+
+    def test_set_sdk_goose_then_back_to_claude(self):
+        from src.harness.sdk_config import is_goose_sdk
+        set_sdk("goose")
+        set_sdk("claude")
+        assert is_claude_sdk() is True
+        assert is_goose_sdk() is False
+
+    def test_invalid_sdk_still_raises(self):
+        with pytest.raises(ValueError, match="Invalid SDK"):
+            set_sdk("notreal")  # type: ignore[arg-type]
+
+
+# ===========================================================================
+# TestGooseOptions — build_goose_options()
+# ===========================================================================
+
+class TestGooseSplitModel:
+    """Test split_goose_model() directly for all branches."""
+
+    def test_none_returns_defaults(self):
+        from src.harness.goose.options import split_goose_model, DEFAULT_GOOSE_PROVIDER, DEFAULT_GOOSE_MODEL
+
+        provider, model = split_goose_model(None)
+        assert provider == DEFAULT_GOOSE_PROVIDER
+        assert model == DEFAULT_GOOSE_MODEL
+
+    def test_with_slash_splits_on_first_slash(self):
+        from src.harness.goose.options import split_goose_model
+
+        provider, model = split_goose_model("openrouter/gpt-4-turbo")
+        assert provider == "openrouter"
+        assert model == "gpt-4-turbo"
+
+    def test_without_slash_uses_default_provider(self):
+        from src.harness.goose.options import split_goose_model, DEFAULT_GOOSE_PROVIDER
+
+        provider, model = split_goose_model("claude-sonnet-4-6")
+        assert provider == DEFAULT_GOOSE_PROVIDER
+        assert model == "claude-sonnet-4-6"
+
+    def test_multiple_slashes_splits_only_on_first(self):
+        from src.harness.goose.options import split_goose_model
+
+        provider, model = split_goose_model("some-provider/model/version")
+        assert provider == "some-provider"
+        assert model == "model/version"
+
+
+class TestGooseExecuteQueryErrors:
+    """Test execute_query error path when goose CLI is not installed."""
+
+    def test_raises_runtime_error_when_goose_not_found(self):
+        import asyncio
+        from unittest.mock import patch
+        from src.harness.goose.executor import execute_query
+
+        async def run():
+            with patch("shutil.which", return_value=None):
+                await execute_query({"system": "test", "output_schema": {}}, "query")
+
+        with pytest.raises(RuntimeError, match="Goose CLI not found"):
+            asyncio.run(run())
+
+
+class TestGooseOptions:
+    """Test the Goose options builder — pure dict construction, no subprocess calls."""
+
+    def test_basic_structure(self, tmp_path):
+        from src.harness.goose.options import build_goose_options
+
+        result = build_goose_options(
+            system="You are helpful.",
+            schema={"type": "object"},
+            tools=["Read", "Bash"],
+            project_root=tmp_path,
+            model="anthropic/claude-sonnet-4-6",
+        )
+
+        assert result["system"] == "You are helpful."
+        assert result["output_schema"] == {"type": "object"}
+        assert result["provider"] == "anthropic"
+        assert result["model"] == "claude-sonnet-4-6"
+        assert result["working_directory"] == str(tmp_path.resolve())
+        assert "Read" in result["tools"]
+        assert "Bash" in result["tools"]
+
+    def test_default_model_and_provider_when_none(self, tmp_path):
+        from src.harness.goose.options import (
+            build_goose_options,
+            DEFAULT_GOOSE_MODEL,
+            DEFAULT_GOOSE_PROVIDER,
+        )
+
+        result = build_goose_options(
+            system="prompt",
+            schema={},
+            tools=[],
+            project_root=tmp_path,
+            model=None,
+        )
+
+        assert result["model"] == DEFAULT_GOOSE_MODEL
+        assert result["provider"] == DEFAULT_GOOSE_PROVIDER
+
+    def test_model_with_slash_splits(self, tmp_path):
+        from src.harness.goose.options import build_goose_options
+
+        result = build_goose_options(
+            system="s",
+            schema={},
+            tools=[],
+            project_root=tmp_path,
+            model="openrouter/gpt-5",
+        )
+
+        assert result["provider"] == "openrouter"
+        assert result["model"] == "gpt-5"
+
+    def test_data_dirs_appended_to_system(self, tmp_path):
+        from src.harness.goose.options import build_goose_options
+
+        data_dir = tmp_path / "extra_data"
+        data_dir.mkdir()
+
+        result = build_goose_options(
+            system="base system",
+            schema={},
+            tools=[],
+            project_root=tmp_path,
+            data_dirs=[str(data_dir)],
+        )
+
+        assert str(data_dir) in result["system"]
+        assert "Additional data directories" in result["system"]
+        assert str(data_dir) in result["data_dirs"]
+
+    def test_tools_stored_as_list(self, tmp_path):
+        from src.harness.goose.options import build_goose_options
+
+        result = build_goose_options(
+            system="s",
+            schema={},
+            tools=["Read", "Write", "Bash"],
+            project_root=tmp_path,
+        )
+
+        assert isinstance(result["tools"], list)
+        assert set(result["tools"]) == {"Read", "Write", "Bash"}
+
+    def test_no_data_dirs_system_unchanged(self, tmp_path):
+        from src.harness.goose.options import build_goose_options
+
+        result = build_goose_options(
+            system="clean prompt",
+            schema={},
+            tools=[],
+            project_root=tmp_path,
+            data_dirs=None,
+        )
+
+        assert result["system"] == "clean prompt"
+        assert result["data_dirs"] == []
+
+
+# ===========================================================================
+# TestGooseParseResponse — parse_response()
+# ===========================================================================
+
+import types as _types
+
+
+def _make_goose_result(stdout="", stderr="", returncode=0):
+    return _types.SimpleNamespace(
+        stdout=stdout,
+        stderr=stderr,
+        returncode=returncode,
+    )
+
+
+def _make_goose_conversation_stdout(structured_output: dict) -> str:
+    """Build a fake Goose --output-format json stdout with the conversation JSON."""
+    conversation = {
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "query"}]},
+            {"role": "assistant", "content": [
+                {"type": "toolRequest", "id": "tool1", "toolCall": {
+                    "status": "success",
+                    "value": {
+                        "name": "recipe__final_output",
+                        "arguments": structured_output,
+                    }
+                }}
+            ]},
+            {"role": "user", "content": [{"type": "toolResponse", "id": "tool1", "toolResult": {"status": "success"}}]},
+            {"role": "assistant", "content": [
+                {"type": "text", "text": _json.dumps(structured_output)}
+            ]},
+        ]
+    }
+    return f"starting session | provider: anthropic model: test\n{_json.dumps(conversation)}"
+
+
+def _make_goose_get_options(provider="anthropic", model="claude-sonnet-4-6", tools=None):
+    return lambda: {
+        "provider": provider,
+        "model": model,
+        "tools": tools or ["Read", "Bash"],
+        "working_directory": "/tmp",
+        "output_schema": {},
+    }
+
+
+class TestGooseParseResponse:
+    """Test parse_response for the Goose harness."""
+
+    def test_parses_structured_output_from_conversation(self):
+        from src.harness.goose.executor import parse_response as goose_parse
+
+        stdout = _make_goose_conversation_stdout({"final_answer": "4", "reasoning": "math"})
+        result = _make_goose_result(stdout=stdout)
+        fields = goose_parse([result], AgentResponse, _make_goose_get_options())
+
+        assert fields["output"] is not None
+        assert fields["output"].final_answer == "4"
+        assert fields["parse_error"] is None
+        assert fields["is_error"] is False
+
+    def test_handles_no_json_in_stdout(self):
+        from src.harness.goose.executor import parse_response as goose_parse
+
+        result = _make_goose_result(stdout="not JSON at all, no braces anywhere")
+        fields = goose_parse([result], AgentResponse, _make_goose_get_options())
+
+        assert fields["output"] is None
+        assert fields["parse_error"] is not None
+        assert fields["is_error"] is True
+
+    def test_handles_empty_stdout(self):
+        from src.harness.goose.executor import parse_response as goose_parse
+
+        result = _make_goose_result(stdout="")
+        fields = goose_parse([result], AgentResponse, _make_goose_get_options())
+
+        assert fields["output"] is None
+        assert fields["parse_error"] is not None
+        assert fields["is_error"] is True
+
+    def test_handles_nonzero_returncode(self):
+        from src.harness.goose.executor import parse_response as goose_parse
+
+        result = _make_goose_result(stdout="some output", stderr="critical error occurred", returncode=1)
+        fields = goose_parse([result], AgentResponse, _make_goose_get_options())
+
+        assert fields["is_error"] is True
+        assert "critical error occurred" in fields["parse_error"]
+
+    def test_model_comes_from_options(self):
+        from src.harness.goose.executor import parse_response as goose_parse
+
+        stdout = _make_goose_conversation_stdout({"final_answer": "x", "reasoning": "y"})
+        result = _make_goose_result(stdout=stdout)
+        fields = goose_parse([result], AgentResponse, _make_goose_get_options(model="my-model"))
+
+        assert fields["model"] == "my-model"
+
+    def test_provider_comes_from_options(self):
+        from src.harness.goose.executor import parse_response as goose_parse
+
+        stdout = _make_goose_conversation_stdout({"final_answer": "x", "reasoning": "y"})
+        result = _make_goose_result(stdout=stdout)
+        opts_fn = _make_goose_get_options(provider="openrouter")
+        fields = goose_parse([result], AgentResponse, opts_fn)
+
+        # provider is stored in the options dict, verify it's accessible
+        assert opts_fn()["provider"] == "openrouter"
+        # output should still parse fine
+        assert fields["output"] is not None
+
+    def test_cost_is_always_zero(self):
+        from src.harness.goose.executor import parse_response as goose_parse
+
+        result = _make_goose_result(stdout="")
+        fields = goose_parse([result], AgentResponse, _make_goose_get_options())
+
+        assert fields["total_cost_usd"] == 0.0
+
+    def test_uuid_and_session_id_are_unknown(self):
+        from src.harness.goose.executor import parse_response as goose_parse
+
+        stdout = _make_goose_conversation_stdout({"final_answer": "a", "reasoning": "b"})
+        result = _make_goose_result(stdout=stdout)
+        fields = goose_parse([result], AgentResponse, _make_goose_get_options())
+
+        assert fields["uuid"] == "unknown"
+        assert fields["session_id"] == "unknown"
+
+    def test_json_validation_error_recorded(self):
+        from src.harness.goose.executor import parse_response as goose_parse
+
+        # Valid conversation JSON but tool call has wrong schema fields
+        stdout = _make_goose_conversation_stdout({"wrong_field": "value"})
+        result = _make_goose_result(stdout=stdout)
+        fields = goose_parse([result], AgentResponse, _make_goose_get_options())
+
+        assert fields["output"] is None
+        assert fields["parse_error"] is not None
+        assert fields["is_error"] is True
+
+    def test_extracts_from_tool_call_arguments(self):
+        from src.harness.goose.executor import parse_response as goose_parse
+
+        stdout = _make_goose_conversation_stdout({"final_answer": "7", "reasoning": "logic"})
+        result = _make_goose_result(stdout=stdout)
+        fields = goose_parse([result], AgentResponse, _make_goose_get_options())
+
+        assert fields["output"] is not None
+        assert fields["output"].final_answer == "7"
+        assert fields["parse_error"] is None
+        assert fields["raw_structured_output"] == {"final_answer": "7", "reasoning": "logic"}

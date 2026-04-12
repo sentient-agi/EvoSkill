@@ -9,7 +9,8 @@ description = "self-improving agent via skills"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "opencode-ai>=0.0.26",
+    "opencode-ai>=0.1.0a36",
+    "openai-codex-sdk>=0.1.11",
     "claude-agent-sdk>=0.1.16",
     "openhands-sdk>=1.16.1",
     "openhands-tools>=1.16.1",

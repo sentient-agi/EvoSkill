@@ -84,9 +84,9 @@ class LoopSettings(BaseSettings):
     model: Optional[str] = Field(
         default=None, description="Model for base agent (opus, sonnet, haiku)"
     )
-    sdk: Literal["claude", "opencode"] = Field(
+    sdk: Literal["claude", "opencode", "codex", "goose"] = Field(
         default="claude",
-        description="SDK to use: 'claude' or 'opencode'",
+        description="SDK to use: 'claude', 'opencode', 'codex', or 'goose'",
     )
 
 

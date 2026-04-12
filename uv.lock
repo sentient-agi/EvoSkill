@@ -865,6 +865,7 @@ dependencies = [
     { name = "llm-sandbox", extra = ["docker"] },
     { name = "nbformat" },
     { name = "notebook" },
+    { name = "openai-codex-sdk" },
     { name = "opencode-ai" },
     { name = "pandas" },
     { name = "pip" },
@@ -896,7 +897,8 @@ requires-dist = [
     { name = "llm-sandbox", extras = ["docker"], specifier = ">=0.3.36" },
     { name = "nbformat", specifier = ">=5.10.4" },
     { name = "notebook", specifier = ">=7.5.3" },
-    { name = "opencode-ai", specifier = ">=0.0.26" },
+    { name = "openai-codex-sdk", specifier = ">=0.1.11" },
+    { name = "opencode-ai", specifier = ">=0.1.0a36" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pip", specifier = ">=26.0.1" },
     { name = "plotly", specifier = ">=6.5.2" },
@@ -2571,6 +2573,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f4/8c/aa6aea6072f985ace9d6515046b9088ff00c157f9654da0c7b1e129d9506/openai-2.11.0.tar.gz", hash = "sha256:b3da01d92eda31524930b6ec9d7167c535e843918d7ba8a76b1c38f1104f321e", size = 624540, upload-time = "2025-12-11T19:11:58.539Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/f1/d9251b565fce9f8daeb45611e3e0d2f7f248429e40908dcee3b6fe1b5944/openai-2.11.0-py3-none-any.whl", hash = "sha256:21189da44d2e3d027b08c7a920ba4454b8b7d6d30ae7e64d9de11dbe946d4faa", size = 1064131, upload-time = "2025-12-11T19:11:56.816Z" },
+]
+
+[[package]]
+name = "openai-codex-sdk"
+version = "0.1.11"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/48/d9/601134e94b83017252d29bbffff85ed86b302ded014165edee8bf70c8558/openai_codex_sdk-0.1.11.tar.gz", hash = "sha256:2cb1ad6bc6318b419802f6f87e1cef2f3987580953d218933def281ff98929ab", size = 20609, upload-time = "2026-01-19T09:59:46.757Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/53/2e/72ce1e801d0ad668096c7a9250b23d0325a26fe9e6d63788ccf8ddfe3d81/openai_codex_sdk-0.1.11-py3-none-any.whl", hash = "sha256:0575fd99ad3310ead661d8c6d54f5c3bb6b45a6ff99f57377f30f19ea34a3cc0", size = 19743, upload-time = "2026-01-19T09:59:44.866Z" },
 ]
 
 [[package]]
