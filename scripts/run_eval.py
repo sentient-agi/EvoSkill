@@ -48,7 +48,7 @@ class EvalSettings(BaseSettings):
         default=Path("~/officeqa/officeqa.csv").expanduser(),
         description="Path to OfficeQA dataset CSV",
     )
-    sdk: Literal["claude", "opencode", "codex", "goose"] = Field(
+    sdk: Literal["claude", "opencode", "codex", "goose", "openhands"] = Field(
         default="claude",
         description="SDK to use: 'claude', 'opencode', 'codex', or 'goose'",
     )
