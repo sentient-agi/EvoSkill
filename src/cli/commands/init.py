@@ -124,7 +124,7 @@ def init_cmd():
 
     harness = questionary.select(
         'Which harness?',
-        choices=['claude', 'opencode', 'codex'],
+        choices=['claude', 'opencode', 'codex', 'goose'],
         default=prompt_defaults['harness'],
     ).ask()
 

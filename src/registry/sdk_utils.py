@@ -55,6 +55,21 @@ def config_to_options(
             "data_dirs": add_dirs or [],
         }
 
+    if config.metadata.get("sdk") == "goose":
+        system_prompt = config.system_prompt
+        system_text = system_prompt.get("content") or system_prompt.get("append", "")
+        provider = config.metadata.get("provider", "anthropic")
+        model = config.metadata.get("model", "claude-sonnet-4-6")
+        return {
+            "system": system_text,
+            "output_schema": config.output_format.get("schema") if config.output_format else {},
+            "provider": provider,
+            "model": model,
+            "working_directory": cwd,
+            "tools": config.allowed_tools,
+            "data_dirs": add_dirs or [],
+        }
+
     return ClaudeAgentOptions(
         system_prompt=config.system_prompt,
         allowed_tools=config.allowed_tools,
@@ -105,12 +120,35 @@ def options_to_config(
             else {"type": "text", "content": system_text}
         )
 
-        # Detect SDK type: codex options have output_schema + working_directory
-        # while opencode options have format + cwd
-        if "output_schema" in options and "working_directory" in options:
+        # Detect SDK type:
+        #   - goose options have output_schema + working_directory + provider
+        #   - codex options have output_schema + working_directory (no provider)
+        #   - opencode options have format + cwd
+        if "output_schema" in options and "working_directory" in options and "provider" in options:
+            sdk_type = "goose"
+        elif "output_schema" in options and "working_directory" in options:
             sdk_type = "codex"
         else:
             sdk_type = "opencode"
+
+        if sdk_type == "goose":
+            base_metadata.update(
+                {
+                    "sdk": "goose",
+                    "provider": options.get("provider", "anthropic"),
+                    "model": options.get("model", "claude-sonnet-4-6"),
+                    "working_directory": options.get("working_directory"),
+                }
+            )
+            return ProgramConfig(
+                name=name,
+                parent=parent,
+                generation=generation,
+                system_prompt=system_prompt,
+                allowed_tools=allowed_tools,
+                output_format={"schema": options.get("output_schema", {})},
+                metadata=base_metadata,
+            )
 
         if sdk_type == "codex":
             base_metadata.update(

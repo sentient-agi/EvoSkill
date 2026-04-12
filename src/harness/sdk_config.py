@@ -5,17 +5,21 @@ This module provides a global setting to choose between claude-agent-sdk and ope
 
 from typing import Literal
 
-SDKType = Literal["claude", "opencode", "codex"]
+SDKType = Literal["claude", "opencode", "codex", "goose"]
 
 # Global SDK selection (can be overridden via CLI arguments)
 _current_sdk: SDKType = "claude"
+
+_VALID_SDKS = ("claude", "opencode", "codex", "goose")
 
 
 def set_sdk(sdk: SDKType) -> None:
     """Set the current SDK to use globally."""
     global _current_sdk
-    if sdk not in ("claude", "opencode", "codex"):
-        raise ValueError(f"Invalid SDK type: {sdk}. Must be 'claude', 'opencode', or 'codex'")
+    if sdk not in _VALID_SDKS:
+        raise ValueError(
+            f"Invalid SDK type: {sdk}. Must be one of: {', '.join(repr(s) for s in _VALID_SDKS)}"
+        )
     _current_sdk = sdk
 
 
@@ -37,3 +41,8 @@ def is_opencode_sdk() -> bool:
 def is_codex_sdk() -> bool:
     """Check if codex is the current SDK."""
     return _current_sdk == "codex"
+
+
+def is_goose_sdk() -> bool:
+    """Check if goose is the current SDK."""
+    return _current_sdk == "goose"
