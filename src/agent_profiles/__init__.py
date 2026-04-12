@@ -4,6 +4,8 @@ Each subdirectory defines a specific agent role (system prompt, tools, schema).
 Harness/SDK logic lives in src.harness, not here.
 """
 
+from src.harness.agent import Agent
+
 from .proposer import proposer_options
 from .skill_generator import skill_generator_options
 from .base_agent import base_agent_options, make_base_agent_options
@@ -18,6 +20,7 @@ from .skill_proposer import skill_proposer_options
 from .prompt_proposer import prompt_proposer_options
 
 __all__ = [
+    "Agent",
     "proposer_options",
     "skill_generator_options",
     "base_agent_options",

@@ -160,6 +160,16 @@ class TestSkillProposerResponse:
                 justification="reason",
             )
 
+    def test_edit_action_requires_target_skill(self):
+        from src.schemas import SkillProposerResponse
+
+        with pytest.raises(ValidationError, match="target_skill is required"):
+            SkillProposerResponse(
+                action="edit",
+                proposed_skill="Extend existing skill",
+                justification="Need to update current behavior",
+            )
+
     def test_missing_proposed_skill_raises(self):
         from src.schemas import SkillProposerResponse
 

@@ -333,6 +333,25 @@ class TestOptionsToConfig:
         config = options_to_config(options, name="prog")
         assert "read" in config.allowed_tools
 
+    def test_openhands_dict_options_preserve_sdk_metadata(self):
+        from src.registry.sdk_utils import options_to_config
+
+        options = {
+            "sdk": "openhands",
+            "system": "You are helpful.",
+            "tools": ["Read", "Bash"],
+            "format": {"type": "json_schema"},
+            "provider_id": "anthropic",
+            "model_id": "claude-sonnet-4-5-20250929",
+            "model": "anthropic/claude-sonnet-4-5-20250929",
+            "cwd": "/some/path",
+            "skills_dir": "/some/path/.claude/skills",
+        }
+        config = options_to_config(options, name="my-program")
+        assert config.metadata["sdk"] == "openhands"
+        assert config.metadata["model"] == "anthropic/claude-sonnet-4-5-20250929"
+        assert config.metadata["skills_dir"] == "/some/path/.claude/skills"
+
 
 class TestConfigToOptions:
     """Test config_to_options for the opencode path (dict return)."""
@@ -374,3 +393,28 @@ class TestConfigToOptions:
         config = self._make_opencode_config()
         result = config_to_options(config, cwd="/custom/path")
         assert result["cwd"] == "/custom/path"
+
+    def test_openhands_config_returns_dict(self):
+        from src.registry.models import ProgramConfig
+        from src.registry.sdk_utils import config_to_options
+
+        config = ProgramConfig(
+            name="base",
+            system_prompt={"type": "text", "content": "You are helpful."},
+            allowed_tools=["Read", "Bash"],
+            output_format={"type": "json_schema"},
+            metadata={
+                "sdk": "openhands",
+                "provider_id": "anthropic",
+                "model_id": "claude-sonnet-4-5-20250929",
+                "model": "anthropic/claude-sonnet-4-5-20250929",
+                "skills_dir": "/tmp/.claude/skills",
+            },
+        )
+
+        result = config_to_options(config, cwd="/tmp")
+        assert isinstance(result, dict)
+        assert result["sdk"] == "openhands"
+        assert result["model"] == "anthropic/claude-sonnet-4-5-20250929"
+        assert result["skills_dir"] == "/tmp/.claude/skills"
+        assert result["tools"] == ["Read", "Bash"]

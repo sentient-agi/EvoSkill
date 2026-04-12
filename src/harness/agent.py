@@ -14,7 +14,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Type, TypeVar, Union
 from pydantic import BaseModel
-from .sdk_config import is_claude_sdk, is_codex_sdk, is_goose_sdk
+from .sdk_config import get_sdk, is_claude_sdk, is_codex_sdk, is_goose_sdk
 
 logger = logging.getLogger(__name__)
 
@@ -150,18 +150,24 @@ class Agent(Generic[T]):
         """Execute a single query by delegating to the active SDK's executor."""
         options = self._get_options()
 
-        if is_claude_sdk():
+        sdk = get_sdk()
+        if sdk == "claude":
             from .claude import executor as _claude_executor
             return await _claude_executor.execute_query(options, query)
-        elif is_codex_sdk():
+        if sdk == "opencode":
+            from .opencode import executor as _opencode_executor
+            return await _opencode_executor.execute_query(options, query)
+        if sdk == "openhands":
+            from .openhands import executor as _openhands_executor
+            return await _openhands_executor.execute_query(options, query)
+        if sdk == "codex":
             from .codex import executor as _codex_executor
             return await _codex_executor.execute_query(options, query)
-        elif is_goose_sdk():
+        if sdk == "goose":
             from .goose import executor as _goose_executor
             return await _goose_executor.execute_query(options, query)
         else:
-            from .opencode import executor as _opencode_executor
-            return await _opencode_executor.execute_query(options, query)
+            raise ValueError(f"Unknown SDK: {sdk!r}")
 
     async def _run_with_retry(self, query: str) -> list[Any]:
         """Execute query with timeout and exponential backoff retry.
@@ -209,17 +215,23 @@ class Agent(Generic[T]):
         """
         messages = await self._run_with_retry(query)
 
-        if is_claude_sdk():
+        sdk = get_sdk()
+        if sdk == "claude":
             from .claude import executor as _claude_executor
             fields = _claude_executor.parse_response(messages, self.response_model)
-        elif is_codex_sdk():
+        elif sdk == "opencode":
+            from .opencode import executor as _opencode_executor
+            fields = _opencode_executor.parse_response(messages, self.response_model, self._get_options)
+        elif sdk == "openhands":
+            from .openhands import executor as _openhands_executor
+            fields = await _openhands_executor.parse_response(messages,self.response_model,self._get_options,query)
+        elif sdk == "codex":
             from .codex import executor as _codex_executor
             fields = _codex_executor.parse_response(messages, self.response_model, self._get_options)
-        elif is_goose_sdk():
+        elif sdk == "goose":
             from .goose import executor as _goose_executor
             fields = _goose_executor.parse_response(messages, self.response_model, self._get_options)
         else:
-            from .opencode import executor as _opencode_executor
-            fields = _opencode_executor.parse_response(messages, self.response_model, self._get_options,)
+            raise ValueError(f"Unknown SDK: {sdk!r}")
 
         return AgentTrace(**fields)

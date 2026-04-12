@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Generic, TypeVar
 
-from src.harness import Agent, AgentTrace, is_claude_sdk
+from src.harness import Agent, AgentTrace, is_claude_sdk, is_opencode_sdk
 from src.cache import RunCache, CacheConfig
 from src.registry.sdk_utils import options_to_config
 
@@ -548,7 +548,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
             new_skills = skills_after - skills_before
             created_skill = next(iter(new_skills)) if new_skills else None
 
-            if not is_claude_sdk():
+            if is_opencode_sdk():
                 from src.harness.opencode.skill_utils import normalize_project_skill_frontmatter
                 from src.harness.sdk_config import get_sdk
                 skill_descriptions: dict[str, str] = {}

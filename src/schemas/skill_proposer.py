@@ -1,5 +1,6 @@
-from typing import Literal, Optional, List
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class SkillProposerResponse(BaseModel):
@@ -12,7 +13,7 @@ class SkillProposerResponse(BaseModel):
     action: Literal["create", "edit"] = "create"
     """Whether to create a new skill or edit an existing one."""
 
-    target_skill: Optional[str] = None
+    target_skill: str | None = None
     """Name of existing skill to modify. Required if action="edit"."""
 
     proposed_skill: str
@@ -21,5 +22,11 @@ class SkillProposerResponse(BaseModel):
     justification: str
     """Explanation of why this skill/modification addresses the identified gap."""
 
-    related_iterations: List[str] = []
+    related_iterations: list[str] = Field(default_factory=list)
     """List of relevant past iterations referenced in the proposal (e.g., ["iter-4", "iter-9"])."""
+
+    @model_validator(mode="after")
+    def validate_edit_target(self) -> "SkillProposerResponse":
+        if self.action == "edit" and not self.target_skill:
+            raise ValueError("target_skill is required when action='edit'")
+        return self

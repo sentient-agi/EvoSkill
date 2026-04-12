@@ -1,11 +1,8 @@
-"""SDK configuration and selection logic.
-
-This module provides a global setting to choose between claude-agent-sdk and opencode-ai.
-"""
+"""SDK configuration and selection logic."""
 
 from typing import Literal
 
-SDKType = Literal["claude", "opencode", "codex", "goose"]
+SDKType = Literal["claude", "opencode", "codex", "goose", "openhands"]
 
 # Global SDK selection (can be overridden via CLI arguments)
 _current_sdk: SDKType = "claude"
@@ -38,6 +35,11 @@ def is_opencode_sdk() -> bool:
     return _current_sdk == "opencode"
 
 
+def is_openhands_sdk() -> bool:
+    """Check if OpenHands is the current SDK."""
+    return _current_sdk == "openhands"
+  
+  
 def is_codex_sdk() -> bool:
     """Check if codex is the current SDK."""
     return _current_sdk == "codex"

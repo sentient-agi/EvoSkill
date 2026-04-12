@@ -6,7 +6,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.harness.sdk_config import get_sdk, is_claude_sdk, is_opencode_sdk, set_sdk
+from src.harness.sdk_config import (
+    get_sdk,
+    is_claude_sdk,
+    is_openhands_sdk,
+    is_opencode_sdk,
+    set_sdk,
+)
 from src.harness.agent import AgentTrace, Agent
 
 
@@ -34,11 +40,22 @@ class TestSdkConfig:
     def test_is_opencode_sdk_false_by_default(self):
         assert is_opencode_sdk() is False
 
+    def test_is_openhands_sdk_false_by_default(self):
+        assert is_openhands_sdk() is False
+
     def test_set_sdk_to_opencode(self):
         set_sdk("opencode")
         assert get_sdk() == "opencode"
         assert is_opencode_sdk() is True
         assert is_claude_sdk() is False
+        assert is_openhands_sdk() is False
+
+    def test_set_sdk_to_openhands(self):
+        set_sdk("openhands")
+        assert get_sdk() == "openhands"
+        assert is_openhands_sdk() is True
+        assert is_claude_sdk() is False
+        assert is_opencode_sdk() is False
 
     def test_set_sdk_back_to_claude(self):
         set_sdk("opencode")

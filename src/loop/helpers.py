@@ -3,6 +3,11 @@
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from src.harness.opencode.skill_utils import (
+    ensure_skill_frontmatter,
+    normalize_project_skill_frontmatter,
+)
+
 if TYPE_CHECKING:
     from src.harness import AgentTrace
     from src.schemas import ProposerResponse, SkillProposerResponse, PromptProposerResponse

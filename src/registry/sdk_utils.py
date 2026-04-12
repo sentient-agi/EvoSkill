@@ -1,13 +1,18 @@
 """Utilities for converting between ProgramConfig and runtime agent options."""
 
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Any
 
-from typing import Any
-
-from claude_agent_sdk import ClaudeAgentOptions
+from typing import TYPE_CHECKING
 
 from .models import ProgramConfig
+
+if TYPE_CHECKING:
+    from claude_agent_sdk import ClaudeAgentOptions
+else:
+    ClaudeAgentOptions = Any
 
 
 def config_to_options(
@@ -29,7 +34,8 @@ def config_to_options(
     Returns:
         ClaudeAgentOptions ready for use with ClaudeSDKClient
     """
-    if config.metadata.get("sdk") == "opencode":
+    sdk = config.metadata.get("sdk")
+    if sdk == "opencode":
         system_prompt = config.system_prompt
         system_text = system_prompt.get("content") or system_prompt.get("append", "")
         return {
@@ -42,6 +48,26 @@ def config_to_options(
             "provider_id": config.metadata.get("provider_id", "anthropic"),
             "model_id": config.metadata.get("model_id", "claude-sonnet-4-6"),
         }
+    if sdk == "openhands":
+        system_prompt = config.system_prompt
+        system_text = system_prompt.get("content") or system_prompt.get("append", "")
+        provider_id = config.metadata.get("provider_id", "anthropic")
+        model_id = config.metadata.get("model_id", "claude-sonnet-4-5-20250929")
+        model = config.metadata.get("model") or f"{provider_id}/{model_id}"
+        return {
+            "sdk": "openhands",
+            "system": system_text,
+            "tools": list(config.allowed_tools),
+            "format": config.output_format,
+            "cwd": cwd,
+            "add_dirs": add_dirs or [],
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "model": model,
+            "skills_dir": config.metadata.get("skills_dir") or f"{cwd}/.claude/skills",
+        }
+
+    from claude_agent_sdk import ClaudeAgentOptions
 
     if config.metadata.get("sdk") == "codex":
         system_prompt = config.system_prompt
@@ -107,6 +133,7 @@ def options_to_config(
         base_metadata.update(metadata)
 
     if isinstance(options, dict):
+        sdk = options.get("sdk", "opencode")
         system_text = options.get("system", "")
         tools = options.get("tools", {})
         if isinstance(tools, dict):
@@ -170,13 +197,17 @@ def options_to_config(
 
         base_metadata.update(
             {
-                "sdk": "opencode",
-                "mode": options.get("mode", "build"),
+                "sdk": sdk,
                 "provider_id": options.get("provider_id"),
                 "model_id": options.get("model_id"),
                 "cwd": options.get("cwd"),
             }
         )
+        if sdk == "opencode":
+            base_metadata["mode"] = options.get("mode", "build")
+        if sdk == "openhands":
+            base_metadata["model"] = options.get("model")
+            base_metadata["skills_dir"] = options.get("skills_dir")
 
         return ProgramConfig(
             name=name,
