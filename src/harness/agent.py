@@ -14,7 +14,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Type, TypeVar, Union
 from pydantic import BaseModel
-from .sdk_config import is_claude_sdk, is_codex_sdk
+from .sdk_config import is_claude_sdk, is_codex_sdk, is_goose_sdk
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +156,9 @@ class Agent(Generic[T]):
         elif is_codex_sdk():
             from .codex import executor as _codex_executor
             return await _codex_executor.execute_query(options, query)
+        elif is_goose_sdk():
+            from .goose import executor as _goose_executor
+            return await _goose_executor.execute_query(options, query)
         else:
             from .opencode import executor as _opencode_executor
             return await _opencode_executor.execute_query(options, query)
@@ -212,6 +215,9 @@ class Agent(Generic[T]):
         elif is_codex_sdk():
             from .codex import executor as _codex_executor
             fields = _codex_executor.parse_response(messages, self.response_model, self._get_options)
+        elif is_goose_sdk():
+            from .goose import executor as _goose_executor
+            fields = _goose_executor.parse_response(messages, self.response_model, self._get_options)
         else:
             from .opencode import executor as _opencode_executor
             fields = _opencode_executor.parse_response(messages, self.response_model, self._get_options,)

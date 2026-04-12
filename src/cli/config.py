@@ -12,7 +12,7 @@ EVOSKILL_DIR = '.evoskill'
 
 @dataclass
 class HarnessConfig:
-    name: Literal['claude', 'opencode', 'codex'] = 'claude'
+    name: Literal['claude', 'opencode', 'codex', 'goose'] = 'claude'
     model: str | None = None
     data_dirs: list[str] = field(default_factory=list)
 
