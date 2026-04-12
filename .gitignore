@@ -10,6 +10,7 @@ treasury_bulletins_parsed/
 *.log
 # Claude Code config (ignore all except skills folder)
 .claude/*
+!.claude/program.yaml
 !.claude/skills/
 results/
 DABstep-data/
@@ -25,5 +26,6 @@ DABstep-data/
 .cache/
 *.txt
 output.txt
-tests/
 scratch/
+
+CLAUDE.md

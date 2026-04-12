@@ -6,7 +6,7 @@ from typing import Generic, TypeVar
 
 from tqdm.asyncio import tqdm_asyncio
 
-from src.agent_profiles.base import Agent, AgentTrace
+from src.harness import Agent, AgentTrace
 
 T = TypeVar("T")
 

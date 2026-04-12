@@ -19,7 +19,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-from src.agent_profiles.base import AgentTrace
+from src.harness import AgentTrace
 
 logger = logging.getLogger(__name__)
 

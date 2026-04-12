@@ -4,38 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import time
-from pathlib import Path
 from typing import Any
 
 import click
-import pandas as pd
 from rich.console import Console
 from rich.live import Live
 from rich.table import Table
 from rich.text import Text
 
-from src.cli.config import load_config, ProjectConfig
 from src.cli.report import RunReport, SkillEntry
-from src.agent_profiles import (
-    Agent,
-    base_agent_options,
-    skill_proposer_options,
-    prompt_proposer_options,
-    skill_generator_options,
-    prompt_generator_options,
-    set_sdk,
-)
-from src.agent_profiles.base_agent.base_agent import make_base_agent_options_from_task
-from src.agent_profiles.skill_generator import get_project_root
-from src.loop import SelfImprovingLoop, LoopConfig, LoopAgents
-from src.registry import ProgramManager
-from src.schemas import (
-    AgentResponse,
-    SkillProposerResponse,
-    PromptProposerResponse,
-    ToolGeneratorResponse,
-    PromptGeneratorResponse,
-)
 
 console = Console()
 
@@ -159,8 +136,13 @@ class LoopDisplay:
             n_skills = data.get("n_skills", 0)
 
             if data["added"]:
-                is_best = not self.rows or data["score"] >= max(r["score"] for r in self.rows)
-                status = "★ new best" if is_best else "kept"
+                previous_best = max((r["score"] for r in self.rows), default=float("-inf"))
+                if data["score"] > previous_best:
+                    status = "★ new best"
+                elif data["score"] == previous_best:
+                    status = "tied best"
+                else:
+                    status = "kept"
 
                 action = (self._last_proposal or {}).get("action", "create")
                 target = (self._last_proposal or {}).get("target_skill") or ""
@@ -202,137 +184,6 @@ class LoopDisplay:
                 )
 
 
-# ── dataset helpers ──────────────────────────────────────────────────────────
-
-def _load_and_split(cfg: ProjectConfig):
-    from src.api.data_utils import stratified_split
-
-    data = pd.read_csv(cfg.dataset_path)
-
-    renames: dict[str, str] = {}
-    if cfg.dataset.question_column != "question":
-        renames[cfg.dataset.question_column] = "question"
-    if cfg.dataset.ground_truth_column != "ground_truth":
-        renames[cfg.dataset.ground_truth_column] = "ground_truth"
-    if renames:
-        data.rename(columns=renames, inplace=True)
-
-    # Map category column: explicit config takes priority, then fall back to "default"
-    if cfg.dataset.category_column and cfg.dataset.category_column in data.columns:
-        if cfg.dataset.category_column != "category":
-            data.rename(columns={cfg.dataset.category_column: "category"}, inplace=True)
-    elif "category" not in data.columns:
-        data["category"] = "default"
-
-    return stratified_split(
-        data,
-        train_ratio=cfg.dataset.train_ratio,
-        val_ratio=cfg.dataset.val_ratio,
-    )
-
-
-def _infer_provider(model: str) -> str:
-    """Infer the LLM provider from the model name."""
-    if model.startswith("claude"):
-        return "anthropic"
-    if model.startswith(("gpt-", "o1", "o3", "o4")):
-        return "openai"
-    if model.startswith("gemini"):
-        return "google"
-    return "anthropic"  # fallback
-
-
-async def _call_llm(provider: str, model: str, prompt: str) -> str:
-    """Call the appropriate LLM provider and return the raw text response."""
-    if provider == "anthropic":
-        import anthropic
-        client = anthropic.AsyncAnthropic()
-        response = await client.messages.create(
-            model=model,
-            max_tokens=16,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.content[0].text
-
-    if provider == "openai":
-        try:
-            import openai
-        except ImportError:
-            raise RuntimeError("openai package not installed. Run: uv add openai")
-        client = openai.AsyncOpenAI()
-        response = await client.chat.completions.create(
-            model=model,
-            max_tokens=16,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.choices[0].message.content
-
-    if provider == "google":
-        try:
-            from google import genai
-        except ImportError:
-            raise RuntimeError("google-genai package not installed. Run: uv add google-genai")
-        client = genai.Client()
-        response = await client.aio.models.generate_content(model=model, contents=prompt)
-        return response.text
-
-    raise ValueError(f"Unknown provider: {provider}")
-
-
-def _make_scorer(cfg: ProjectConfig):
-    from src.loop.runner import _score_multi_tolerance
-
-    if cfg.scorer.type == "exact":
-        def exact(question: str, predicted: str, ground_truth: str) -> float:
-            return 1.0 if predicted.strip().lower() == ground_truth.strip().lower() else 0.0
-        return exact
-
-    if cfg.scorer.type == "multi_tolerance":
-        return _score_multi_tolerance
-
-    if cfg.scorer.type == "llm":
-        import asyncio
-
-        rubric = cfg.scorer.rubric or "Award 1.0 if correct, 0.0 if wrong."
-        model = cfg.scorer.model or "claude-sonnet-4-6"
-        provider = cfg.scorer.provider or _infer_provider(model)
-
-        async def _llm_score(question: str, predicted: str, ground_truth: str) -> float:
-            prompt = (
-                f"Question: {question}\n"
-                f"Expected: {ground_truth}\n"
-                f"Got: {predicted}\n\n"
-                f"Rubric: {rubric}\n\n"
-                "Reply with only a number between 0.0 and 1.0."
-            )
-            try:
-                text = await _call_llm(provider, model, prompt)
-                return float(text.strip())
-            except (ValueError, Exception):
-                return 0.0
-
-        def llm_scorer(question: str, predicted: str, ground_truth: str) -> float:
-            return asyncio.get_event_loop().run_until_complete(
-                _llm_score(question, predicted, ground_truth)
-            )
-        return llm_scorer
-
-    if cfg.scorer.type == "script":
-        import subprocess, shlex
-
-        def script_scorer(question: str, predicted: str, ground_truth: str) -> float:
-            cmd = cfg.scorer.command.format(predicted=predicted, expected=ground_truth)
-            result = subprocess.run(shlex.split(cmd), capture_output=True, text=True)
-            try:
-                return float(result.stdout.strip())
-            except ValueError:
-                return 0.0
-        return script_scorer
-
-    # fallback
-    return _score_multi_tolerance
-
-
 # ── command ──────────────────────────────────────────────────────────────────
 
 @click.command("run")
@@ -344,6 +195,31 @@ def _make_scorer(cfg: ProjectConfig):
               help="Show progress table only, no inline proposer output.")
 def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
     """Run the self-improvement loop."""
+    from src.harness import Agent, set_sdk
+    from src.agent_profiles.base_agent.base_agent import make_base_agent_options_from_task
+    from src.agent_profiles.prompt_generator.prompt_generator import (
+        make_prompt_generator_options,
+    )
+    from src.agent_profiles.prompt_proposer.prompt_proposer import (
+        make_prompt_proposer_options,
+    )
+    from src.agent_profiles.skill_generator.skill_generator import (
+        make_skill_generator_options,
+    )
+    from src.agent_profiles.skill_proposer.skill_proposer import (
+        make_skill_proposer_options,
+    )
+    from src.cli.config import load_config
+    from src.cli.shared import load_and_split, make_scorer
+    from src.loop import LoopAgents, LoopConfig, SelfImprovingLoop
+    from src.registry import ProgramManager
+    from src.schemas import (
+        AgentResponse,
+        PromptGeneratorResponse,
+        PromptProposerResponse,
+        SkillProposerResponse,
+        ToolGeneratorResponse,
+    )
     cfg = load_config()
 
     # Validate task.md
@@ -361,7 +237,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
 
     # Load dataset
     try:
-        train_pools, val_data = _load_and_split(cfg)
+        train_pools, val_data = load_and_split(cfg)
     except FileNotFoundError:
         console.print(f"[red]Error:[/red] Dataset not found at {cfg.dataset_path}")
         raise SystemExit(1)
@@ -370,16 +246,43 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
 
     # Build agents — use task.md description as the base agent prompt
     base_factory = make_base_agent_options_from_task(
-        cfg.task_description, model=cfg.harness.model, data_dirs=cfg.harness.data_dirs
+        cfg.task_description,
+        model=cfg.harness.model,
+        data_dirs=cfg.harness.data_dirs,
+        project_root=cfg.project_root,
     )
     agents = LoopAgents(
         base=Agent(base_factory, AgentResponse),
-        skill_proposer=Agent(skill_proposer_options, SkillProposerResponse),
-        prompt_proposer=Agent(prompt_proposer_options, PromptProposerResponse),
-        skill_generator=Agent(skill_generator_options, ToolGeneratorResponse),
-        prompt_generator=Agent(prompt_generator_options, PromptGeneratorResponse),
+        skill_proposer=Agent(
+            make_skill_proposer_options(
+                project_root=cfg.project_root,
+                model=cfg.harness.model,
+            ),
+            SkillProposerResponse,
+        ),
+        prompt_proposer=Agent(
+            make_prompt_proposer_options(
+                project_root=cfg.project_root,
+                model=cfg.harness.model,
+            ),
+            PromptProposerResponse,
+        ),
+        skill_generator=Agent(
+            make_skill_generator_options(
+                project_root=cfg.project_root,
+                model=cfg.harness.model,
+            ),
+            ToolGeneratorResponse,
+        ),
+        prompt_generator=Agent(
+            make_prompt_generator_options(
+                project_root=cfg.project_root,
+                model=cfg.harness.model,
+            ),
+            PromptGeneratorResponse,
+        ),
     )
-    manager = ProgramManager(cwd=get_project_root())
+    manager = ProgramManager(cwd=cfg.project_root)
 
     loop_config = LoopConfig(
         max_iterations=cfg.evolution.iterations,
@@ -398,7 +301,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
     try:
         loop = SelfImprovingLoop(
             loop_config, agents, manager, train_pools, val_data,
-            scorer=_make_scorer(cfg),
+            scorer=make_scorer(cfg),
             on_event=display.on_event,
             task_constraints=cfg.task_constraints,
         )

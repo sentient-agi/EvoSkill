@@ -1,11 +1,11 @@
-from typing import Any, Union
+from __future__ import annotations
 
-from src.agent_profiles.sdk_config import is_claude_sdk
-from src.agent_profiles.skill_generator import get_project_root
+from typing import Any
+
+from src.harness import build_options
 from src.schemas import AgentResponse
 
 
-# Use full tool suite for LiveCodeBench (agent can use tools to test/debug)
 LIVECODEBENCH_AGENT_TOOLS = [
     "Read",
     "Write",
@@ -25,72 +25,27 @@ LIVECODEBENCH_AGENT_TOOLS = [
 # Reference: https://artificialanalysis.ai/benchmarks/livecodebench
 
 
-def get_livecodebench_agent_options(
-    model: str | None = None,
-) -> Union[Any, dict[str, Any]]:
+def get_livecodebench_agent_options(model: str | None = None) -> Any:
+    """Factory that creates agent options for LiveCodeBench evaluation.
+
+    Uses default system prompts (no custom append) and full tool access.
     """
-    Factory function that creates agent options for LiveCodeBench evaluation.
-
-    Returns ClaudeAgentOptions for Claude SDK or dict for OpenCode SDK.
-    Uses default system prompts and full tool access.
-
-    Args:
-        model: Model to use (e.g., "opus", "sonnet"). If None, uses SDK default.
-    """
-    if is_claude_sdk():
-        from claude_agent_sdk import ClaudeAgentOptions
-
-        # Use default claude_code preset (no custom append)
-        system_prompt = {"type": "preset", "preset": "claude_code"}
-        output_format = {
-            "type": "json_schema",
-            "schema": AgentResponse.model_json_schema(),
-        }
-
-        options = ClaudeAgentOptions(
-            system_prompt=system_prompt,
-            output_format=output_format,
-            allowed_tools=LIVECODEBENCH_AGENT_TOOLS,
-            setting_sources=["user", "project"],
-            permission_mode="acceptEdits",
-            cwd=get_project_root(),
-            max_buffer_size=10 * 1024 * 1024,  # 10MB buffer (default is 1MB)
-        )
-
-        if model:
-            options.model = model
-
-        return options
-    else:
-        # OpenCode SDK - return dict with default system prompt and tools
-        return {
-            "system": "",  # Use default system prompt
-            "format": {
-                "type": "json_schema",
-                "schema": AgentResponse.model_json_schema(),
-            },
-            "tools": {tool: True for tool in LIVECODEBENCH_AGENT_TOOLS},
-            "mode": "build",
-            "model_id": model or "deepseek-ai/DeepSeek-V3",
-            "provider_id": "togetherai",
-        }
+    return build_options(
+        system="",
+        schema=AgentResponse.model_json_schema(),
+        tools=LIVECODEBENCH_AGENT_TOOLS,
+        model=model,
+        setting_sources=["user", "project"],
+        permission_mode="acceptEdits",
+        max_buffer_size=10 * 1024 * 1024,
+    )
 
 
 def make_livecodebench_agent_options(model: str | None = None):
-    """Create a factory function for LiveCodeBench agent options with a specific model.
-
-    Args:
-        model: Model to use (e.g., "opus", "sonnet"). If None, uses SDK default.
-
-    Returns:
-        A callable that returns ClaudeAgentOptions configured with the model.
-    """
-
-    def factory() -> Union[Any, dict[str, Any]]:
+    """Create a factory function for LiveCodeBench agent options with a specific model."""
+    def factory() -> Any:
         return get_livecodebench_agent_options(model=model)
-
     return factory
 
 
-# For backward compatibility, expose the factory as the options
 livecodebench_agent_options = get_livecodebench_agent_options

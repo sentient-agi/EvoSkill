@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.agent_profiles.base import AgentTrace
+    from src.harness import AgentTrace
     from src.schemas import ProposerResponse, SkillProposerResponse, PromptProposerResponse
 
 
@@ -14,6 +14,7 @@ def build_proposer_query(
     evolution_mode: str = "skill_only",
     truncation_level: int = 0,
     task_constraints: str = "",
+    project_root: str | Path | None = None,
 ) -> str:
     """Build the query for the proposer agent from multiple failure traces.
 
@@ -48,7 +49,7 @@ def build_proposer_query(
             feedback_history = "\n".join(feedback_lines_list[-feedback_lines:])
 
     # Get existing skills for context
-    skills_dir = Path(".claude/skills")
+    skills_dir = Path(project_root) / ".claude" / "skills" if project_root else Path(".claude/skills")
     existing_skills = []
     if skills_dir.exists():
         for skill_dir in skills_dir.iterdir():

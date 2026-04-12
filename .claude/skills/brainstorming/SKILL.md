@@ -27,14 +27,15 @@ Analyze the question to determine:
 
 Review available skills and determine which apply:
 
-| Question Pattern | Required Skills |
-|-----------------|-----------------|
-| Any Treasury/fiscal data lookup | `data-extraction-verification` (ALWAYS) |
-| Inflation adjustment, regression, trend | `data-extraction-verification` |
-| ES, VaR, forecasting, currency conversion | `data-extraction-verification` |
-| Final numeric answer | `data-extraction-verification` |
+| Question Pattern                          | Required Skills                         |
+| ----------------------------------------- | --------------------------------------- |
+| Any Treasury/fiscal data lookup           | `data-extraction-verification` (ALWAYS) |
+| Inflation adjustment, regression, trend   | `data-extraction-verification`          |
+| ES, VaR, forecasting, currency conversion | `data-extraction-verification`          |
+| Final numeric answer                      | `data-extraction-verification`          |
 
 **Skill chain reasoning:**
+
 - "This question requires extracting [X] from Treasury data, applying data-extraction-verification protocol"
 - "For calculations, verify each intermediate value before proceeding"
 
@@ -57,6 +58,7 @@ For the selected skills, map out the execution path:
 6. **Output**: What format does the question expect?
 
 State assumptions explicitly:
+
 - "Assuming fiscal year convention from Treasury Bulletins..."
 - "Using CPI base period of [X] because..."
 - "Interpreting 'rate' as percentage without symbol..."
@@ -95,6 +97,7 @@ Before execution, articulate the plan:
 ### Phase 6: Pre-Output Verification (MANDATORY)
 
 Before outputting, check:
+
 1. Units/dimensions correct for question type?
 2. Value in reasonable magnitude range?
 3. Formula actually computed (not just numerator)?
