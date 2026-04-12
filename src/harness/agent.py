@@ -14,7 +14,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Type, TypeVar, Union
 from pydantic import BaseModel
-from .sdk_config import is_claude_sdk
+from .sdk_config import is_claude_sdk, is_codex_sdk
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +153,9 @@ class Agent(Generic[T]):
         if is_claude_sdk():
             from .claude import executor as _claude_executor
             return await _claude_executor.execute_query(options, query)
+        elif is_codex_sdk():
+            from .codex import executor as _codex_executor
+            return await _codex_executor.execute_query(options, query)
         else:
             from .opencode import executor as _opencode_executor
             return await _opencode_executor.execute_query(options, query)
@@ -206,6 +209,9 @@ class Agent(Generic[T]):
         if is_claude_sdk():
             from .claude import executor as _claude_executor
             fields = _claude_executor.parse_response(messages, self.response_model)
+        elif is_codex_sdk():
+            from .codex import executor as _codex_executor
+            fields = _codex_executor.parse_response(messages, self.response_model, self._get_options)
         else:
             from .opencode import executor as _opencode_executor
             fields = _opencode_executor.parse_response(messages, self.response_model, self._get_options,)

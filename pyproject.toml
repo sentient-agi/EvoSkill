@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "opencode-ai>=0.1.0a36",
+    "openai-codex-sdk>=0.1.11",
     "claude-agent-sdk>=0.1.16",
     "click>=8.1.8",
     "dspy>=3.0.4",

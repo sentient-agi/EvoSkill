@@ -91,4 +91,14 @@ def build_options(
             model=model,
             data_dirs=data_dirs,
         )
+    if sdk == "codex":
+        from .codex.options import build_codex_options
+        return build_codex_options(
+            system=system,
+            schema=schema,
+            tools=tools,
+            project_root=project_root,
+            model=model,
+            data_dirs=data_dirs,
+        )
     raise ValueError(f"Unknown SDK: {sdk!r}")

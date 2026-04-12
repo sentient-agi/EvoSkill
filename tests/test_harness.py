@@ -578,3 +578,249 @@ class TestOpencodeParseResponse:
         )
         fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options(model_id="opus"))
         assert fields["model"] == "opus"
+
+
+# ===========================================================================
+# TestSdkConfig — codex extension (appended to TestSdkConfig pattern above)
+# ===========================================================================
+
+class TestSdkConfigCodex:
+    """Test codex SDK toggle and is_codex_sdk() helper."""
+
+    def setup_method(self):
+        set_sdk("claude")
+
+    def teardown_method(self):
+        set_sdk("claude")
+
+    def test_set_sdk_to_codex(self):
+        from src.harness.sdk_config import is_codex_sdk
+        set_sdk("codex")
+        assert get_sdk() == "codex"
+        assert is_codex_sdk() is True
+        assert is_claude_sdk() is False
+        assert is_opencode_sdk() is False
+
+    def test_is_codex_sdk_false_by_default(self):
+        from src.harness.sdk_config import is_codex_sdk
+        assert is_codex_sdk() is False
+
+    def test_set_sdk_codex_then_back_to_claude(self):
+        from src.harness.sdk_config import is_codex_sdk
+        set_sdk("codex")
+        set_sdk("claude")
+        assert is_claude_sdk() is True
+        assert is_codex_sdk() is False
+
+    def test_invalid_sdk_still_raises(self):
+        with pytest.raises(ValueError, match="Invalid SDK"):
+            set_sdk("goose")  # type: ignore[arg-type]
+
+
+# ===========================================================================
+# TestCodexOptions — build_codex_options()
+# ===========================================================================
+
+class TestCodexOptions:
+    """Test the Codex options builder — pure dict construction, no SDK calls."""
+
+    def test_basic_structure(self, tmp_path):
+        from src.harness.codex.options import build_codex_options
+
+        result = build_codex_options(
+            system="You are helpful.",
+            schema={"type": "object"},
+            tools=["Read", "Bash"],
+            project_root=tmp_path,
+            model="codex-mini-latest",
+        )
+
+        assert result["system"] == "You are helpful."
+        assert result["output_schema"] == {"type": "object"}
+        assert result["model"] == "codex-mini-latest"
+        assert result["working_directory"] == str(tmp_path.resolve())
+        assert "Read" in result["tools"]
+        assert "Bash" in result["tools"]
+
+    def test_default_model_used_when_none(self, tmp_path):
+        from src.harness.codex.options import build_codex_options, DEFAULT_CODEX_MODEL
+
+        result = build_codex_options(
+            system="prompt",
+            schema={},
+            tools=[],
+            project_root=tmp_path,
+            model=None,
+        )
+
+        assert result["model"] == DEFAULT_CODEX_MODEL
+
+    def test_data_dirs_appended_to_system(self, tmp_path):
+        from src.harness.codex.options import build_codex_options
+
+        data_dir = tmp_path / "extra_data"
+        data_dir.mkdir()
+
+        result = build_codex_options(
+            system="base system",
+            schema={},
+            tools=[],
+            project_root=tmp_path,
+            data_dirs=[str(data_dir)],
+        )
+
+        assert str(data_dir) in result["system"]
+        assert "Additional data directories" in result["system"]
+        assert str(data_dir) in result["data_dirs"]
+
+    def test_tools_stored_as_list(self, tmp_path):
+        from src.harness.codex.options import build_codex_options
+
+        result = build_codex_options(
+            system="s",
+            schema={},
+            tools=["Read", "Write", "Bash"],
+            project_root=tmp_path,
+        )
+
+        assert isinstance(result["tools"], list)
+        assert set(result["tools"]) == {"Read", "Write", "Bash"}
+
+    def test_no_data_dirs_system_unchanged(self, tmp_path):
+        from src.harness.codex.options import build_codex_options
+
+        result = build_codex_options(
+            system="clean prompt",
+            schema={},
+            tools=[],
+            project_root=tmp_path,
+            data_dirs=None,
+        )
+
+        assert result["system"] == "clean prompt"
+        assert result["data_dirs"] == []
+
+
+# ===========================================================================
+# TestCodexParseResponse — parse_response()
+# ===========================================================================
+
+import json as _json
+
+
+def _make_codex_turn(final_response=None, turn_id="turn-abc", thread_id="thread-xyz"):
+    import types
+    return types.SimpleNamespace(
+        final_response=final_response,
+        id=turn_id,
+        thread_id=thread_id,
+    )
+
+
+def _make_codex_get_options(model="codex-mini-latest", tools=None):
+    return lambda: {
+        "model": model,
+        "tools": tools or ["Read", "Bash"],
+        "working_directory": "/tmp",
+        "output_schema": {},
+    }
+
+
+class TestCodexParseResponse:
+    """Test parse_response for the Codex harness."""
+
+    def test_parses_valid_json_response(self):
+        from src.harness.codex.executor import parse_response
+
+        payload = _json.dumps({"final_answer": "42", "reasoning": "math"})
+        turn = _make_codex_turn(final_response=payload)
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["output"] is not None
+        assert fields["output"].final_answer == "42"
+        assert fields["parse_error"] is None
+        assert fields["is_error"] is False
+
+    def test_handles_non_json_response(self):
+        from src.harness.codex.executor import parse_response
+
+        turn = _make_codex_turn(final_response="not JSON at all")
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["output"] is None
+        assert "JSONDecodeError" in fields["parse_error"]
+        assert fields["is_error"] is True
+
+    def test_handles_empty_final_response(self):
+        from src.harness.codex.executor import parse_response
+
+        turn = _make_codex_turn(final_response="")
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["output"] is None
+        assert "No response from Codex" in fields["parse_error"]
+        assert fields["is_error"] is True
+
+    def test_handles_none_final_response(self):
+        from src.harness.codex.executor import parse_response
+
+        turn = _make_codex_turn(final_response=None)
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["output"] is None
+        assert fields["is_error"] is True
+
+    def test_model_comes_from_options(self):
+        from src.harness.codex.executor import parse_response
+
+        payload = _json.dumps({"final_answer": "x", "reasoning": "y"})
+        turn = _make_codex_turn(final_response=payload)
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options(model="my-model"))
+
+        assert fields["model"] == "my-model"
+
+    def test_result_text_equals_final_response(self):
+        from src.harness.codex.executor import parse_response
+
+        payload = _json.dumps({"final_answer": "z", "reasoning": "q"})
+        turn = _make_codex_turn(final_response=payload)
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["result"] == payload
+
+    def test_cost_is_always_zero(self):
+        from src.harness.codex.executor import parse_response
+
+        turn = _make_codex_turn(final_response="")
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["total_cost_usd"] == 0.0
+
+    def test_uuid_from_turn_id(self):
+        from src.harness.codex.executor import parse_response
+
+        payload = _json.dumps({"final_answer": "a", "reasoning": "b"})
+        turn = _make_codex_turn(final_response=payload, turn_id="my-turn-id")
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["uuid"] == "my-turn-id"
+
+    def test_session_id_from_thread_id(self):
+        from src.harness.codex.executor import parse_response
+
+        payload = _json.dumps({"final_answer": "a", "reasoning": "b"})
+        turn = _make_codex_turn(final_response=payload, thread_id="my-thread-id")
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["session_id"] == "my-thread-id"
+
+    def test_json_schema_validation_error_recorded(self):
+        from src.harness.codex.executor import parse_response
+
+        # Valid JSON but wrong schema fields
+        payload = _json.dumps({"wrong_field": "value"})
+        turn = _make_codex_turn(final_response=payload)
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["output"] is None
+        assert "ValidationError" in fields["parse_error"]
