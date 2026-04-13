@@ -40,22 +40,22 @@ Install into <b>any coding agent</b> in seconds, and supercharge it with <b>AI-c
     <tr>
       <td><a href="https://opencode.ai/">OpenCode</a></td>
       <td>✅</td>
-      <td></td>
+      <td>CLI v1.4.0+ required (structured output support)</td>
     </tr>
     <tr>
       <td><a href="https://github.com/OpenHands/OpenHands">OpenHands</a></td>
-      <td>🛠️</td>
+      <td>✅</td>
       <td></td>
     </tr>
     <tr>
       <td><a href="https://github.com/block/goose">Goose</a></td>
-      <td>🛠️</td>
-      <td></td>
+      <td>✅</td>
+      <td>CLI v1.25.0+ required (skill discovery via summon extension)</td>
     </tr>
     <tr>
-      <td><a href="https://github.com/block/goose">Codex CLI</a></td>
-      <td>🛠️</td>
-      <td></td>
+      <td><a href="https://openai.com/index/introducing-codex/">Codex CLI</a></td>
+      <td>✅</td>
+      <td>Skill discovery via .agents/skills/ symlink</td>
     </tr>
   </tbody>
 </table>   

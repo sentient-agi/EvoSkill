@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.agent_profiles import Agent, sealqa_agent_options, make_sealqa_agent_options
+from src.harness import Agent
+from src.agent_profiles import sealqa_agent_options, make_sealqa_agent_options
 from src.evaluation.eval_full import evaluate_full, load_results
 from src.evaluation.sealqa_scorer import score_sealqa
 from src.schemas import AgentResponse

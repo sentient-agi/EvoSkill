@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.agent_profiles import Agent, dabstep_agent_options, make_dabstep_agent_options
+from src.harness import Agent
+from src.agent_profiles import dabstep_agent_options, make_dabstep_agent_options
 from src.evaluation.eval_full import evaluate_full, load_results
 from src.evaluation.dabstep_scorer import question_scorer
 from src.schemas import AgentResponse

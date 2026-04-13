@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.agent_profiles import Agent, make_livecodebench_agent_options, set_sdk
+from src.harness import Agent, set_sdk
+from src.agent_profiles import make_livecodebench_agent_options
 from src.evaluation.eval_full import evaluate_full, load_results
 from src.evaluation.livecodebench import (
     score_livecodebench,
