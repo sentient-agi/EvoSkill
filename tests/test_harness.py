@@ -653,7 +653,8 @@ class TestCodexOptions:
         )
 
         assert result["system"] == "You are helpful."
-        assert result["output_schema"] == {"type": "object"}
+        assert result["output_schema"]["type"] == "object"
+        assert result["output_schema"]["additionalProperties"] is False
         assert result["model"] == "codex-mini-latest"
         assert result["working_directory"] == str(tmp_path.resolve())
         assert "Read" in result["tools"]
@@ -947,7 +948,8 @@ class TestGooseOptions:
         )
 
         assert result["system"] == "You are helpful."
-        assert result["output_schema"] == {"type": "object"}
+        assert result["output_schema"]["type"] == "object"
+        assert result["output_schema"]["additionalProperties"] is False
         assert result["provider"] == "anthropic"
         assert result["model"] == "claude-sonnet-4-6"
         assert result["working_directory"] == str(tmp_path.resolve())

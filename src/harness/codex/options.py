@@ -29,6 +29,23 @@ from ..utils import resolve_project_root, resolve_data_dirs
 DEFAULT_CODEX_MODEL = "codex-mini-latest"
 
 
+def _make_openai_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Convert a Pydantic JSON schema to OpenAI strict structured output format.
+
+    OpenAI's Responses API requires:
+        - "additionalProperties": false at the top level
+        - "required" must list ALL property keys (no optional fields)
+
+    Pydantic's model_json_schema() only puts truly required fields in "required",
+    but OpenAI demands every property is listed. Fields with defaults still work
+    because the model will always produce them.
+    """
+    strict = {**schema, "additionalProperties": False}
+    if "properties" in strict:
+        strict["required"] = list(strict["properties"].keys())
+    return strict
+
+
 def build_codex_options(
     *,
     system: str,
@@ -83,7 +100,10 @@ def build_codex_options(
         # JSON schema for structured output — passed to thread.run() as output_schema.
         # Unlike OpenCode which wraps it in {"type": "json_schema", "schema": ...},
         # Codex takes the raw schema dict directly.
-        "output_schema": schema,
+        # OpenAI's Responses API requires:
+        #   - "additionalProperties": false
+        #   - "required" must list ALL property keys (no optional fields allowed)
+        "output_schema": _make_openai_strict_schema(schema),
 
         # Model name — passed to Codex thread configuration
         "model": model or DEFAULT_CODEX_MODEL,
