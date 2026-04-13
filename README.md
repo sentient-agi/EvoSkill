@@ -139,9 +139,17 @@ Install into <b>any coding agent</b> in seconds, and supercharge it with <b>AI-c
 ```bash
 # Using uv (recommended)
 uv sync
+source .venv/bin/activate
+evoskill --help
 
 # Or using pip
 pip install -e .
+```
+
+If you prefer not to activate the environment, you can also run the CLI with:
+
+```bash
+uv run evoskill --help
 ```
 
 **API key:**

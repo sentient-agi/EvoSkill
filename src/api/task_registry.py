@@ -108,11 +108,6 @@ def _register_builtins() -> None:
         )
     )
 
-    # Ensure LiveCodeBench dataset is downloaded
-    from src.evaluation.livecodebench import ensure_livecodebench_dataset
-
-    livecodebench_dataset = str(ensure_livecodebench_dataset())
-
     register_task(
         TaskConfig(
             name="livecodebench",
@@ -121,7 +116,7 @@ def _register_builtins() -> None:
             question_col="formatted_question",
             answer_col="public_test_cases",
             category_col="platform",
-            default_dataset=livecodebench_dataset,
+            default_dataset=".dataset/livecodebench_v6.csv",
         )
     )
 

@@ -5,9 +5,12 @@ Extracts the duplicated stratified_split() from scripts into one place.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pandas as pd
 
-from .task_registry import TaskConfig
+if TYPE_CHECKING:
+    from .task_registry import TaskConfig
 
 
 def load_dataset(path: str, task_config: TaskConfig) -> pd.DataFrame:
