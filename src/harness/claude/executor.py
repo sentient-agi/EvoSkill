@@ -13,6 +13,7 @@ import json
 from typing import Any, Type
 
 from opentelemetry import trace as otel_trace
+from opentelemetry.trace import set_span_in_context
 from pydantic import BaseModel, ValidationError
 
 
@@ -79,16 +80,23 @@ async def execute_query(
                 # Only AssistantMessages contain turn-worthy content
                 if isinstance(msg, AssistantMessage):
                     turn_num += 1
-                    turn_span = _tracer.start_span(f"{agent_name}/turn.{turn_num}")
+                    # Nest the turn span under the run span explicitly so it's a
+                    # direct child (not a sibling of later tool spans).
+                    turn_span = _tracer.start_span(
+                        f"{agent_name}/turn.{turn_num}",
+                        context=set_span_in_context(run_span),
+                    )
                     turn_span.set_attribute("turn", turn_num)
                     turn_span.set_attribute("model", model_display)
+                    turn_ctx = set_span_in_context(turn_span)
 
                     try:
                         for block in msg.content:
                             if isinstance(block, ToolUseBlock):
-                                # Tool use — emit a child span + print
+                                # Tool span nests UNDER the turn span
                                 tool_span = _tracer.start_span(
-                                    f"{agent_name}/tool.{block.name}"
+                                    f"{agent_name}/tool.{block.name}",
+                                    context=turn_ctx,
                                 )
                                 tool_span.set_attribute("tool.name", block.name)
                                 try:
