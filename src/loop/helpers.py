@@ -14,21 +14,25 @@ if TYPE_CHECKING:
 
 
 def build_proposer_query(
-    traces_with_answers: list[tuple["AgentTrace", str, str, str]],
+    traces_with_answers: list[tuple["AgentTrace", str, str, str, str]],
     feedback_history: str,
     evolution_mode: str = "skill_only",
     truncation_level: int = 0,
     task_constraints: str = "",
     project_root: str | Path | None = None,
+    past_traces_index: str = "",
+    runtime_proposals: str = "",
 ) -> str:
     """Build the query for the proposer agent from multiple failure traces.
 
     Args:
-        traces_with_answers: List of (trace, agent_answer, ground_truth, category) tuples.
+        traces_with_answers: List of (trace, agent_answer, ground_truth, category, question) tuples.
         feedback_history: Previous feedback history.
         evolution_mode: "skill_only" or "prompt_only" - affects trace truncation.
         truncation_level: Context reduction level (0=full, 1=moderate, 2=aggressive).
         task_constraints: Optional task-specific constraints to include in the query.
+        past_traces_index: Lightweight index of past traces (progressive disclosure).
+        runtime_proposals: Unvalidated insights from the background reviewer.
 
     Returns:
         Formatted query string for the proposer.
@@ -63,12 +67,12 @@ def build_proposer_query(
     skills_list = "\n".join([f"- {s}" for s in existing_skills]) or "None"
 
     # Collect categories for summary
-    categories = [cat for _, _, _, cat in traces_with_answers]
+    categories = [cat for _, _, _, cat, _ in traces_with_answers]
     category_summary = ", ".join(sorted(set(categories)))
 
     # Build failure summaries with truncation-level-aware settings
     failure_sections = []
-    for i, (trace, agent_answer, ground_truth, category) in enumerate(traces_with_answers, 1):
+    for i, (trace, agent_answer, ground_truth, category, _question) in enumerate(traces_with_answers, 1):
         # For prompt mode, use more aggressive truncation to focus on patterns
         # For skill mode, keep full trace to see tool usage (but respect truncation level)
         if evolution_mode == "prompt_only":
@@ -92,12 +96,28 @@ Ground Truth: {ground_truth}
 
     constraints_section = f"\n## Task Constraints\n{task_constraints}\n" if task_constraints else ""
 
+    runtime_section = ""
+    if runtime_proposals:
+        runtime_section = f"""
+## Runtime Proposals (from background review — UNVALIDATED candidates)
+These insights were extracted automatically from recent solver traces by a lightweight
+reviewer. They represent candidate improvements but have NOT been validated.
+
+{runtime_proposals}
+"""
+
+    past_traces_section = ""
+    if past_traces_index:
+        past_traces_section = f"""
+{past_traces_index}
+"""
+
     return f"""## Existing Skills (check before proposing new ones)
 {skills_list}
 {constraints_section}
 ## Previous Attempts Feedback
 {feedback_history}
-
+{runtime_section}{past_traces_section}
 ## Current Failures ({len(traces_with_answers)} samples across categories: {category_summary})
 
 Analyze the patterns across these failures to identify a GENERAL improvement, not a fix for any single case.
@@ -105,11 +125,13 @@ Analyze the patterns across these failures to identify a GENERAL improvement, no
 {failures_text}
 
 ## Your Task
-1. Check if any EXISTING skill should have handled these failures
-2. If yes → propose EDITING that skill (action="edit", target_skill="skill-name")
-3. If no → propose a NEW skill (action="create")
-4. Reference any related DISCARDED iterations and explain how your proposal differs
-5. Identify what COMMON pattern or capability gap caused these failures across categories"""
+1. Check PAST TRACES INDEX above — use the Read tool on any trace file to see the full turn-by-turn log from a previous iteration
+2. Check if any EXISTING skill should have handled these failures
+3. If yes → propose EDITING that skill (action="edit", target_skill="skill-name")
+4. If no → propose a NEW skill (action="create")
+5. Compare how the solver's approach changed across iterations by reading specific trace files
+6. Reference any related DISCARDED iterations and explain how your proposal differs
+7. Identify what COMMON pattern or capability gap caused these failures across categories"""
 
 
 def build_skill_query(proposer_trace: "AgentTrace[ProposerResponse]") -> str:

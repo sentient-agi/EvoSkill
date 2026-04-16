@@ -9,6 +9,9 @@ from typing import Any, Callable, Generic, TypeVar
 from src.harness import Agent, AgentTrace, is_claude_sdk, is_opencode_sdk, is_openhands_sdk, is_goose_sdk, is_codex_sdk
 from src.cache import RunCache, CacheConfig
 from src.registry.sdk_utils import options_to_config
+from src.loop.trace_db import TraceDB
+from src.loop.reviewer import BackgroundReviewer
+from src.loop.constraints import gate as constraint_gate
 
 
 def _log(phase: str, message: str = "", indent: int = 0) -> None:
@@ -56,6 +59,7 @@ from src.schemas import (
     PromptGeneratorResponse,
     SkillProposerResponse,
     PromptProposerResponse,
+    SkillEvolverResponse,
 )
 
 from .config import LoopConfig
@@ -85,6 +89,8 @@ class LoopAgents:
     prompt_proposer: Agent[PromptProposerResponse]
     skill_generator: Agent[ToolGeneratorResponse]
     prompt_generator: Agent[PromptGeneratorResponse]
+    # Unified evolver (proposer+generator in one pass) — used when mode == "skill_unified"
+    skill_evolver: Agent[SkillEvolverResponse] | None = None
 
 
 @dataclass
@@ -140,6 +146,13 @@ class SelfImprovingLoop:
         self.on_event = on_event
         self.task_constraints = task_constraints
 
+        # Detect if validation data overlaps with training data (e.g., tiny datasets)
+        train_questions = {q for pool in train_pools.values() for q, _ in pool}
+        val_questions = {q for q, _, _ in val_data}
+        self._val_is_train_subset = bool(val_questions) and val_questions <= train_questions
+        if self._val_is_train_subset:
+            _log("INIT", "Validation data overlaps with training — will reuse training traces for evaluation")
+
         # Round-robin sampling state
         self._category_offset = 0  # Which category to start with next iteration
         self._per_cat_offset: dict[str, int] = {cat: 0 for cat in train_pools.keys()}
@@ -172,6 +185,17 @@ class SelfImprovingLoop:
         # Cost tracking
         self._total_cost: float = 0.0
         self._iter_cost: float = 0.0
+
+        # Trace DB + background reviewer for cross-iteration learning
+        db_path = self._project_root / ".cache" / "traces.db"
+        self.trace_db = TraceDB(db_path)
+        self.reviewer: BackgroundReviewer | None = None
+        if getattr(config, "reviewer_enabled", True):
+            try:
+                self.reviewer = BackgroundReviewer(db_path)
+            except Exception as e:
+                _log("WARN", f"BackgroundReviewer disabled: {e}")
+                self.reviewer = None
 
     def _emit(self, event: str, **data: Any) -> None:
         """Fire an event to the display callback if one is registered."""
@@ -302,38 +326,102 @@ class SelfImprovingLoop:
             ])
             self._iter_cost += sum(t.total_cost_usd for t in traces)
 
-            # Collect failures
-            failures: list[tuple[AgentTrace, str, str, str]] = []  # (trace, agent_answer, ground_truth, category)
+            # Backfill base score from first iteration's training traces when deferred
+            if iteration_count == 1 and self._val_is_train_subset:
+                train_score = 0.0
+                for t, (q, a, _) in zip(traces, test_samples):
+                    if t.output:
+                        train_score += self.scorer(q, str(t.output.final_answer), str(a))
+                train_score = train_score / len(traces) if traces else 0.0
+                self.manager.update_frontier("base", train_score, max_size=self.config.frontier_size)
+                _log("", f"  -> Base score (from training): {train_score:.4f}")
+
+            # Collect failures and persist ALL traces to DB for cross-iteration learning
+            active_skills_now = self._get_active_skills()
+            review_tasks: list[dict] = []
+            failures: list[tuple[AgentTrace, str, str, str, str]] = []  # (trace, agent_answer, ground_truth, category, question)
             for trace, (question, answer, category) in zip(traces, test_samples):
                 agent_answer = (
-                    trace.output.final_answer if trace.output else "[PARSE FAILED]"
+                    str(trace.output.final_answer) if trace.output else "[PARSE FAILED]"
                 )
                 avg_score = self.scorer(
                     question,
                     agent_answer.strip().lower(),
-                    answer.strip().lower(),
+                    str(answer).strip().lower(),
                 )
                 status = "[OK]" if avg_score >= 0.8 else "[FAIL]"
                 _log("", f"    {status} [{category}] {question[:40]}...")
                 self._emit("sample", question=question, category=category, score=avg_score, passed=avg_score >= 0.8)
-                if avg_score < 0.8:
-                    failures.append((trace, agent_answer, answer, category))
 
-            # Always propose if any failures exist
-            if len(failures) == 0:
+                # Persist trace to DB (and individual .md file) for progressive disclosure
+                trace_summary = trace.summarize()
+                self.trace_db.insert(
+                    iteration=f"iter-{actual_iteration}",
+                    question=question,
+                    ground_truth=str(answer),
+                    agent_answer=agent_answer,
+                    score=avg_score,
+                    trace_summary=trace_summary,
+                    active_skills=active_skills_now,
+                    num_turns=trace.num_turns,
+                    category=category,
+                    phase="train",
+                )
+                # Queue trace for async review (successful traces only — see below)
+                if self.reviewer is not None:
+                    review_tasks.append({
+                        "iteration": f"iter-{actual_iteration}",
+                        "question": question,
+                        "ground_truth": str(answer),
+                        "agent_answer": agent_answer,
+                        "score": avg_score,
+                        "trace_summary": trace_summary,
+                        "active_skills": active_skills_now,
+                    })
+
+                if avg_score < 0.8:
+                    failures.append((trace, agent_answer, answer, category, question))
+
+            # Fire background reviewer ONLY when evolver won't run (no failures).
+            # Failures → evolver does deeper analysis. Successes → reviewer captures patterns.
+            if self.reviewer is not None and review_tasks and len(failures) == 0:
+                asyncio.create_task(self.reviewer.review_traces_batch(review_tasks))
+
+            # Determine optimization phase
+            # Phase 1: accuracy is below threshold — evolve for correctness (failures drive it)
+            # Phase 2: accuracy met — evolve for efficiency (cost/turns on successful traces)
+            best_score = max(
+                (s for _, s in self.manager.get_frontier_with_scores()), default=0.0
+            )
+            threshold = self.config.accuracy_threshold
+            in_phase2 = (
+                threshold is not None
+                and best_score >= threshold
+                and len(failures) == 0
+            )
+
+            if in_phase2:
+                # Treat all successful traces as "expensive successes" for efficiency evolution
+                expensive_traces: list[tuple[AgentTrace, str, str, str, str]] = [
+                    (t, str(t.output.final_answer) if t.output else "", a, cat, q)
+                    for t, (q, a, cat) in zip(traces, test_samples)
+                    if t.output is not None
+                ]
+                avg_turns = sum(t.num_turns for t, _, _, _, _ in expensive_traces) / max(len(expensive_traces), 1)
+                _log("", f"  -> Phase 2: accuracy {best_score:.2f} >= {threshold:.2f}, optimizing efficiency (avg turns: {avg_turns:.0f})")
+                mutation_result = await self._mutate_with_fallback(parent, expensive_traces, actual_iteration)
+            elif len(failures) == 0:
                 _log("", f"  -> All samples passed, no proposal needed")
                 continue
-
-            _log("", f"  -> {len(failures)} failure(s), proposing improvement...")
+            else:
+                _log("", f"  -> {len(failures)} failure(s), proposing improvement...")
+                mutation_result = await self._mutate_with_fallback(parent, failures, actual_iteration)
 
             # Get parent's score for comparison
             parent_score = next(
                 (score for name, score in self.manager.get_frontier_with_scores() if name == parent),
                 0.0
             )
-
-            # Run proposer with all failures (use actual iteration number with offset)
-            mutation_result = await self._mutate_with_fallback(parent, failures, actual_iteration)
 
             if mutation_result is None:
                 no_improvement_count += 1
@@ -427,6 +515,12 @@ class SelfImprovingLoop:
 
         # Evaluate and add base to frontier
         self.manager.switch_to("base")
+        if self._val_is_train_subset:
+            _log("", f"  -> Deferring base eval (val overlaps with train; first-iter training traces will backfill)")
+            self.manager.update_frontier("base", 0.0, max_size=self.config.frontier_size)
+            _log("", f"  -> Frontier: {self.manager.get_frontier()}")
+            self._emit("baseline", score=0.0)
+            return
         _log("", f"  -> Evaluating on {len(self.val_data)} samples...")
         self._iter_cost = 0.0
         base_score = await self._evaluate(self.val_data)
@@ -470,7 +564,7 @@ class SelfImprovingLoop:
     async def _mutate(
         self,
         parent: str,
-        failures: list[tuple[AgentTrace[AgentResponse], str, str, str]],
+        failures: list[tuple[AgentTrace[AgentResponse], str, str, str, str]],
         iteration: int,
         truncation_level: int = 0,
     ) -> tuple[str, str, str] | None:
@@ -490,11 +584,57 @@ class SelfImprovingLoop:
 
         # Run appropriate proposer based on evolution mode
         evolution_mode = self.config.evolution_mode
-        _log("", f"  -> Running {evolution_mode.replace('_only', '')} proposer with {len(failures)} failures...")
+        _log("", f"  -> Running {evolution_mode.replace('_only', '').replace('_unified', ' evolver')} with {len(failures)} failures...")
         feedback_history = read_feedback_history(self._feedback_path)
-        proposer_query = build_proposer_query(failures, feedback_history, evolution_mode, truncation_level, self.task_constraints, project_root=self._project_root)
 
-        if evolution_mode == "skill_only":
+        # Progressive disclosure: give the evolver a lightweight index of past traces.
+        # It can Read any specific trace file on demand via the file paths in the index.
+        failed_questions = [q for (_, _, _, _, q) in failures]
+        past_traces_index = self.trace_db.generate_index(failed_questions=failed_questions)
+
+        # Unconsumed proposals from the background reviewer
+        runtime_proposals = ""
+        if self.reviewer is not None:
+            runtime_proposals = self.reviewer.format_proposals_for_reflector(max_chars=10_000)
+
+        proposer_query = build_proposer_query(
+            failures, feedback_history, evolution_mode, truncation_level,
+            self.task_constraints,
+            project_root=self._project_root,
+            past_traces_index=past_traces_index,
+            runtime_proposals=runtime_proposals,
+        )
+
+        if evolution_mode == "skill_unified":
+            if self.agents.skill_evolver is None:
+                _log("", f"  [WARN] skill_unified mode requires skill_evolver agent but none configured")
+                return None
+            evolver_trace = await self.agents.skill_evolver.run(proposer_query)
+            self._iter_cost += evolver_trace.total_cost_usd
+
+            if evolver_trace.output is None:
+                _log("", f"  [WARN] Skill evolver failed: {evolver_trace.parse_error}")
+                return None
+
+            output = evolver_trace.output
+            action_type = output.action
+            target_skill = output.skill_name
+            proposed = output.description
+            justification = output.justification
+
+            action_label = f"edit:{target_skill}" if action_type == "edit" else f"create:{target_skill}"
+            _log("", f"  -> Evolved: {action_label} - {proposed[:60]}...")
+            self._emit("proposal", action=action_type, target_skill=target_skill, summary=proposed[:80])
+
+            # The evolver already wrote the skill files in its run. Create child branch to capture.
+            child_name = f"iter-skill-{actual_iteration}"
+            parent_config = self.manager.get_current()
+            child_config = parent_config.mutate(child_name)
+            self.manager.create_program(child_name, child_config, parent=parent)
+
+            self._emit("skill_written", name=target_skill, action=action_type, target=target_skill)
+
+        elif evolution_mode == "skill_only":
             proposer_trace = await self.agents.skill_proposer.run(proposer_query)
             self._iter_cost += proposer_trace.total_cost_usd
 
@@ -590,6 +730,31 @@ and modify it to add these capabilities. Preserve all existing content that is s
                     self._prompt_path, prompt_trace.output.optimized_prompt
                 )
 
+        # Constraint gate: validate generated/edited skills BEFORE committing
+        # (saves expensive evaluation cost on degenerate mutations)
+        if evolution_mode in ("skill_only", "skill_unified"):
+            skills_dir = self._project_root / ".claude" / "skills"
+            gate_failed = False
+            if skills_dir.exists():
+                for skill_dir in skills_dir.iterdir():
+                    skill_file = skill_dir / "SKILL.md"
+                    if not skill_dir.is_dir() or not skill_file.exists():
+                        continue
+                    # Skip meta-skills (brainstorming, skill-creator) that ship with the project
+                    if skill_dir.name in ("skill-creator", "brainstorming"):
+                        continue
+                    passed, summary = constraint_gate(skill_file)
+                    if not passed:
+                        _log("", f"  [GATE] {skill_dir.name}: FAILED")
+                        _log("", summary)
+                        gate_failed = True
+                    elif "WARNING" in summary:
+                        _log("", f"  [GATE] {skill_dir.name}: PASSED with warnings")
+
+            if gate_failed:
+                _log("", f"  [GATE] Skill constraint check failed — discarding mutation")
+                return None
+
         # Commit changes
         self.manager.commit(f"{child_name}: {proposed[:50]}")
 
@@ -599,7 +764,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
     async def _mutate_with_fallback(
         self,
         parent: str,
-        failures: list[tuple[AgentTrace[AgentResponse], str, str, str]],
+        failures: list[tuple[AgentTrace[AgentResponse], str, str, str, str]],
         iteration: int,
     ) -> tuple[str, str, str] | None:
         """Try progressive truncation levels, then single-failure fallback.
@@ -635,8 +800,8 @@ and modify it to add these capabilities. Preserve all existing content that is s
 
     def _pick_shortest_failure(
         self,
-        failures: list[tuple[AgentTrace[AgentResponse], str, str, str]],
-    ) -> tuple[AgentTrace[AgentResponse], str, str, str]:
+        failures: list[tuple[AgentTrace[AgentResponse], str, str, str, str]],
+    ) -> tuple[AgentTrace[AgentResponse], str, str, str, str]:
         """Pick the failure with the shortest trace for fallback.
 
         Args:
