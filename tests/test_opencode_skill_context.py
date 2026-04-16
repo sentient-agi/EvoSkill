@@ -29,7 +29,7 @@ def test_build_proposer_query_reads_existing_skills_from_explicit_project_root(
     os.chdir(other_dir)
     try:
         query = build_proposer_query(
-            [(_FakeTrace(), "wrong", "right", "finance")],
+            [(_FakeTrace(), "wrong", "right", "finance", "What's the spread?")],
             feedback_history="",
             evolution_mode="skill_only",
             project_root=repo_root,

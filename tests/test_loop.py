@@ -137,7 +137,7 @@ class TestBuildProposerQuery:
     def test_returns_string(self, tmp_path):
         from src.loop.helpers import build_proposer_query
 
-        traces = [(_make_trace(), "agent_answer", "ground_truth", "math")]
+        traces = [(_make_trace(), "agent_answer", "ground_truth", "math", "What is 2+2?")]
         result = build_proposer_query(
             traces, "No previous attempts.", project_root=tmp_path
         )
@@ -146,7 +146,7 @@ class TestBuildProposerQuery:
     def test_includes_failure_section(self, tmp_path):
         from src.loop.helpers import build_proposer_query
 
-        traces = [(_make_trace("Agent said X"), "X", "Y", "category_a")]
+        traces = [(_make_trace("Agent said X"), "X", "Y", "category_a", "Q")]
         result = build_proposer_query(
             traces, "No previous attempts.", project_root=tmp_path
         )
@@ -155,7 +155,7 @@ class TestBuildProposerQuery:
     def test_includes_agent_answer_and_ground_truth(self, tmp_path):
         from src.loop.helpers import build_proposer_query
 
-        traces = [(_make_trace(), "predicted_42", "true_100", "finance")]
+        traces = [(_make_trace(), "predicted_42", "true_100", "finance", "Q")]
         result = build_proposer_query(
             traces, "No previous attempts.", project_root=tmp_path
         )
@@ -166,8 +166,8 @@ class TestBuildProposerQuery:
         from src.loop.helpers import build_proposer_query
 
         traces = [
-            (_make_trace(), "a1", "gt1", "math"),
-            (_make_trace(), "a2", "gt2", "finance"),
+            (_make_trace(), "a1", "gt1", "math", "Q1"),
+            (_make_trace(), "a2", "gt2", "finance", "Q2"),
         ]
         result = build_proposer_query(traces, "", project_root=tmp_path)
         assert "math" in result
@@ -176,7 +176,7 @@ class TestBuildProposerQuery:
     def test_includes_feedback_history(self, tmp_path):
         from src.loop.helpers import build_proposer_query
 
-        traces = [(_make_trace(), "a", "gt", "cat")]
+        traces = [(_make_trace(), "a", "gt", "cat", "Q")]
         result = build_proposer_query(
             traces,
             "iter-1: tried numeric extraction",
@@ -187,7 +187,7 @@ class TestBuildProposerQuery:
     def test_skill_only_mode_default(self, tmp_path):
         from src.loop.helpers import build_proposer_query
 
-        traces = [(_make_trace(), "a", "gt", "cat")]
+        traces = [(_make_trace(), "a", "gt", "cat", "Q")]
         result = build_proposer_query(
             traces, "", evolution_mode="skill_only", project_root=tmp_path
         )
@@ -196,7 +196,7 @@ class TestBuildProposerQuery:
     def test_prompt_only_mode(self, tmp_path):
         from src.loop.helpers import build_proposer_query
 
-        traces = [(_make_trace(), "a", "gt", "cat")]
+        traces = [(_make_trace(), "a", "gt", "cat", "Q")]
         result = build_proposer_query(
             traces, "", evolution_mode="prompt_only", project_root=tmp_path
         )
@@ -206,7 +206,7 @@ class TestBuildProposerQuery:
         from src.loop.helpers import build_proposer_query
 
         # Truncation level 1 limits to max_failures=3
-        traces = [(_make_trace(f"result {i}"), f"a{i}", f"gt{i}", "cat") for i in range(6)]
+        traces = [(_make_trace(f"result {i}"), f"a{i}", f"gt{i}", "cat", f"Q{i}") for i in range(6)]
         result = build_proposer_query(
             traces, "", truncation_level=1, project_root=tmp_path
         )
@@ -216,7 +216,7 @@ class TestBuildProposerQuery:
     def test_truncation_level_2_aggressive(self, tmp_path):
         from src.loop.helpers import build_proposer_query
 
-        traces = [(_make_trace("x" * 10000), "a", "gt", "cat")]
+        traces = [(_make_trace("x" * 10000), "a", "gt", "cat", "Q")]
         # Should not raise and should produce a shorter query than level 0
         result_full = build_proposer_query(
             traces, "", truncation_level=0, project_root=tmp_path
@@ -229,7 +229,7 @@ class TestBuildProposerQuery:
     def test_task_constraints_included(self, tmp_path):
         from src.loop.helpers import build_proposer_query
 
-        traces = [(_make_trace(), "a", "gt", "cat")]
+        traces = [(_make_trace(), "a", "gt", "cat", "Q")]
         result = build_proposer_query(
             traces,
             "",
@@ -246,14 +246,14 @@ class TestBuildProposerQuery:
         skills_dir.mkdir(parents=True)
         (skills_dir / "SKILL.md").write_text("# My Skill")
 
-        traces = [(_make_trace(), "a", "gt", "cat")]
+        traces = [(_make_trace(), "a", "gt", "cat", "Q")]
         result = build_proposer_query(traces, "", project_root=tmp_path)
         assert "my-skill" in result
 
     def test_no_skills_shows_none(self, tmp_path):
         from src.loop.helpers import build_proposer_query
 
-        traces = [(_make_trace(), "a", "gt", "cat")]
+        traces = [(_make_trace(), "a", "gt", "cat", "Q")]
         result = build_proposer_query(traces, "", project_root=tmp_path)
         assert "None" in result
 
