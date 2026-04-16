@@ -166,7 +166,7 @@ class Agent(Generic[T]):
         sdk = get_sdk()
         if sdk == "claude":
             from .claude import executor as _claude_executor
-            return await _claude_executor.execute_query(options, query)
+            return await _claude_executor.execute_query(options, query, agent_name=self.name)
         if sdk == "opencode":
             from .opencode import executor as _opencode_executor
             return await _opencode_executor.execute_query(options, query)

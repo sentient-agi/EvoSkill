@@ -1,8 +1,9 @@
 """Claude SDK execution and response parsing.
 
-This module handles all Claude-specific logic:
+Handles Claude-specific logic:
     - Converting dict options to ClaudeAgentOptions (fallback)
-    - Spawning ClaudeSDKClient and streaming messages
+    - Spawning ClaudeSDKClient and streaming messages with live OTel spans
+    - Printing turn-by-turn progress to stdout
     - Parsing SystemMessage/ResultMessage into AgentTrace fields
 """
 
@@ -11,24 +12,42 @@ from __future__ import annotations
 import json
 from typing import Any, Type
 
+from opentelemetry import trace as otel_trace
 from pydantic import BaseModel, ValidationError
 
 
-async def execute_query(options: Any, query: str) -> list[Any]:
-    """Execute a query via Claude SDK.
+_tracer = otel_trace.get_tracer("evoskill.harness.claude")
+
+
+def _preview(text: Any, n: int = 80) -> str:
+    """Safe one-line preview of a block for terminal/span display."""
+    s = str(text).strip().replace("\n", " ")
+    return s[:n] + "…" if len(s) > n else s
+
+
+async def execute_query(
+    options: Any,
+    query: str,
+    *,
+    agent_name: str = "agent",
+) -> list[Any]:
+    """Execute a query via Claude SDK, streaming messages with live OTel spans.
 
     Args:
         options: ClaudeAgentOptions or dict (auto-converted)
         query: The question to send to the agent
+        agent_name: Name prefix for spans and console logs (e.g., "base", "skill_evolver")
 
     Returns:
         List of messages: [SystemMessage, ..., ResultMessage]
     """
-    from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+    from claude_agent_sdk import (
+        ClaudeAgentOptions, ClaudeSDKClient,
+        AssistantMessage, ToolUseBlock, TextBlock,
+    )
 
     # If someone passed a dict to Claude SDK (e.g., from config_to_options),
-    # convert it to ClaudeAgentOptions. This is a fallback — normally profiles
-    # use build_claudecode_options() which returns the right type directly.
+    # convert it to ClaudeAgentOptions.
     if isinstance(options, dict):
         claude_opts = ClaudeAgentOptions(
             system_prompt=options.get("system"),
@@ -43,26 +62,63 @@ async def execute_query(options: Any, query: str) -> list[Any]:
             claude_opts.model = options["model_id"]
         options = claude_opts
 
-    # ClaudeSDKClient spawns a Claude Code process, sends the query,
-    # and streams back messages (SystemMessage, AssistantMessages, ResultMessage)
-    async with ClaudeSDKClient(options) as client:
-        await client.query(query)
-        return [msg async for msg in client.receive_response()]
+    messages: list[Any] = []
+    model_display = getattr(options, "model", None) or "claude"
+    turn_num = 0
+
+    with _tracer.start_as_current_span(f"agent.run:{agent_name}") as run_span:
+        run_span.set_attribute("agent.name", agent_name)
+        run_span.set_attribute("agent.query_preview", _preview(query, 200))
+
+        async with ClaudeSDKClient(options) as client:
+            await client.query(query)
+
+            async for msg in client.receive_response():
+                messages.append(msg)
+
+                # Only AssistantMessages contain turn-worthy content
+                if isinstance(msg, AssistantMessage):
+                    turn_num += 1
+                    turn_span = _tracer.start_span(f"{agent_name}/turn.{turn_num}")
+                    turn_span.set_attribute("turn", turn_num)
+                    turn_span.set_attribute("model", model_display)
+
+                    try:
+                        for block in msg.content:
+                            if isinstance(block, ToolUseBlock):
+                                # Tool use — emit a child span + print
+                                tool_span = _tracer.start_span(
+                                    f"{agent_name}/tool.{block.name}"
+                                )
+                                tool_span.set_attribute("tool.name", block.name)
+                                try:
+                                    input_preview = _preview(json.dumps(block.input), 300)
+                                    tool_span.set_attribute("tool.input_preview", input_preview)
+                                except Exception:
+                                    pass
+                                tool_span.end()
+                                print(f"      turn.{turn_num} [{model_display}]: {block.name}", flush=True)
+                            elif isinstance(block, TextBlock):
+                                text = (block.text or "").strip()
+                                if text:
+                                    print(
+                                        f"      turn.{turn_num} [{model_display}]: {_preview(text, 80)}",
+                                        flush=True,
+                                    )
+                                    turn_span.set_attribute("text_preview", _preview(text, 300))
+                    finally:
+                        turn_span.end()
+
+        run_span.set_attribute("num_turns", turn_num)
+
+    return messages
 
 
 def parse_response(
     messages: list[Any],
     response_model: Type[BaseModel],
 ) -> dict[str, Any]:
-    """Parse Claude SDK messages into AgentTrace field values.
-
-    Claude returns: [SystemMessage, ..., ResultMessage]
-        - First message has identity info (uuid, model, tools)
-        - Last message has results (cost, duration, structured_output)
-
-    Returns:
-        Dict of field values ready to pass to AgentTrace(**fields).
-    """
+    """Parse Claude SDK messages into AgentTrace field values."""
     first = messages[0]
     last = messages[-1]
 
@@ -77,7 +133,6 @@ def parse_response(
         except (ValidationError, json.JSONDecodeError, TypeError) as e:
             parse_error = f"{type(e).__name__}: {str(e)}"
     else:
-        # No structured output usually means the agent hit the context limit
         parse_error = (
             "No structured output returned (context limit likely exceeded)"
         )
