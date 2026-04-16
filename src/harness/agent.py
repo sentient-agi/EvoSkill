@@ -141,11 +141,13 @@ class Agent(Generic[T]):
         options: OptionsProvider,
         response_model: Type[T],
         *,
+        name: str = "agent",
         timeout_seconds: int | None = None,
         max_retries: int | None = None,
     ):
         self._options = options
         self.response_model = response_model
+        self.name = name
         self.timeout_seconds = (
             self.TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
         )

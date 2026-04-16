@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Literal
 
 
-EvolutionMode = Literal["prompt_only", "skill_only"]
+EvolutionMode = Literal["prompt_only", "skill_only", "skill_unified"]
 SelectionStrategy = Literal["best", "random", "round_robin"]
+CostMetric = Literal["total_cost_usd", "num_turns", "duration_ms"]
 
 
 @dataclass
@@ -67,3 +68,18 @@ class LoopConfig:
 
     # Multi-sample per category: collect N samples per category before proposing
     samples_per_category: int = 2  # Helps identify patterns within categories
+
+    # Pareto optimization: track cost alongside accuracy.
+    # When set, frontier uses Pareto dominance instead of single-axis score comparison.
+    # None = single-axis (accuracy only, original behavior).
+    cost_metric: CostMetric | None = None
+
+    # Lexicographic multi-objective optimization:
+    # Phase 1: optimize accuracy until accuracy_threshold is met
+    # Phase 2: optimize cost/efficiency while maintaining accuracy
+    # Set accuracy_threshold to enable. None = single-objective (accuracy only).
+    accuracy_threshold: float | None = None  # e.g. 0.8 = switch to phase 2 at 80% accuracy
+
+    # Background reviewer: async LLM extracts insights from successful solver traces.
+    # Complements the failure-driven evolver. Set False to disable.
+    reviewer_enabled: bool = True
