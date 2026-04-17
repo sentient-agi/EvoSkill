@@ -26,6 +26,10 @@ from src.agent_profiles import (
     prompt_generator_options,
     make_skill_evolver_options,
 )
+from src.agent_profiles.skill_proposer import make_skill_proposer_options
+from src.agent_profiles.skill_generator import make_skill_generator_options
+from src.agent_profiles.prompt_proposer import make_prompt_proposer_options
+from src.agent_profiles.prompt_generator import make_prompt_generator_options
 from src.registry import ProgramManager
 from src.schemas import (
     AgentResponse,
@@ -257,16 +261,32 @@ async def main(settings: LoopSettings):
         else base_agent_options
     )
 
+    # Improvers (proposers/generators/evolver) default to Opus for quality.
+    # Override with --evolver_model if you want them cheaper.
+    improver_model = settings.evolver_model or "opus"
+
     # Build agents, each with a name for better OTel span labels
     agents = LoopAgents(
         base=Agent(base_options, AgentResponse, name="base"),
-        skill_proposer=Agent(skill_proposer_options, SkillProposerResponse, name="skill_proposer"),
-        prompt_proposer=Agent(prompt_proposer_options, PromptProposerResponse, name="prompt_proposer"),
-        skill_generator=Agent(skill_generator_options, ToolGeneratorResponse, name="skill_generator"),
-        prompt_generator=Agent(prompt_generator_options, PromptGeneratorResponse, name="prompt_generator"),
+        skill_proposer=Agent(
+            make_skill_proposer_options(model=improver_model),
+            SkillProposerResponse, name="skill_proposer",
+        ),
+        prompt_proposer=Agent(
+            make_prompt_proposer_options(model=improver_model),
+            PromptProposerResponse, name="prompt_proposer",
+        ),
+        skill_generator=Agent(
+            make_skill_generator_options(model=improver_model),
+            ToolGeneratorResponse, name="skill_generator",
+        ),
+        prompt_generator=Agent(
+            make_prompt_generator_options(model=improver_model),
+            PromptGeneratorResponse, name="prompt_generator",
+        ),
         skill_evolver=(
             Agent(
-                make_skill_evolver_options(model=settings.evolver_model or "opus"),
+                make_skill_evolver_options(model=improver_model),
                 SkillEvolverResponse,
                 name="skill_evolver",
             )

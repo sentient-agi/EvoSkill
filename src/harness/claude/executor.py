@@ -69,7 +69,8 @@ async def execute_query(
 
     with _tracer.start_as_current_span(f"agent.run:{agent_name}") as run_span:
         run_span.set_attribute("agent.name", agent_name)
-        run_span.set_attribute("agent.query_preview", _preview(query, 200))
+        # Full query for Phoenix — evolver queries are huge (failure traces + history)
+        run_span.set_attribute("agent.query", query)
 
         async with ClaudeSDKClient(options) as client:
             await client.query(query)
