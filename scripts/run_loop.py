@@ -244,10 +244,16 @@ async def main(settings: LoopSettings):
         f"(remaining {1 - settings.train_ratio - settings.val_ratio:.0%} unused)"
     )
 
-    # Use custom model for base agent if specified
+    # Base agent: cwd = EvoSkill (owns skills + scratch); data_root accessible via add_dirs.
+    # Using data_root as cwd would pollute the data folder with agent-generated files.
+    data_dirs = [data_root] if settings.data_root else None
     base_options = (
-        make_base_agent_options(model=settings.model, project_root=data_root)
-        if settings.model
+        make_base_agent_options(
+            model=settings.model,
+            project_root=str(project_root),
+            data_dirs=data_dirs,
+        )
+        if (settings.model or data_dirs)
         else base_agent_options
     )
 
