@@ -46,6 +46,11 @@ async def execute_query(
         ClaudeAgentOptions, ClaudeSDKClient,
         AssistantMessage, ToolUseBlock, TextBlock,
     )
+    # ThinkingBlock may not exist in older SDKs
+    try:
+        from claude_agent_sdk import ThinkingBlock
+    except ImportError:
+        ThinkingBlock = None  # type: ignore
 
     # If someone passed a dict to Claude SDK (e.g., from config_to_options),
     # convert it to ClaudeAgentOptions.
@@ -125,6 +130,24 @@ async def execute_query(
                                     )
                                     # Full text for Phoenix; terminal print is short preview
                                     turn_span.set_attribute("text", text)
+                            elif ThinkingBlock is not None and isinstance(block, ThinkingBlock):
+                                thinking = (getattr(block, "thinking", "") or "").strip()
+                                if thinking:
+                                    print(
+                                        f"      turn.{turn_num} [{model_display}] (thinking): {_preview(thinking, 80)}",
+                                        flush=True,
+                                    )
+                                    turn_span.set_attribute("thinking", thinking)
+                            else:
+                                # Unknown block type — log what we can for debugging
+                                block_type = type(block).__name__
+                                turn_span.set_attribute(
+                                    f"unknown_block.{block_type}", str(block)[:1000]
+                                )
+                                print(
+                                    f"      turn.{turn_num} [{model_display}] ({block_type})",
+                                    flush=True,
+                                )
                     finally:
                         turn_span.end()
 
