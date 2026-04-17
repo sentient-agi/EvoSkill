@@ -609,6 +609,13 @@ class SelfImprovingLoop:
             if self.agents.skill_evolver is None:
                 _log("", f"  [WARN] skill_unified mode requires skill_evolver agent but none configured")
                 return None
+
+            # Capture parent config BEFORE the evolver mutates files.
+            # The evolver writes skills in-place while running; reading program.yaml
+            # after the fact can fail if the working tree has been altered.
+            parent_config = self.manager.get_current()
+            child_name = f"iter-skill-{actual_iteration}"
+
             evolver_trace = await self.agents.skill_evolver.run(proposer_query)
             self._iter_cost += evolver_trace.total_cost_usd
 
@@ -626,9 +633,7 @@ class SelfImprovingLoop:
             _log("", f"  -> Evolved: {action_label} - {proposed[:60]}...")
             self._emit("proposal", action=action_type, target_skill=target_skill, summary=proposed[:80])
 
-            # The evolver already wrote the skill files in its run. Create child branch to capture.
-            child_name = f"iter-skill-{actual_iteration}"
-            parent_config = self.manager.get_current()
+            # Now create child branch — skill edits are in the working tree from the evolver
             child_config = parent_config.mutate(child_name)
             self.manager.create_program(child_name, child_config, parent=parent)
 
