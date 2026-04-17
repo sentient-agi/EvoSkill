@@ -76,12 +76,14 @@ async def execute_query(
 
     with _tracer.start_as_current_span(f"agent.run:{agent_name}") as run_span:
         run_span.set_attribute("agent.name", agent_name)
-        # OpenInference semantic conventions — Phoenix shows these in input/output columns
+        # OpenInference semantic conventions — Phoenix shows these in the dedicated
+        # Input/Output pane (above "All Attributes" in the detail view).
         run_span.set_attribute("openinference.span.kind", "AGENT")
         run_span.set_attribute("input.value", query)
         run_span.set_attribute("input.mime_type", "text/plain")
-        # Keep agent.query for backward compat / structured queries
-        run_span.set_attribute("agent.query", query)
+        # Duplicate under plain names so they're also visible in "All Attributes"
+        # (Phoenix hides OpenInference semantic attrs from that pane).
+        run_span.set_attribute("query", query)
 
         async with ClaudeSDKClient(options) as client:
             await client.query(query)
@@ -106,6 +108,7 @@ async def execute_query(
                     if turn_num == 1:
                         turn_span.set_attribute("input.value", query)
                         turn_span.set_attribute("input.mime_type", "text/plain")
+                        turn_span.set_attribute("query", query)
                     turn_ctx = set_span_in_context(turn_span)
 
                     # Collect a per-turn output summary (text + tool calls made)
@@ -130,6 +133,7 @@ async def execute_query(
                                 tool_span.set_attribute("tool.input", tool_input_json)
                                 tool_span.set_attribute("input.value", tool_input_json)
                                 tool_span.set_attribute("input.mime_type", "application/json")
+                                tool_span.set_attribute("input", tool_input_json)
 
                                 tool_use_id = getattr(block, "id", None) or getattr(block, "tool_use_id", None)
                                 if tool_use_id:
@@ -174,8 +178,11 @@ async def execute_query(
                         if turn_tool_names:
                             output_parts.append("tool_calls: " + ", ".join(turn_tool_names))
                         if output_parts:
-                            turn_span.set_attribute("output.value", "\n\n".join(output_parts))
+                            output_str = "\n\n".join(output_parts)
+                            turn_span.set_attribute("output.value", output_str)
                             turn_span.set_attribute("output.mime_type", "text/plain")
+                            # Plain name so it also renders in "All Attributes"
+                            turn_span.set_attribute("output", output_str)
                     finally:
                         turn_span.end()
 
@@ -199,6 +206,7 @@ async def execute_query(
                                 tool_span.set_attribute("tool.output", result_str)
                                 tool_span.set_attribute("output.value", result_str)
                                 tool_span.set_attribute("output.mime_type", "text/plain")
+                                tool_span.set_attribute("output", result_str)
                                 is_error = bool(getattr(block, "is_error", False))
                                 tool_span.set_attribute("tool.is_error", is_error)
                                 tool_span.end()
@@ -214,8 +222,10 @@ async def execute_query(
         try:
             last = messages[-1] if messages else None
             if last is not None and hasattr(last, "result") and last.result:
-                run_span.set_attribute("output.value", str(last.result))
+                result_str = str(last.result)
+                run_span.set_attribute("output.value", result_str)
                 run_span.set_attribute("output.mime_type", "text/plain")
+                run_span.set_attribute("output", result_str)
             if last is not None and hasattr(last, "total_cost_usd"):
                 run_span.set_attribute("agent.total_cost_usd", float(last.total_cost_usd or 0))
         except Exception:
