@@ -118,32 +118,48 @@ async def execute_query(
                     try:
                         for block in msg.content:
                             if isinstance(block, ToolUseBlock):
+                                block_name = getattr(block, "name", None) or "unknown"
+                                block_input = getattr(block, "input", None)
+
                                 # Tool span nests UNDER the turn span, stays OPEN until
                                 # the matching ToolResultBlock arrives in a later UserMessage.
                                 tool_span = _tracer.start_span(
-                                    f"{agent_name}/tool.{block.name}",
+                                    f"{agent_name}/tool.{block_name}",
                                     context=turn_ctx,
                                 )
                                 tool_span.set_attribute("openinference.span.kind", "TOOL")
-                                tool_span.set_attribute("tool.name", block.name)
+                                tool_span.set_attribute("tool.name", block_name)
+
+                                # Serialize input robustly — works for dict/list/primitive/None
                                 try:
-                                    tool_input_json = json.dumps(block.input)
-                                except Exception:
-                                    tool_input_json = str(block.input)
+                                    if block_input is None:
+                                        tool_input_json = "{}"
+                                    else:
+                                        tool_input_json = json.dumps(
+                                            block_input, default=str, ensure_ascii=False
+                                        )
+                                except Exception as e:
+                                    tool_input_json = f"[serialization failed: {e}] {str(block_input)[:2000]}"
+
                                 tool_span.set_attribute("tool.input", tool_input_json)
                                 tool_span.set_attribute("input.value", tool_input_json)
                                 tool_span.set_attribute("input.mime_type", "application/json")
                                 tool_span.set_attribute("input", tool_input_json)
+                                # Raw block for debugging when fields are missing/weird
+                                tool_span.set_attribute("block.type", type(block).__name__)
+                                tool_span.set_attribute("block.repr", repr(block)[:2000])
 
                                 tool_use_id = getattr(block, "id", None) or getattr(block, "tool_use_id", None)
                                 if tool_use_id:
-                                    pending_tool_spans[tool_use_id] = tool_span
+                                    tool_span.set_attribute("tool.use_id", str(tool_use_id))
+                                    pending_tool_spans[str(tool_use_id)] = tool_span
                                 else:
-                                    # No id to correlate results — just end the span now
+                                    # No id to correlate results — end now with a note
+                                    tool_span.set_attribute("tool.output", "[no id to correlate result]")
                                     tool_span.end()
 
-                                turn_tool_names.append(block.name)
-                                print(f"      turn.{turn_num} [{model_display}]: {block.name}", flush=True)
+                                turn_tool_names.append(block_name)
+                                print(f"      turn.{turn_num} [{model_display}]: {block_name}", flush=True)
                             elif isinstance(block, TextBlock):
                                 text = (block.text or "").strip()
                                 if text:
@@ -193,7 +209,7 @@ async def execute_query(
                         for block in content:
                             if isinstance(block, ToolResultBlock):
                                 tool_use_id = getattr(block, "tool_use_id", None) or getattr(block, "id", None)
-                                tool_span = pending_tool_spans.pop(tool_use_id, None) if tool_use_id else None
+                                tool_span = pending_tool_spans.pop(str(tool_use_id), None) if tool_use_id else None
                                 if tool_span is None:
                                     continue
                                 result_content = getattr(block, "content", "")
