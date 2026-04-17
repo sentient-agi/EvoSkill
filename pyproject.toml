@@ -33,6 +33,10 @@ dependencies = [
     "torch>=2.9.1",
     "datasets>=4.6.0",
     "llm-sandbox[docker]>=0.3.36",
+    # wrapt 2.x removed the `module=` kwarg from wrap_function_wrapper,
+    # which breaks openinference-instrumentation-anthropic auto-instrumentation.
+    # Pin to <2.0 until openinference upgrades.
+    "wrapt<2.0",
 ]
 
 [project.scripts]
