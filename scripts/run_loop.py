@@ -51,8 +51,9 @@ class LoopSettings(BaseSettings):
     )
 
     mode: Literal["skill_only", "prompt_only", "skill_unified"] = Field(
-        default="skill_only",
-        description="Evolution mode: 'skill_only', 'prompt_only', or 'skill_unified'",
+        default="skill_unified",
+        description="Evolution mode: 'skill_unified' (default, combined evolver), "
+                    "'skill_only' (split proposer+generator), or 'prompt_only'",
     )
     max_iterations: int = Field(
         default=20, description="Maximum number of improvement iterations"

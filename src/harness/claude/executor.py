@@ -69,7 +69,11 @@ async def execute_query(
 
     with _tracer.start_as_current_span(f"agent.run:{agent_name}") as run_span:
         run_span.set_attribute("agent.name", agent_name)
-        # Full query for Phoenix — evolver queries are huge (failure traces + history)
+        # OpenInference semantic conventions — Phoenix shows these in input/output columns
+        run_span.set_attribute("openinference.span.kind", "AGENT")
+        run_span.set_attribute("input.value", query)
+        run_span.set_attribute("input.mime_type", "text/plain")
+        # Keep agent.query for backward compat / structured queries
         run_span.set_attribute("agent.query", query)
 
         async with ClaudeSDKClient(options) as client:
@@ -87,6 +91,7 @@ async def execute_query(
                         f"{agent_name}/turn.{turn_num}",
                         context=set_span_in_context(run_span),
                     )
+                    turn_span.set_attribute("openinference.span.kind", "CHAIN")
                     turn_span.set_attribute("turn", turn_num)
                     turn_span.set_attribute("model", model_display)
                     turn_ctx = set_span_in_context(turn_span)
@@ -99,13 +104,16 @@ async def execute_query(
                                     f"{agent_name}/tool.{block.name}",
                                     context=turn_ctx,
                                 )
+                                tool_span.set_attribute("openinference.span.kind", "TOOL")
                                 tool_span.set_attribute("tool.name", block.name)
                                 try:
-                                    tool_span.set_attribute(
-                                        "tool.input", json.dumps(block.input)
-                                    )
+                                    tool_input_json = json.dumps(block.input)
                                 except Exception:
-                                    tool_span.set_attribute("tool.input", str(block.input))
+                                    tool_input_json = str(block.input)
+                                tool_span.set_attribute("tool.input", tool_input_json)
+                                # OpenInference: Phoenix shows input.value in tool span detail
+                                tool_span.set_attribute("input.value", tool_input_json)
+                                tool_span.set_attribute("input.mime_type", "application/json")
                                 tool_span.end()
                                 print(f"      turn.{turn_num} [{model_display}]: {block.name}", flush=True)
                             elif isinstance(block, TextBlock):
@@ -121,6 +129,16 @@ async def execute_query(
                         turn_span.end()
 
         run_span.set_attribute("num_turns", turn_num)
+        # Extract final result from ResultMessage (last msg) for output.value
+        try:
+            last = messages[-1] if messages else None
+            if last is not None and hasattr(last, "result") and last.result:
+                run_span.set_attribute("output.value", str(last.result))
+                run_span.set_attribute("output.mime_type", "text/plain")
+            if last is not None and hasattr(last, "total_cost_usd"):
+                run_span.set_attribute("agent.total_cost_usd", float(last.total_cost_usd or 0))
+        except Exception:
+            pass
 
     return messages
 
