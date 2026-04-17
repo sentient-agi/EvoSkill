@@ -44,7 +44,7 @@ async def execute_query(
     """
     from claude_agent_sdk import (
         ClaudeAgentOptions, ClaudeSDKClient,
-        AssistantMessage, ToolUseBlock, TextBlock,
+        AssistantMessage, UserMessage, ToolUseBlock, ToolResultBlock, TextBlock,
     )
     # ThinkingBlock may not exist in older SDKs
     try:
@@ -71,6 +71,8 @@ async def execute_query(
     messages: list[Any] = []
     model_display = getattr(options, "model", None) or "claude"
     turn_num = 0
+    # Map tool_use_id -> span so we can attach results from later UserMessages
+    pending_tool_spans: dict[str, Any] = {}
 
     with _tracer.start_as_current_span(f"agent.run:{agent_name}") as run_span:
         run_span.set_attribute("agent.name", agent_name)
@@ -99,12 +101,22 @@ async def execute_query(
                     turn_span.set_attribute("openinference.span.kind", "CHAIN")
                     turn_span.set_attribute("turn", turn_num)
                     turn_span.set_attribute("model", model_display)
+                    # First turn's input = the original query (so the user can see
+                    # the actual prompt when drilling into turn.1)
+                    if turn_num == 1:
+                        turn_span.set_attribute("input.value", query)
+                        turn_span.set_attribute("input.mime_type", "text/plain")
                     turn_ctx = set_span_in_context(turn_span)
+
+                    # Collect a per-turn output summary (text + tool calls made)
+                    turn_texts: list[str] = []
+                    turn_tool_names: list[str] = []
 
                     try:
                         for block in msg.content:
                             if isinstance(block, ToolUseBlock):
-                                # Tool span nests UNDER the turn span
+                                # Tool span nests UNDER the turn span, stays OPEN until
+                                # the matching ToolResultBlock arrives in a later UserMessage.
                                 tool_span = _tracer.start_span(
                                     f"{agent_name}/tool.{block.name}",
                                     context=turn_ctx,
@@ -116,10 +128,17 @@ async def execute_query(
                                 except Exception:
                                     tool_input_json = str(block.input)
                                 tool_span.set_attribute("tool.input", tool_input_json)
-                                # OpenInference: Phoenix shows input.value in tool span detail
                                 tool_span.set_attribute("input.value", tool_input_json)
                                 tool_span.set_attribute("input.mime_type", "application/json")
-                                tool_span.end()
+
+                                tool_use_id = getattr(block, "id", None) or getattr(block, "tool_use_id", None)
+                                if tool_use_id:
+                                    pending_tool_spans[tool_use_id] = tool_span
+                                else:
+                                    # No id to correlate results — just end the span now
+                                    tool_span.end()
+
+                                turn_tool_names.append(block.name)
                                 print(f"      turn.{turn_num} [{model_display}]: {block.name}", flush=True)
                             elif isinstance(block, TextBlock):
                                 text = (block.text or "").strip()
@@ -128,8 +147,8 @@ async def execute_query(
                                         f"      turn.{turn_num} [{model_display}]: {_preview(text, 80)}",
                                         flush=True,
                                     )
-                                    # Full text for Phoenix; terminal print is short preview
                                     turn_span.set_attribute("text", text)
+                                    turn_texts.append(text)
                             elif ThinkingBlock is not None and isinstance(block, ThinkingBlock):
                                 thinking = (getattr(block, "thinking", "") or "").strip()
                                 if thinking:
@@ -139,7 +158,6 @@ async def execute_query(
                                     )
                                     turn_span.set_attribute("thinking", thinking)
                             else:
-                                # Unknown block type — log what we can for debugging
                                 block_type = type(block).__name__
                                 turn_span.set_attribute(
                                     f"unknown_block.{block_type}", str(block)[:1000]
@@ -148,8 +166,48 @@ async def execute_query(
                                     f"      turn.{turn_num} [{model_display}] ({block_type})",
                                     flush=True,
                                 )
+
+                        # Compose turn output (what the model produced in this turn)
+                        output_parts = []
+                        if turn_texts:
+                            output_parts.append("\n\n".join(turn_texts))
+                        if turn_tool_names:
+                            output_parts.append("tool_calls: " + ", ".join(turn_tool_names))
+                        if output_parts:
+                            turn_span.set_attribute("output.value", "\n\n".join(output_parts))
+                            turn_span.set_attribute("output.mime_type", "text/plain")
                     finally:
                         turn_span.end()
+
+                # UserMessages contain ToolResultBlocks — attach to matching tool spans
+                elif isinstance(msg, UserMessage):
+                    content = getattr(msg, "content", None) or []
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, ToolResultBlock):
+                                tool_use_id = getattr(block, "tool_use_id", None) or getattr(block, "id", None)
+                                tool_span = pending_tool_spans.pop(tool_use_id, None) if tool_use_id else None
+                                if tool_span is None:
+                                    continue
+                                result_content = getattr(block, "content", "")
+                                if isinstance(result_content, list):
+                                    result_str = "\n".join(
+                                        getattr(c, "text", str(c)) for c in result_content
+                                    )
+                                else:
+                                    result_str = str(result_content) if result_content is not None else ""
+                                tool_span.set_attribute("tool.output", result_str)
+                                tool_span.set_attribute("output.value", result_str)
+                                tool_span.set_attribute("output.mime_type", "text/plain")
+                                is_error = bool(getattr(block, "is_error", False))
+                                tool_span.set_attribute("tool.is_error", is_error)
+                                tool_span.end()
+
+        # Close any tool spans that never received a result (defensive)
+        for _id, _span in list(pending_tool_spans.items()):
+            _span.set_attribute("tool.output", "[no result received]")
+            _span.end()
+        pending_tool_spans.clear()
 
         run_span.set_attribute("num_turns", turn_num)
         # Extract final result from ResultMessage (last msg) for output.value
