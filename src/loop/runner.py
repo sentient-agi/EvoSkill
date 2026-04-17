@@ -338,6 +338,9 @@ class SelfImprovingLoop:
 
             # Collect failures and persist ALL traces to DB for cross-iteration learning
             active_skills_now = self._get_active_skills()
+            # Snapshot skill contents at this iteration so past traces preserve
+            # the exact guidance the solver had (skills evolve across iterations).
+            active_skill_contents = self._snapshot_active_skills(active_skills_now)
             review_tasks: list[dict] = []
             failures: list[tuple[AgentTrace, str, str, str, str]] = []  # (trace, agent_answer, ground_truth, category, question)
             for trace, (question, answer, category) in zip(traces, test_samples):
@@ -363,6 +366,7 @@ class SelfImprovingLoop:
                     score=avg_score,
                     trace_summary=trace_summary,
                     active_skills=active_skills_now,
+                    active_skill_contents=active_skill_contents,
                     num_turns=trace.num_turns,
                     category=category,
                     phase="train",
@@ -854,6 +858,24 @@ and modify it to add these capabilities. Preserve all existing content that is s
                 if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
                     active_skills.append(skill_dir.name)
         return sorted(active_skills)
+
+    def _snapshot_active_skills(self, skill_names: list[str]) -> dict[str, str]:
+        """Read the current content of each active SKILL.md file.
+
+        Captures skill content at trace-save time so that past traces
+        preserve the exact guidance the solver had at that moment, even
+        after the skill has been edited in subsequent iterations.
+        """
+        skills_dir = self._project_root / ".claude" / "skills"
+        snapshots: dict[str, str] = {}
+        for name in skill_names:
+            skill_file = skills_dir / name / "SKILL.md"
+            if skill_file.exists():
+                try:
+                    snapshots[name] = skill_file.read_text()
+                except Exception:
+                    pass  # best-effort
+        return snapshots
 
     def _get_highest_iteration(self) -> int:
         """Find the highest iteration number across all iter-* branches.

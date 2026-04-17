@@ -66,6 +66,7 @@ class TraceDB:
         score: float,
         trace_summary: str,
         active_skills: list[str] | None = None,
+        active_skill_contents: dict[str, str] | None = None,
         num_turns: int = 0,
         category: str = "",
         phase: str = "train",
@@ -75,6 +76,21 @@ class TraceDB:
         trace_filename = f"{iteration}_{q_hash}.md"
         trace_file = self._traces_dir / trace_filename
         skills_list = active_skills or []
+        skill_contents = active_skill_contents or {}
+
+        # Embed the skill content AS IT WAS at this iteration, so a future
+        # evolver reading this trace has the exact context the solver had.
+        # Skills evolve across iterations — "what was the agent guided by?"
+        # cannot be answered from the current disk state.
+        skill_snapshot_section = ""
+        if skill_contents:
+            parts = ["## Active Skill Snapshots (exact content at this iteration)\n"]
+            for name in sorted(skill_contents.keys()):
+                parts.append(f"### Skill: {name}\n")
+                parts.append("```markdown")
+                parts.append(skill_contents[name].rstrip())
+                parts.append("```\n")
+            skill_snapshot_section = "\n".join(parts) + "\n"
 
         file_content = (
             f"# Trace: {iteration}\n\n"
@@ -85,6 +101,7 @@ class TraceDB:
             f"**Turns**: {num_turns}\n"
             f"**Active Skills**: {', '.join(skills_list) or 'none'}\n"
             f"**Category**: {category}\n\n"
+            f"{skill_snapshot_section}"
             f"## Full Execution Trace\n\n"
             f"{trace_summary}\n"
         )
@@ -137,47 +154,54 @@ class TraceDB:
 
     def generate_index(
         self,
-        failed_questions: list[str] | None = None,
+        failed_questions: list[str] | None = None,  # accepted for backward compat; now unused
+        limit: int = 200,
     ) -> str:
-        """Generate a lightweight markdown index of past traces.
+        """Generate a comprehensive markdown index of ALL past traces.
 
-        The evolver sees this index in its context window and can use
-        the Read tool to examine any specific trace file on demand.
+        Shows every persisted trace (success + failure, across all iterations
+        and questions), grouped by question for readability. Each row
+        references the per-trace .md file — the evolver reads those on
+        demand via the Read tool.
 
-        Args:
-            failed_questions: If provided, prioritize traces for these questions.
-                              Also includes a sample of other traces for cross-question learning.
-                              If None, show all traces.
+        The trace files include the EXACT skill contents that were active
+        at the moment of each trace, so the evolver can reason about
+        "what was the solver guided by at iter-3?" even if skills have
+        since evolved.
         """
-        if failed_questions is not None:
-            rows = []
-            for q in failed_questions:
-                rows.extend(self.query_by_question(q, limit=10))
-            # Also include a sample of other traces for cross-question learning
-            all_rows = self.get_all_traces(limit=50)
-            other_qs = set(failed_questions)
-            other_traces = [r for r in all_rows if r["question"] not in other_qs][:5]
-            rows.extend(other_traces)
-        else:
-            rows = self.get_all_traces(limit=50)
-
+        rows = self.get_all_traces(limit=limit)
         if not rows:
             return ""
 
-        # Group by question for readability
+        # Sort: group by question, then chronological (iter number ascending)
+        def iter_sort_key(r):
+            iter_name = r.get("iteration", "")
+            # "iter-skill-3" -> 3, "iter-3" -> 3, "iter-1" -> 1
+            parts = iter_name.rsplit("-", 1)
+            try:
+                return (r["question"], int(parts[-1]))
+            except (ValueError, KeyError):
+                return (r["question"], 0)
+
+        rows_sorted = sorted(rows, key=iter_sort_key)
+
         by_question: dict[str, list[dict]] = {}
-        for row in rows:
+        for row in rows_sorted:
             q_short = row["question"][:80]
             by_question.setdefault(q_short, []).append(row)
 
         lines = [
-            "## Past Traces Index (use Read tool on any file for full turn-by-turn log)\n",
+            "## Past Traces Index — ALL iterations, ALL questions\n",
+            "Each row links to a .md file containing the full turn-by-turn transcript",
+            "AND the exact skill contents that were active at that iteration.",
+            "Use the Read tool on any file below to get the complete context.\n",
+            f"Total traces recorded: **{len(rows)}** across {len(by_question)} questions.\n",
         ]
 
         for q_short, traces in by_question.items():
-            lines.append(f"### {q_short}...")
-            lines.append("| Iteration | Score | Turns | Skills | File |")
-            lines.append("|-----------|-------|-------|--------|------|")
+            lines.append(f"### Question: {q_short}...")
+            lines.append("| Iteration | Score | Turns | Active Skills | File |")
+            lines.append("|-----------|-------|-------|---------------|------|")
             for t in traces:
                 skills = json.loads(t["active_skills"])
                 skills_str = ", ".join(skills) if skills else "—"
