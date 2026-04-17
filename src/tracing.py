@@ -20,6 +20,10 @@ def init_tracing(project_name: str = "evoskill") -> None:
     # Allow Phoenix to capture full base64 images (default 32KB is too small)
     os.environ.setdefault("OPENINFERENCE_BASE64_IMAGE_MAX_LENGTH", "2000000")
     os.environ.setdefault("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "http/protobuf")
+    # Raise the per-attribute size limit so full tool inputs / assistant text
+    # are preserved (default ~12KB truncates long Bash scripts and Read results).
+    os.environ.setdefault("OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT", "1048576")  # 1MB
+    os.environ.setdefault("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "1048576")
 
     try:
         from phoenix.otel import register as phoenix_register

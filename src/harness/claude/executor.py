@@ -100,10 +100,11 @@ async def execute_query(
                                 )
                                 tool_span.set_attribute("tool.name", block.name)
                                 try:
-                                    input_preview = _preview(json.dumps(block.input), 300)
-                                    tool_span.set_attribute("tool.input_preview", input_preview)
+                                    tool_span.set_attribute(
+                                        "tool.input", json.dumps(block.input)
+                                    )
                                 except Exception:
-                                    pass
+                                    tool_span.set_attribute("tool.input", str(block.input))
                                 tool_span.end()
                                 print(f"      turn.{turn_num} [{model_display}]: {block.name}", flush=True)
                             elif isinstance(block, TextBlock):
@@ -113,7 +114,8 @@ async def execute_query(
                                         f"      turn.{turn_num} [{model_display}]: {_preview(text, 80)}",
                                         flush=True,
                                     )
-                                    turn_span.set_attribute("text_preview", _preview(text, 300))
+                                    # Full text for Phoenix; terminal print is short preview
+                                    turn_span.set_attribute("text", text)
                     finally:
                         turn_span.end()
 
