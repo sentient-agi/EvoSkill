@@ -209,9 +209,9 @@ def _fresh_reset(project_root: str | Path) -> None:
             p.unlink()
             print(f"[FRESH] Removed {name}")
 
-    # Wipe individual trace files + current failure snapshots
+    # Wipe trace files + failure snapshots + dedup'd skill snapshots
     import shutil
-    for subdir in ["traces", "current_failures"]:
+    for subdir in ["traces", "current_failures", "skill_snapshots"]:
         d = root / ".cache" / subdir
         if d.exists():
             shutil.rmtree(d)

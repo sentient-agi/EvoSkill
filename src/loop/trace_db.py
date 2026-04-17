@@ -11,6 +11,62 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+def _iter_num(iteration: str) -> int:
+    """Parse the numeric suffix from iteration names like 'iter-3', 'iter-skill-7'."""
+    parts = iteration.rsplit("-", 1)
+    try:
+        return int(parts[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
+def _select_representative_rows(rows: list[dict], max_n: int) -> list[dict]:
+    """Pick up to max_n rows: first, latest, best, worst, biggest jump, then fill gaps.
+
+    Input rows must already be sorted chronologically (ascending).
+    Returns rows in chronological order (for readability in the table).
+    """
+    if len(rows) <= max_n:
+        return list(rows)
+
+    picked: set[int] = {0, len(rows) - 1}  # first + latest
+
+    # Best by score
+    picked.add(max(range(len(rows)), key=lambda i: rows[i]["score"]))
+
+    # Worst score (excluding the first baseline iteration if possible)
+    if len(rows) > 2:
+        picked.add(min(range(1, len(rows)), key=lambda i: rows[i]["score"]))
+    else:
+        picked.add(min(range(len(rows)), key=lambda i: rows[i]["score"]))
+
+    # Biggest absolute score change between consecutive iterations
+    if len(rows) > 1:
+        jumps = [
+            (abs(rows[i]["score"] - rows[i - 1]["score"]), i)
+            for i in range(1, len(rows))
+        ]
+        _, jump_idx = max(jumps)
+        picked.add(jump_idx)
+
+    # Fill any remaining budget by widening gaps
+    while len(picked) < max_n and len(picked) < len(rows):
+        sorted_picked = sorted(picked)
+        # Find the largest gap between consecutive picked indices
+        biggest_gap = 0
+        mid = None
+        for i in range(len(sorted_picked) - 1):
+            gap = sorted_picked[i + 1] - sorted_picked[i]
+            if gap > biggest_gap:
+                biggest_gap = gap
+                mid = (sorted_picked[i] + sorted_picked[i + 1]) // 2
+        if mid is None or mid in picked:
+            break
+        picked.add(mid)
+
+    return [rows[i] for i in sorted(picked)]
+
+
 class TraceDB:
     """Persists solver traces so the evolver can recall past attempts."""
 
@@ -19,10 +75,26 @@ class TraceDB:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._traces_dir = self._path.parent / "traces"
         self._traces_dir.mkdir(parents=True, exist_ok=True)
+        # Skill snapshots are content-addressed — one file per unique (skill, content)
+        self._snapshots_dir = self._path.parent / "skill_snapshots"
+        self._snapshots_dir.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._init_schema()
+
+    def _snapshot_skill(self, skill_name: str, content: str) -> tuple[Path, str]:
+        """Content-addressed skill snapshot — dedup across iterations.
+
+        Returns (snapshot_file_path, short_content_hash). Writes the file
+        only if a snapshot with the same hash doesn't already exist.
+        """
+        content_hash = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()[:10]
+        safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in skill_name)
+        snapshot_file = self._snapshots_dir / f"{safe_name}_{content_hash}.md"
+        if not snapshot_file.exists():
+            snapshot_file.write_text(content)
+        return snapshot_file, content_hash
 
     def _init_schema(self) -> None:
         self._conn.executescript("""
@@ -78,18 +150,22 @@ class TraceDB:
         skills_list = active_skills or []
         skill_contents = active_skill_contents or {}
 
-        # Embed the skill content AS IT WAS at this iteration, so a future
-        # evolver reading this trace has the exact context the solver had.
-        # Skills evolve across iterations — "what was the agent guided by?"
-        # cannot be answered from the current disk state.
+        # Snapshot each skill's content, deduplicated by content hash.
+        # Multiple iterations using the same skill content share one file.
+        # The trace file references the snapshot path — evolver Reads on demand.
         skill_snapshot_section = ""
         if skill_contents:
-            parts = ["## Active Skill Snapshots (exact content at this iteration)\n"]
+            parts = [
+                "## Active Skill Snapshots\n",
+                "Content at this iteration — snapshots are deduplicated by content hash.",
+                "If two iterations reference the same file, the skill was identical between them.\n",
+                "| Skill | Hash | Snapshot file |",
+                "|-------|------|---------------|",
+            ]
             for name in sorted(skill_contents.keys()):
-                parts.append(f"### Skill: {name}\n")
-                parts.append("```markdown")
-                parts.append(skill_contents[name].rstrip())
-                parts.append("```\n")
+                snap_path, content_hash = self._snapshot_skill(name, skill_contents[name])
+                parts.append(f"| {name} | `{content_hash}` | `{snap_path}` |")
+            parts.append("")
             skill_snapshot_section = "\n".join(parts) + "\n"
 
         file_content = (
@@ -154,60 +230,90 @@ class TraceDB:
 
     def generate_index(
         self,
-        failed_questions: list[str] | None = None,  # accepted for backward compat; now unused
-        limit: int = 200,
+        failed_questions: list[str] | None = None,  # accepted for backward compat; unused
+        limit: int = 500,
+        per_question_cap: int = 5,
     ) -> str:
-        """Generate a comprehensive markdown index of ALL past traces.
+        """Compact index of past traces with trajectory + priority selection.
 
-        Shows every persisted trace (success + failure, across all iterations
-        and questions), grouped by question for readability. Each row
-        references the per-trace .md file — the evolver reads those on
-        demand via the Read tool.
+        For each question:
+          - One-line score trajectory (all iterations, most compact signal)
+          - A table of AT MOST `per_question_cap` representative rows
+            selected by priority: first, latest, best, worst, biggest jump
+          - Each row references the per-trace .md file (Read on demand)
 
-        The trace files include the EXACT skill contents that were active
-        at the moment of each trace, so the evolver can reason about
-        "what was the solver guided by at iter-3?" even if skills have
-        since evolved.
+        Trace files contain the full transcript AND reference-by-path the
+        exact skill snapshots active at that iteration.
+
+        Args:
+            limit: Max total traces to pull from DB.
+            per_question_cap: Max rows shown per question (others summarized
+                in the trajectory line).
         """
         rows = self.get_all_traces(limit=limit)
         if not rows:
             return ""
 
-        # Sort: group by question, then chronological (iter number ascending)
-        def iter_sort_key(r):
-            iter_name = r.get("iteration", "")
-            # "iter-skill-3" -> 3, "iter-3" -> 3, "iter-1" -> 1
-            parts = iter_name.rsplit("-", 1)
-            try:
-                return (r["question"], int(parts[-1]))
-            except (ValueError, KeyError):
-                return (r["question"], 0)
-
-        rows_sorted = sorted(rows, key=iter_sort_key)
-
         by_question: dict[str, list[dict]] = {}
-        for row in rows_sorted:
-            q_short = row["question"][:80]
-            by_question.setdefault(q_short, []).append(row)
+        for row in rows:
+            by_question.setdefault(row["question"], []).append(row)
+
+        # Sort each question's rows chronologically (by iter number)
+        for q in by_question:
+            by_question[q].sort(key=lambda r: _iter_num(r["iteration"]))
 
         lines = [
             "## Past Traces Index — ALL iterations, ALL questions\n",
-            "Each row links to a .md file containing the full turn-by-turn transcript",
-            "AND the exact skill contents that were active at that iteration.",
-            "Use the Read tool on any file below to get the complete context.\n",
-            f"Total traces recorded: **{len(rows)}** across {len(by_question)} questions.\n",
+            "Each question shows its score trajectory plus a few representative iterations.",
+            "Each trace file contains the full turn-by-turn transcript AND references to",
+            "the exact skill snapshots active at that iteration (Read the trace file, then",
+            "follow the snapshot paths to see skill content as of that moment).\n",
+            f"Total traces recorded: **{len(rows)}** across {len(by_question)} questions.",
+            f"Per-question row cap: {per_question_cap} (trajectory line shows all iterations).\n",
         ]
 
-        for q_short, traces in by_question.items():
+        for question, q_rows in by_question.items():
+            q_short = question[:80]
             lines.append(f"### Question: {q_short}...")
-            lines.append("| Iteration | Score | Turns | Active Skills | File |")
-            lines.append("|-----------|-------|-------|---------------|------|")
-            for t in traces:
-                skills = json.loads(t["active_skills"])
+
+            # B. Trajectory line — one-line summary of ALL iterations for this question
+            traj_parts = [f"{r['iteration']}:{r['score']:.2f}" for r in q_rows]
+            best_row = max(q_rows, key=lambda r: r["score"])
+            lines.append(
+                f"**Trajectory** ({len(q_rows)} iter{'s' if len(q_rows) != 1 else ''}): "
+                + " → ".join(traj_parts)
+                + f"  — best: {best_row['iteration']} @ {best_row['score']:.2f}"
+            )
+            lines.append("")
+
+            # A. Priority selection — pick representative rows if above cap
+            selected = (
+                q_rows
+                if len(q_rows) <= per_question_cap
+                else _select_representative_rows(q_rows, per_question_cap)
+            )
+
+            # Table with Δ (delta vs previous iteration in the FULL list)
+            lines.append("| Iteration | Score | Δ | Turns | Active Skills | File |")
+            lines.append("|-----------|-------|---|-------|---------------|------|")
+            idx_in_full = {r["iteration"]: i for i, r in enumerate(q_rows)}
+            for r in selected:
+                i = idx_in_full.get(r["iteration"], 0)
+                if i > 0:
+                    d = r["score"] - q_rows[i - 1]["score"]
+                    delta = f"{d:+.2f}"
+                else:
+                    delta = "—"
+                skills = json.loads(r["active_skills"])
                 skills_str = ", ".join(skills) if skills else "—"
                 lines.append(
-                    f"| {t['iteration']} | {t['score']:.2f} | {t['num_turns']} "
-                    f"| {skills_str} | `{t['trace_file']}` |"
+                    f"| {r['iteration']} | {r['score']:.2f} | {delta} | {r['num_turns']} "
+                    f"| {skills_str} | `{r['trace_file']}` |"
+                )
+            if len(q_rows) > per_question_cap:
+                lines.append(
+                    f"\n_Showing {len(selected)}/{len(q_rows)} iterations "
+                    f"(first/last/best/worst/biggest-jump). Trajectory above covers all._"
                 )
             lines.append("")
 
