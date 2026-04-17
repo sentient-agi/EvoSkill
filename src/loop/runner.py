@@ -556,8 +556,8 @@ class SelfImprovingLoop:
                 continue  # Timeout/error/parse failed = 0 score
             score += self.scorer(
                 result.question,
-                result.trace.output.final_answer,
-                result.ground_truth,
+                str(result.trace.output.final_answer),
+                str(result.ground_truth),
             )
         return score / len(results)
 

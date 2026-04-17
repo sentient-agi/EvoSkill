@@ -209,12 +209,13 @@ def _fresh_reset(project_root: str | Path) -> None:
             p.unlink()
             print(f"[FRESH] Removed {name}")
 
-    # Wipe individual trace files (kept separate from DB deletion)
-    traces_dir = root / ".cache" / "traces"
-    if traces_dir.exists():
-        import shutil
-        shutil.rmtree(traces_dir)
-        print(f"[FRESH] Removed .cache/traces/")
+    # Wipe individual trace files + current failure snapshots
+    import shutil
+    for subdir in ["traces", "current_failures"]:
+        d = root / ".cache" / subdir
+        if d.exists():
+            shutil.rmtree(d)
+            print(f"[FRESH] Removed .cache/{subdir}/")
 
 
 async def main(settings: LoopSettings):

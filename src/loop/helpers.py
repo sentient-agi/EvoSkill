@@ -70,27 +70,65 @@ def build_proposer_query(
     categories = [cat for _, _, _, cat, _ in traces_with_answers]
     category_summary = ", ".join(sorted(set(categories)))
 
-    # Build failure summaries with truncation-level-aware settings
+    # Write current failures to files AND present a compact inline index.
+    # Each failure gets:
+    #   - A short "tool call skeleton" inline (tool names only, no thinking, no results)
+    #   - A reference to the full transcript file (Read on demand)
+    #
+    # This keeps the query small regardless of trace size / failure count.
+    failure_dir = None
+    if project_root:
+        failure_dir = Path(project_root) / ".cache" / "current_failures"
+        failure_dir.mkdir(parents=True, exist_ok=True)
+
     failure_sections = []
-    for i, (trace, agent_answer, ground_truth, category, _question) in enumerate(traces_with_answers, 1):
-        # For prompt mode, use more aggressive truncation to focus on patterns
-        # For skill mode, keep full trace to see tool usage (but respect truncation level)
-        if evolution_mode == "prompt_only":
-            # Prompt mode uses tighter truncation even at level 0
-            effective_head = min(head_chars, 20_000)
-            effective_tail = min(tail_chars, 10_000)
-        else:
-            effective_head = head_chars
-            effective_tail = tail_chars
+    for i, (trace, agent_answer, ground_truth, category, question) in enumerate(traces_with_answers, 1):
+        # Build compact skeleton: just tool names in turn order (no thinking, no tool results).
+        skeleton_lines = []
+        try:
+            from src.harness.agent import _render_turn_transcript  # reuse for block parsing
+        except ImportError:
+            _render_turn_transcript = None
+        try:
+            # Lightweight pass: scan messages for ToolUseBlocks in order
+            from claude_agent_sdk import AssistantMessage, ToolUseBlock
+            turn_n = 0
+            for msg in getattr(trace, "messages", []) or []:
+                if not isinstance(msg, AssistantMessage):
+                    continue
+                turn_n += 1
+                tool_names = [getattr(b, "name", "?") for b in getattr(msg, "content", []) or [] if isinstance(b, ToolUseBlock)]
+                if tool_names:
+                    skeleton_lines.append(f"  T{turn_n}: {' → '.join(tool_names)}")
+        except Exception:
+            pass
+        skeleton = "\n".join(skeleton_lines) or "  (no tool calls captured)"
 
-        trace_summary = trace.summarize(head_chars=effective_head, tail_chars=effective_tail)
+        # Write the full transcript to a file the evolver can Read on demand
+        full_path_ref = "(full trace file not written — project_root not provided)"
+        if failure_dir is not None:
+            q_hash = abs(hash(question)) % (10 ** 8)
+            fail_file = failure_dir / f"failure-{i}_{q_hash}.md"
+            full = trace.summarize(head_chars=head_chars, tail_chars=tail_chars)
+            fail_file.write_text(
+                f"# Current Failure #{i}\n\n"
+                f"**Question**: {question}\n"
+                f"**Category**: {category}\n"
+                f"**Agent Answer**: {agent_answer}\n"
+                f"**Ground Truth**: {ground_truth}\n\n"
+                f"## Full Transcript\n\n{full}\n"
+            )
+            full_path_ref = str(fail_file)
 
-        failure_sections.append(f"""### Failure {i} [Category: {category}]
-{trace_summary}
-
-Agent Answer: {agent_answer}
-Ground Truth: {ground_truth}
-""")
+        failure_sections.append(
+            f"### Failure {i} [Category: {category}]\n"
+            f"**Question**: {question[:300]}\n"
+            f"**Agent Answer**: {agent_answer[:200]}\n"
+            f"**Ground Truth**: {str(ground_truth)[:200]}\n\n"
+            f"**Tool call skeleton** (Read the full trace file for thinking, text, tool I/O):\n"
+            f"{skeleton}\n\n"
+            f"**Full trace**: `{full_path_ref}`\n"
+        )
 
     failures_text = "\n".join(failure_sections)
 
@@ -125,13 +163,17 @@ Analyze the patterns across these failures to identify a GENERAL improvement, no
 {failures_text}
 
 ## Your Task
-1. Check PAST TRACES INDEX above — use the Read tool on any trace file to see the full turn-by-turn log from a previous iteration
-2. Check if any EXISTING skill should have handled these failures
-3. If yes → propose EDITING that skill (action="edit", target_skill="skill-name")
-4. If no → propose a NEW skill (action="create")
-5. Compare how the solver's approach changed across iterations by reading specific trace files
+1. For each failure above, decide if the tool-call skeleton is enough signal. If you need to see thinking, text output, or full tool I/O, Read the `Full trace` file for that failure.
+2. Check PAST TRACES INDEX — use Read on any past trace file to see how earlier iterations approached the same question.
+3. Check if any EXISTING skill should have handled these failures.
+4. If yes → propose EDITING that skill (action="edit", target_skill="skill-name")
+5. If no → propose a NEW skill (action="create")
 6. Reference any related DISCARDED iterations and explain how your proposal differs
-7. Identify what COMMON pattern or capability gap caused these failures across categories"""
+7. Identify what COMMON pattern or capability gap caused these failures across categories
+
+Do NOT create or edit skills that are duplicative of existing ones. Prefer editing over creating when possible.
+
+Always prefer the `Write` tool for creating new skill files (it auto-creates parent directories). Do NOT use `Bash mkdir` — it will be denied."""
 
 
 def build_skill_query(proposer_trace: "AgentTrace[ProposerResponse]") -> str:
