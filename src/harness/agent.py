@@ -11,6 +11,7 @@ SDK-specific logic lives in:
 """
 
 import asyncio
+import json
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Type, TypeVar, Union
 from pydantic import BaseModel
@@ -80,14 +81,18 @@ class AgentTrace(BaseModel, Generic[T]):
         self,
         head_chars: int = 60_000,
         tail_chars: int = 60_000,
+        tool_result_max_chars: int = 4_000,
     ) -> str:
-        """Create a text summary of this trace for passing to downstream agents.
+        """Create a turn-by-turn transcript for passing to downstream agents.
 
-        The proposer agent reads these summaries to understand what went wrong.
+        Walks through self.messages and renders every block type per turn:
+            - ThinkingBlock   -> "(thinking): ..."
+            - TextBlock       -> "text: ..."
+            - ToolUseBlock    -> "(tool.<name>): <json>"
+            - ToolResultBlock -> "(tool.result): <content>" (correlated by id)
 
-        On success: returns full trace (the proposer needs all the details).
-        On failure (parse_error): truncates to head + tail to avoid blowing up
-        the proposer's context window with a massive failed response.
+        Fallback to the final ResultMessage.result when messages are empty
+        or the SDK block types can't be imported.
         """
         lines = [
             f"Model: {self.model}",
@@ -95,26 +100,101 @@ class AgentTrace(BaseModel, Generic[T]):
             f"Duration: {self.duration_ms}ms",
             f"Is Error: {self.is_error}",
         ]
-
         if self.parse_error:
             lines.append(f"Parse Error: {self.parse_error}")
-
         if self.output:
             lines.append(f"Output: {self.output}")
 
-        result_str = str(self.result) if self.result else ""
+        transcript = _render_turn_transcript(self.messages, tool_result_max_chars)
 
-        # Only truncate on failure — successful traces are usually small enough
-        if self.parse_error and len(result_str) > (head_chars + tail_chars):
-            truncated_middle = len(result_str) - head_chars - tail_chars
-            lines.append(f"\n## Result (truncated, {truncated_middle:,} chars omitted)")
-            lines.append(f"### Start:\n{result_str[:head_chars]}")
-            lines.append(f"\n[... {truncated_middle:,} characters truncated ...]\n")
-            lines.append(f"### End:\n{result_str[-tail_chars:]}")
+        if transcript:
+            lines.append("\n## Turn-by-turn transcript\n")
+            lines.append(transcript)
         else:
-            lines.append(f"\n## Full Result\n{result_str}")
+            result_str = str(self.result) if self.result else ""
+            if self.parse_error and len(result_str) > (head_chars + tail_chars):
+                truncated_middle = len(result_str) - head_chars - tail_chars
+                lines.append(f"\n## Result (truncated, {truncated_middle:,} chars omitted)")
+                lines.append(f"### Start:\n{result_str[:head_chars]}")
+                lines.append(f"\n[... {truncated_middle:,} characters truncated ...]\n")
+                lines.append(f"### End:\n{result_str[-tail_chars:]}")
+            else:
+                lines.append(f"\n## Full Result\n{result_str}")
 
         return "\n".join(lines)
+
+
+def _render_turn_transcript(messages: list[Any], tool_result_max_chars: int) -> str:
+    """Render messages as a turn-by-turn transcript. Returns '' on failure."""
+    try:
+        from claude_agent_sdk import (
+            AssistantMessage, UserMessage, ToolUseBlock, ToolResultBlock, TextBlock,
+        )
+        try:
+            from claude_agent_sdk import ThinkingBlock
+        except ImportError:
+            ThinkingBlock = None
+    except ImportError:
+        return ""
+
+    if not messages:
+        return ""
+
+    # First pass: collect tool results keyed by tool_use_id for inline correlation
+    tool_results: dict[str, str] = {}
+    for msg in messages:
+        if isinstance(msg, UserMessage):
+            content = getattr(msg, "content", None) or []
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, ToolResultBlock):
+                    continue
+                tool_use_id = getattr(block, "tool_use_id", None) or getattr(block, "id", None)
+                if not tool_use_id:
+                    continue
+                raw = getattr(block, "content", "")
+                if isinstance(raw, list):
+                    text = "\n".join(getattr(c, "text", str(c)) for c in raw)
+                else:
+                    text = str(raw) if raw is not None else ""
+                if len(text) > tool_result_max_chars:
+                    text = text[:tool_result_max_chars] + f"\n...[truncated, {len(text) - tool_result_max_chars:,} chars]"
+                is_error = getattr(block, "is_error", False)
+                marker = "[ERROR] " if is_error else ""
+                tool_results[str(tool_use_id)] = f"{marker}{text}"
+
+    # Second pass: render each AssistantMessage as a turn
+    out_lines: list[str] = []
+    turn_num = 0
+    for msg in messages:
+        if not isinstance(msg, AssistantMessage):
+            continue
+        turn_num += 1
+        out_lines.append(f"\n--- Turn {turn_num} ---")
+        for block in getattr(msg, "content", []) or []:
+            if ThinkingBlock is not None and isinstance(block, ThinkingBlock):
+                text = (getattr(block, "thinking", "") or "").strip()
+                if text:
+                    out_lines.append(f"(thinking): {text}")
+            elif isinstance(block, TextBlock):
+                text = (getattr(block, "text", "") or "").strip()
+                if text:
+                    out_lines.append(f"text: {text}")
+            elif isinstance(block, ToolUseBlock):
+                name = getattr(block, "name", "?")
+                try:
+                    inp = json.dumps(getattr(block, "input", None), default=str, ensure_ascii=False)
+                except Exception:
+                    inp = str(getattr(block, "input", None))
+                out_lines.append(f"(tool.{name}): {inp}")
+                tool_use_id = getattr(block, "id", None) or getattr(block, "tool_use_id", None)
+                if tool_use_id and str(tool_use_id) in tool_results:
+                    out_lines.append(f"(tool.result): {tool_results[str(tool_use_id)]}")
+            else:
+                out_lines.append(f"({type(block).__name__}): {str(block)[:500]}")
+
+    return "\n".join(out_lines).strip()
 
 
 class Agent(Generic[T]):
