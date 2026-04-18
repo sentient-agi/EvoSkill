@@ -526,76 +526,108 @@ class TestClaudeParseResponse:
 # OpenCode executor — parse_response
 # ===========================================================================
 
-def _make_opencode_message(info=None, parts=None, session_id="sess-456"):
-    return types.SimpleNamespace(
-        info=info,
-        parts=parts or [],
-        session_id=session_id,
-    )
+def _make_opencode_payload(info=None, parts=None, session_id="sess-456", cost=0.0, tokens=None):
+    """Build the response dict matching the httpx-based executor format."""
+    assistant_info = {"role": "assistant"}
+    if isinstance(info, dict):
+        assistant_info.update(info)
+    if "structured_output" in assistant_info and "structured" not in assistant_info:
+        assistant_info["structured"] = assistant_info.pop("structured_output")
+    if cost:
+        assistant_info["cost"] = cost
+    if tokens:
+        assistant_info["tokens"] = tokens
+
+    raw_parts = []
+    for p in (parts or []):
+        if isinstance(p, dict):
+            raw_parts.append(p)
+        else:
+            d = {"type": getattr(p, "type", "text")}
+            if hasattr(p, "text"):
+                d["text"] = p.text
+            if hasattr(p, "id"):
+                d["id"] = p.id
+            raw_parts.append(d)
+
+    return {
+        "session_id": session_id,
+        "chat_info": assistant_info,
+        "messages": [{"info": assistant_info, "parts": raw_parts}],
+    }
 
 
-def _make_opencode_get_options(model_id="claude-sonnet-4-6", tools=None):
+def _make_opencode_get_options(provider_id="anthropic", model_id="claude-sonnet-4-6", tools=None):
     return lambda: {
+        "provider_id": provider_id,
         "model_id": model_id,
+        "model": f"{provider_id}/{model_id}",
         "tools": tools or {"read": True, "bash": True},
     }
 
 
 class TestOpencodeParseResponse:
     def test_parses_structured_output_from_info(self):
-        msg = _make_opencode_message(
+        payload = _make_opencode_payload(
             info={"structured_output": {"final_answer": "4", "reasoning": "math"}, "cost": 0.05, "tokens": {}}
         )
-        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        fields = opencode_parse([payload], AgentResponse, _make_opencode_get_options())
         assert fields["output"] is not None
         assert fields["output"].final_answer == "4"
         assert fields["parse_error"] is None
 
-    def test_extracts_cost_from_info(self):
-        msg = _make_opencode_message(
-            info={"structured_output": {"final_answer": "4", "reasoning": "math"}, "cost": 0.123, "tokens": {"input": 10}}
+    def test_extracts_cost(self):
+        payload = _make_opencode_payload(
+            info={"structured_output": {"final_answer": "4", "reasoning": "math"}, "cost": 0.123, "tokens": {"input": 10}},
+            cost=0.123, tokens={"input": 10},
         )
-        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        fields = opencode_parse([payload], AgentResponse, _make_opencode_get_options())
         assert fields["total_cost_usd"] == 0.123
         assert fields["usage"] == {"input": 10}
 
     def test_handles_missing_structured_output(self):
-        msg = _make_opencode_message(info={"cost": 0.01, "tokens": {}})
-        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        payload = _make_opencode_payload(info={"cost": 0.01, "tokens": {}})
+        fields = opencode_parse([payload], AgentResponse, _make_opencode_get_options())
         assert fields["output"] is None
         assert fields["parse_error"] is not None
 
     def test_handles_missing_info(self):
-        msg = types.SimpleNamespace(parts=[], session_id="sess-456")
-        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        payload = _make_opencode_payload(info=None)
+        fields = opencode_parse([payload], AgentResponse, _make_opencode_get_options())
         assert fields["output"] is None
         assert fields["parse_error"] is not None
 
     def test_handles_invalid_structured_output(self):
-        msg = _make_opencode_message(
+        payload = _make_opencode_payload(
             info={"structured_output": {"wrong": "fields"}, "cost": 0, "tokens": {}}
         )
-        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        fields = opencode_parse([payload], AgentResponse, _make_opencode_get_options())
         assert fields["output"] is None
         assert "ValidationError" in fields["parse_error"]
 
+    def test_invalid_structured_output_falls_back_to_text_json(self):
+        payload = _make_opencode_payload(
+            info={"structured_output": {"wrong": "fields"}, "cost": 0, "tokens": {}},
+            parts=[{"type": "text", "text": '{"final_answer": "9", "reasoning": "fallback"}'}],
+        )
+        fields = opencode_parse([payload], AgentResponse, _make_opencode_get_options())
+        assert fields["output"] is not None
+        assert fields["output"].final_answer == "9"
+        assert fields["parse_error"] is None
+
     def test_complex_schema(self):
         data = {
-            "action": "edit",
-            "target_skill": "math-helper",
-            "proposed_skill": "improved calculator",
-            "justification": "needs fixing",
+            "action": "edit", "target_skill": "math-helper",
+            "proposed_skill": "improved calculator", "justification": "needs fixing",
             "related_iterations": [],
         }
-        msg = _make_opencode_message(
-            info={"structured_output": data, "cost": 0.05, "tokens": {}}
-        )
-        fields = opencode_parse([msg], SkillProposerResponse, _make_opencode_get_options())
+        payload = _make_opencode_payload(info={"structured_output": data, "cost": 0.05, "tokens": {}})
+        fields = opencode_parse([payload], SkillProposerResponse, _make_opencode_get_options())
         assert fields["output"].action == "edit"
         assert fields["output"].target_skill == "math-helper"
 
     def test_extracts_text_from_parts(self):
-        msg = _make_opencode_message(
+        payload = _make_opencode_payload(
             info={"structured_output": {"final_answer": "4", "reasoning": "math"}, "cost": 0, "tokens": {}},
             parts=[
                 {"type": "step-start", "id": "1"},
@@ -604,23 +636,42 @@ class TestOpencodeParseResponse:
                 {"type": "step-finish", "id": "2"},
             ],
         )
-        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        fields = opencode_parse([payload], AgentResponse, _make_opencode_get_options())
         assert fields["result"] == "hello world"
 
     def test_structured_key_fallback(self):
-        msg = _make_opencode_message(
+        payload = _make_opencode_payload(
             info={"structured": {"final_answer": "4", "reasoning": "math"}, "cost": 0, "tokens": {}}
         )
-        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options())
+        fields = opencode_parse([payload], AgentResponse, _make_opencode_get_options())
         assert fields["output"] is not None
         assert fields["output"].final_answer == "4"
 
     def test_model_from_options(self):
-        msg = _make_opencode_message(
+        payload = _make_opencode_payload(
             info={"structured_output": {"final_answer": "4", "reasoning": "math"}, "cost": 0, "tokens": {}}
         )
-        fields = opencode_parse([msg], AgentResponse, _make_opencode_get_options(model_id="opus"))
-        assert fields["model"] == "opus"
+        fields = opencode_parse([payload], AgentResponse, _make_opencode_get_options(model_id="opus"))
+        assert fields["model"] == "anthropic/opus"
+
+    def test_text_fallback_when_no_structured_output(self):
+        payload = _make_opencode_payload(
+            info={"cost": 0, "tokens": {}},
+            parts=[{"type": "text", "text": '{"final_answer": "42", "reasoning": "the answer"}'}],
+        )
+        fields = opencode_parse([payload], AgentResponse, _make_opencode_get_options())
+        assert fields["output"] is not None
+        assert fields["output"].final_answer == "42"
+        assert fields["parse_error"] is None
+
+    def test_text_fallback_strips_code_fences(self):
+        payload = _make_opencode_payload(
+            info={"cost": 0, "tokens": {}},
+            parts=[{"type": "text", "text": '```json\n{"final_answer": "7", "reasoning": "logic"}\n```'}],
+        )
+        fields = opencode_parse([payload], AgentResponse, _make_opencode_get_options())
+        assert fields["output"] is not None
+        assert fields["output"].final_answer == "7"
 
 
 # ===========================================================================
