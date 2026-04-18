@@ -41,7 +41,7 @@ def _score_multi_tolerance(question: str, predicted: str, ground_truth: str) -> 
     weight_total = 0.0
     for tol in TOLERANCE_LEVELS:
         weight = 1.0 / (1.0 + 20.0 * tol)
-        score = score_answer(predicted, ground_truth, tol)
+        score = score_answer(ground_truth, predicted, tol)
         weighted_sum += weight * score
         weight_total += weight
     return weighted_sum / weight_total
@@ -437,7 +437,7 @@ class SelfImprovingLoop:
         _log("", f"  -> Base score: {base_score:.4f}")
         _log("", f"  -> Frontier: {self.manager.get_frontier()}")
         _log("COST", f"Base eval cost: ${self._iter_cost:.4f} | Total: ${self._total_cost:.4f}")
-        self._emit("baseline", score=base_score)
+        self._emit("baseline", score=base_score, n_skills=len(self._get_active_skills()))
 
     async def _evaluate(self, data: list[tuple[str, str, str]]) -> float:
         """Evaluate base agent on data.

@@ -93,10 +93,10 @@ class LoopDisplay:
         if event == "baseline":
             self.baseline_score = data["score"]
             self.rows.append({
-                "iter": 1,
+                "iter": 0,
                 "score": data["score"],
                 "delta": None,
-                "n_skills": 0,
+                "n_skills": data.get("n_skills", 0),
                 "frontier_ids": [1],
                 "status": "baseline",
             })
