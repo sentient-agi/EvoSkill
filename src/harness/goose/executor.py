@@ -120,7 +120,13 @@ async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
             cwd=options.get("working_directory", "."),
             env=env,
         )
-        stdout_bytes, stderr_bytes = await proc.communicate()
+        try:
+            stdout_bytes, stderr_bytes = await proc.communicate()
+        except (asyncio.CancelledError, Exception):
+            # Kill the subprocess if we're cancelled (timeout) or error
+            proc.kill()
+            await proc.wait()
+            raise
 
         return [SimpleNamespace(
             stdout=stdout_bytes.decode("utf-8", errors="replace"),
