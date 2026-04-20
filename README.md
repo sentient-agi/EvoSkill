@@ -144,6 +144,16 @@ uv sync
 pip install -e .
 ```
 
+**Agent CLI (install whichever harness you plan to use):**
+
+```bash
+brew install --cask claude-code    # Claude Code
+brew install opencode              # OpenCode (v1.4.0+)
+brew install --cask codex          # Codex CLI
+brew install block-goose-cli       # Goose (v1.25.0+)
+# OpenHands requires Docker Desktop: https://www.docker.com/products/docker-desktop/
+```
+
 **Common auth setup:**
 
 ```bash
