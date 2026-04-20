@@ -11,6 +11,7 @@ SDK-specific logic lives in:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Type, TypeVar, Union
@@ -164,9 +165,15 @@ def _render_turn_transcript(messages: list[Any], tool_result_max_chars: int) -> 
                 marker = "[ERROR] " if is_error else ""
                 tool_results[str(tool_use_id)] = f"{marker}{text}"
 
-    # Second pass: render each AssistantMessage as a turn
+    # Second pass: render each AssistantMessage as a turn.
+    # Dedup repeat tool results: on first occurrence store content and note
+    # the turn number; on subsequent occurrences replace with a backreference
+    # so the transcript doesn't balloon when the solver re-reads the same
+    # file multiple times.
     out_lines: list[str] = []
     turn_num = 0
+    # Map content-digest -> (first_turn_num, first_tool_name, char_count)
+    seen_results: dict[str, tuple[int, str, int]] = {}
     for msg in messages:
         if not isinstance(msg, AssistantMessage):
             continue
@@ -190,7 +197,23 @@ def _render_turn_transcript(messages: list[Any], tool_result_max_chars: int) -> 
                 out_lines.append(f"(tool.{name}): {inp}")
                 tool_use_id = getattr(block, "id", None) or getattr(block, "tool_use_id", None)
                 if tool_use_id and str(tool_use_id) in tool_results:
-                    out_lines.append(f"(tool.result): {tool_results[str(tool_use_id)]}")
+                    result_text = tool_results[str(tool_use_id)]
+                    # Only dedup non-trivial results — tiny responses aren't worth
+                    # the indirection, and we don't want to dedup empty strings.
+                    if len(result_text) >= 120:
+                        digest = hashlib.sha256(
+                            result_text.encode("utf-8", errors="replace")
+                        ).hexdigest()[:16]
+                        prior = seen_results.get(digest)
+                        if prior is not None:
+                            prior_turn, prior_name, prior_len = prior
+                            out_lines.append(
+                                f"(tool.result): [identical to turn {prior_turn}'s "
+                                f"{prior_name} result — {prior_len:,} chars omitted]"
+                            )
+                            continue
+                        seen_results[digest] = (turn_num, name, len(result_text))
+                    out_lines.append(f"(tool.result): {result_text}")
             else:
                 out_lines.append(f"({type(block).__name__}): {str(block)[:500]}")
 
