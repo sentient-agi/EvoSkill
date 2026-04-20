@@ -306,7 +306,7 @@ class SelfImprovingLoop:
             failures: list[tuple[AgentTrace, str, str, str]] = []  # (trace, agent_answer, ground_truth, category)
             for trace, (question, answer, category) in zip(traces, test_samples):
                 agent_answer = (
-                    trace.output.final_answer if trace.output else "[PARSE FAILED]"
+                    trace.output.final_answer if trace.output and trace.output.final_answer else "[PARSE FAILED]"
                 )
                 avg_score = self.scorer(
                     question,
