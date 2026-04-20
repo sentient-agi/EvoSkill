@@ -46,7 +46,10 @@ def ensure_skill_frontmatter(
     match = _FRONTMATTER_RE.match(original_text)
     if match:
         body = original_text[match.end() :].lstrip("\n")
-        parsed = yaml.safe_load(match.group(1)) or {}
+        try:
+            parsed = yaml.safe_load(match.group(1)) or {}
+        except yaml.YAMLError:
+            parsed = {}
         if isinstance(parsed, dict):
             metadata = {str(key): str(value) for key, value in parsed.items()}
 
