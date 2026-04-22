@@ -135,6 +135,38 @@ def _render_config(config: dict) -> str:
         '[scorer]',
     ])
     _append_toml_field(lines, 'Scoring rule used to compare predictions against ground truth.', 'type', config['scorer']['type'])
+
+    if 'remote' in config and config['remote']:
+        rc = config['remote']
+        lines.extend(['', '', '[remote]'])
+        _append_toml_field(lines, 'Remote execution backend.', 'target', rc['target'])
+
+        if 'daytona' in rc:
+            dc = rc['daytona']
+            lines.extend(['', '[remote.daytona]'])
+            _append_toml_field(lines, 'Daytona API key. Can also use DAYTONA_API_KEY env var.', 'api_key', dc['api_key'])
+            lines.append('')
+            _append_toml_field(lines, 'Base Docker image for the sandbox.', 'image', dc['image'])
+            lines.append('')
+            _append_toml_field(lines, 'vCPUs allocated to the sandbox.', 'cpu', dc['cpu'])
+            lines.append('')
+            _append_toml_field(lines, 'Memory in GB allocated to the sandbox.', 'memory', dc['memory'])
+            lines.append('')
+            _append_toml_field(lines, 'Disk in GB allocated to the sandbox.', 'disk', dc['disk'])
+            lines.append('')
+            _append_toml_field(lines, 'Auto-stop timeout in minutes. 0 = never auto-stop.', 'timeout', dc['timeout'])
+
+        if 'download' in rc:
+            dl = rc['download']
+            lines.extend(['', '[remote.download]'])
+            _append_toml_field(lines, 'Download all program branches, not just the best.', 'all_branches', dl['all_branches'])
+            lines.append('')
+            _append_toml_field(lines, 'Download evaluation cache to avoid re-running locally.', 'cache', dl['cache'])
+            lines.append('')
+            _append_toml_field(lines, 'Download run reports.', 'reports', dl['reports'])
+            lines.append('')
+            _append_toml_field(lines, 'Download feedback history for local continuation.', 'feedback_history', dl['feedback_history'])
+
     return '\n'.join(lines) + '\n'
 
 
@@ -153,6 +185,9 @@ def _write_config(path: Path, answers: dict) -> None:
     config['dataset']['question_column'] = answers['question_col']
     config['dataset']['ground_truth_column'] = answers['gt_col']
     config['dataset']['category_column'] = answers['category_col']
+
+    if answers.get('remote'):
+        config['remote'] = answers['remote']
 
     path.write_text(_render_config(config), encoding='utf-8')
 
@@ -244,6 +279,48 @@ def init_cmd():
         default=prompt_defaults['data_dirs_raw'],
     ).ask()
 
+    # Remote execution setup
+    use_remote = questionary.confirm(
+        'Do you want to run EvoSkill remotely? (Daytona sandbox)',
+        default=False,
+    ).ask()
+
+    remote_config = None
+    if use_remote:
+        import os
+        env_key = os.environ.get('DAYTONA_API_KEY', '')
+        if env_key:
+            click.echo(f'  Found DAYTONA_API_KEY in environment.')
+            api_key_input = questionary.text(
+                'Daytona API key?',
+                default=env_key,
+            ).ask()
+        else:
+            api_key_input = questionary.text(
+                'Daytona API key? (or set DAYTONA_API_KEY env var)',
+            ).ask()
+
+        if api_key_input and api_key_input.strip():
+            remote_config = {
+                'target': 'daytona',
+                'daytona': {
+                    'api_key': api_key_input.strip(),
+                    'image': 'python:3.12-slim',
+                    'cpu': 4,
+                    'memory': 8,
+                    'disk': 10,
+                    'timeout': 0,
+                },
+                'download': {
+                    'all_branches': False,
+                    'cache': False,
+                    'reports': True,
+                    'feedback_history': False,
+                },
+            }
+        else:
+            click.echo('  No API key provided. Skipping remote setup.')
+
     if any(v is None for v in [harness, dataset_path, question_col, gt_col, category_col, data_dirs_raw]):
         click.echo('\n  Aborted.')
         raise SystemExit(1)
@@ -263,6 +340,7 @@ def init_cmd():
             'gt_col': gt_col,
             'category_col': category_col,
             'data_dirs': data_dirs,
+            'remote': remote_config,
         },
     )
     (evoskill_dir / 'task.md').write_text(TASK_MD_TEMPLATE)
@@ -276,8 +354,13 @@ def init_cmd():
     click.echo(f'      answer: {gt_col}')
     click.echo(f'      category: {category_col}')
     click.echo(f'    Extra data dirs: {", ".join(data_dirs) if data_dirs else "none"}')
+    if remote_config:
+        click.echo(f'    Remote: {remote_config["target"]}')
     click.echo('')
     click.echo('    Next:')
     click.echo(f'      1. Fill in {cwd}/{EVOSKILL_DIR}/task.md')
     click.echo(f'      2. Review {cwd}/{EVOSKILL_DIR}/config.toml if needed')
-    click.echo('      3. Run: evoskill run')
+    if remote_config:
+        click.echo('      3. Run: evoskill run --remote')
+    else:
+        click.echo('      3. Run: evoskill run')
