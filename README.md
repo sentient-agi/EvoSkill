@@ -11,15 +11,17 @@
   <a href="https://github.com/sentient-agi/EvoSkill/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache 2.0-007ec6?style=for-the-badge" alt="License: Apache 2.0"></a>
 </p>
 
-<b>Supercharge your coding agents with EvoSkill, an agent-agnostic toolkit for automatically creating and improving AI skills, compatible with Claude Code, OpenCode, OpenHands, Goose, and more.</b>
+<b>Turn your general AI agents into state-of-the-art specialists with a benchmark and EvoSkill, a toolkit for automatically creating and improving AI skills, compatible with Claude Code, Codex CLI, OpenCode, OpenHands, Goose, and more.</b>
 
-<b>EvoSkill</b> significantly extends the feedback-driven idea of <b>[GEPA](https://github.com/sentient-agi/gepa-plus)</b> from single-file optimization to complete agent evolution. Instead of only revising one prompt in place like GEPA, EvoSkill proposes multiple skill or prompt mutations jointly, evaluates new variants on held-out data, and has each iteration produce an entirely new agent program.
+<b>EvoSkill</b> significantly extends the feedback-driven idea of <b>[GEPA](https://github.com/sentient-agi/gepa-plus)</b> from single-file optimization to complete agent evolution. Instead of only revising one prompt in place like GEPA, EvoSkill proposes multiple skill and prompt mutations jointly, evaluates new variants on held-out data, and has each iteration produce an entirely new agent program.
 
 <p align="center">
   <img src="./assets/examples.png" alt="EvoSkill Architecture" style="width: 75%;">
 </p>
 
-Install into <b>any coding agent</b> in seconds, and supercharge it with <b>AI-created skills</b> automatically. Depending on the agent, you are free to use <b>any model provider</b> of your choice ([OpenRouter](https://openrouter.ai/models?q=g), [Anthropic](https://platform.claude.com/docs/en/about-claude/models/overview), [OpenAI](https://platform.openai.com/), [Fireworks](https://fireworks.ai/), and more) and <b>any model</b> you want (Claude, GLM, Minimax, Kimi, GPT, Gemini, Qwen, and others).
+Install in seconds, then run `evoskill init` and `evoskill run` to supercharge any coding agent with <b>AI-created skills and prompts</b> automatically. Depending on the agent, you are free to use <b>any model provider</b> of your choice ([OpenRouter](https://openrouter.ai/models?q=g), [Anthropic](https://platform.claude.com/docs/en/about-claude/models/overview), [OpenAI](https://platform.openai.com/), [Fireworks](https://fireworks.ai/), and more) and <b>any model</b> you want (Claude, GLM, Minimax, Kimi, GPT, Gemini, Qwen, and others).
+
+Also join us on [Discord](https://discord.gg/sentientfoundation) to discuss your experience, share suggestions, or show off your work!
 
 ## 🤖 Supported agents
 
