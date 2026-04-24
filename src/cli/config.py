@@ -37,7 +37,7 @@ class EvolutionConfig:
 
 @dataclass
 class DatasetConfig:
-    path: str = 'data/questions.csv'
+    path: str = '/absolute/path/to/questions.csv'
     question_column: str = 'question'
     ground_truth_column: str = 'ground_truth'
     category_column: str | None = None
@@ -70,11 +70,8 @@ class ProjectConfig:
 
     @property
     def dataset_path(self) -> Path:
-        """Resolve dataset path relative to .evoskill/."""
-        p = Path(self.dataset.path)
-        if p.is_absolute():
-            return p
-        return self.evoskill_dir / p
+        """Return the absolute path to the dataset CSV."""
+        return Path(self.dataset.path)
 
 
 def _find_project_root(start: Path | None = None) -> Path | None:

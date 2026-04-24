@@ -12,7 +12,7 @@ DEFAULT_CONFIG = {
     'harness': {
         'name': 'claude',
         'model': default_model_for_harness('claude'),
-        'data_dirs': [],
+        'data_dirs': ['/absolute/path/to/data_dir'],
         'timeout_seconds': 1200,
         'max_retries': 3,
     },
@@ -25,7 +25,7 @@ DEFAULT_CONFIG = {
         'failure_samples': 3,
     },
     'dataset': {
-        'path': './data/questions.csv',
+        'path': '/absolute/path/to/questions.csv',
         'question_column': 'question',
         'ground_truth_column': 'ground_truth',
         'train_ratio': 0.18,
@@ -119,7 +119,7 @@ def _render_config(config: dict) -> str:
         '',
         '[dataset]',
     ])
-    _append_toml_field(lines, 'Path to the dataset CSV. Relative paths are resolved from .evoskill/.', 'path', config['dataset']['path'])
+    _append_toml_field(lines, 'Absolute path to the dataset CSV.', 'path', config['dataset']['path'])
     lines.append('')
     _append_toml_field(lines, 'CSV column containing the question or task input.', 'question_column', config['dataset']['question_column'])
     lines.append('')

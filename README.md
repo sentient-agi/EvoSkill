@@ -186,13 +186,17 @@ $ evoskill init
   EvoSkill — Project Setup
   Which harness? › claude
   Evolution mode? › skill_only — agent learns new skills (recommended)
-  Dataset path? › ./data/questions.csv
+  Dataset path? › /absolute/path/to/questions.csv
   Question column name? › question
   Ground truth column name? › answer
   Category column name? (leave blank if none) ›
+  Additional folders the agent can interact with? › /absolute/path/to/data_dir
 ```
 
 This creates `.evoskill/config.toml` and `.evoskill/task.md`.
+
+- **Dataset path** — absolute path to your CSV file containing questions and ground-truth answers.
+- **Data dirs** — absolute paths to any additional directories the agent needs access to during runs (e.g. reference documents, databases). Comma-separated if multiple.
 
 ### 2. Describe your task
 
@@ -313,7 +317,7 @@ Deletes all `program/*` branches, `frontier/*` tags, the loop checkpoint, and fe
 [harness]
 name = "claude"        # "claude", "opencode", "codex", "goose", or "openhands"
 model = "sonnet"       # Claude alias, Codex model name, or provider/model for OpenCode/Goose/OpenHands
-data_dirs = []         # extra directories the agent can read
+data_dirs = ["/absolute/path/to/data_dir"]  # extra directories the agent can read
 
 [evolution]
 mode = "skill_only"          # "skill_only" or "prompt_only"
@@ -323,7 +327,7 @@ concurrency = 4
 no_improvement_limit = 5
 
 [dataset]
-path = "data/questions.csv"  # relative to .evoskill/, or absolute
+path = "/absolute/path/to/questions.csv"  # absolute path to the dataset CSV
 question_column = "question"
 ground_truth_column = "ground_truth"
 category_column = ""         # optional, for stratified sampling
