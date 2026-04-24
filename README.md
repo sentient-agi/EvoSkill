@@ -1,7 +1,9 @@
 <div align="center">
-    <img src="./assets/evoskill.png" alt="alt text" width="100%"/>
+    <img src="./assets/evoskill_logo.png" alt="alt text" width="80%"/>
+    <br><br>
     <h1>EvoSkill: Automated Skill Discovery for Coding Agents</h1>
 </div>
+
 
 <p align="center">
   <a href="https://www.alphaxiv.org/abs/2603.02766"><img src="https://img.shields.io/badge/Paper-f73c6f?style=for-the-badge" alt="Paper"></a>
@@ -396,7 +398,7 @@ command = "python score.py --predicted {predicted} --expected {expected}"
 ## How It Works
 
 <p align="center">
-  <img src="./assets/evoskill.jpg" alt="EvoSkill Architecture" style="max-width: 75%; width: 75%;" />
+  <img src="./assets/evoskill_diagram.jpg" alt="EvoSkill Architecture" style="max-width: 75%; width: 75%;" />
 </p>
 
 The self-improvement loop follows five stages:
