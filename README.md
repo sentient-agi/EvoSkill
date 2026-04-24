@@ -1,6 +1,6 @@
 <div align="center">
     <img src="./assets/evoskill_logo.png" alt="alt text" width="80%"/>
-    <br><br>
+    <br>
     <h1>EvoSkill: Automated Skill Discovery for Coding Agents</h1>
 </div>
 
