@@ -91,7 +91,7 @@ def _kill_pid(pid: int) -> None:
         except ProcessLookupError:
             return
     try:
-        os.kill(pid, signal.SIGKILL)
+        os.kill(pid, signal.SIGTERM)
     except Exception:
         pass
 

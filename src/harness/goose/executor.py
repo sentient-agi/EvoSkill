@@ -38,7 +38,7 @@ import tempfile
 from types import SimpleNamespace
 from typing import Any, Callable, Type
 
-import yaml
+import yaml  # noqa: E402
 from pydantic import BaseModel, ValidationError
 
 from ..provider_auth import apply_openrouter_env

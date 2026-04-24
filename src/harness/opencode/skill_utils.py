@@ -8,8 +8,8 @@ natively and doesn't need this processing.
 import re
 from pathlib import Path
 
-import yaml
-
+import yaml  # noqa: E402
+  # type: ignore[import-untyped]
 
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n?", re.DOTALL)
 

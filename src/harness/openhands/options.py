@@ -17,7 +17,8 @@ def split_openhands_model(model: str | None) -> tuple[str, str]:
     """Parse 'provider/model' string into (provider_id, model_id)."""
     full = normalize_harness_model("openhands", model)
     if "/" in full:
-        return full.split("/", 1)
+        parts = full.split("/", 1)
+        return parts[0], parts[1]
     return "anthropic", full
 
 

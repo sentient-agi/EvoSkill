@@ -115,7 +115,7 @@ def _resolve_api_key(options: dict[str, Any]) -> SecretStr | None:
         if value:
             return SecretStr(value)
     if provider_id == "openrouter":
-        return SecretStr(ensure_openrouter_api_key(provider_id))
+        return SecretStr(ensure_openrouter_api_key(provider_id) or '')
     value = os.environ.get("LLM_API_KEY")
     if value:
         return SecretStr(value)

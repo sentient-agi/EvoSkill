@@ -72,7 +72,7 @@ C: NOT_ATTEMPTED
 
 Just return the letters "A", "B", or "C", with no text around it.
 """.strip()
-import dspy
+import dspy  # noqa: E402
 
 def score_sealqa(question: str, ground_truth: str, predicted: str) -> float:
     """Score a SEAL-QA answer. Returns 0.0 or 1.0.

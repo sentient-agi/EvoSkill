@@ -11,8 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+import yaml  # noqa: E402
+  # type: ignore[import-untyped]
 from .models import ProgramConfig
 
 

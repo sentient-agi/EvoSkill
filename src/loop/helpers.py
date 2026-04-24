@@ -121,7 +121,7 @@ def build_skill_query(proposer_trace: "AgentTrace[ProposerResponse]") -> str:
     Returns:
         Formatted query string for the skill generator.
     """
-    return f"""Proposed tool or skill (high level description): {proposer_trace.output.proposed_skill_or_prompt}
+    return f"""Proposed tool or skill (high level description): {proposer_trace.output.proposed_skill_or_prompt if proposer_trace.output else ''}
 
 Justification: {proposer_trace.output.justification}"""
 
@@ -142,7 +142,7 @@ def build_prompt_query(
 {original_prompt}
 
 ## Proposed Change
-{proposer_trace.output.proposed_skill_or_prompt}
+{proposer_trace.output.proposed_skill_or_prompt if proposer_trace.output else ''}
 
 ## Justification
 {proposer_trace.output.justification}"""

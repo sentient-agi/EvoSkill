@@ -87,7 +87,10 @@ async def call_llm(provider: str, model: str, prompt: str) -> str:
             max_tokens=16,
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.content[0].text
+        content = response.content[0]
+        if hasattr(content, 'text'):
+            return content.text
+        return ''
 
     if provider == "openai":
         try:

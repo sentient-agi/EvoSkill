@@ -72,7 +72,7 @@ def config_to_options(
     # then restore the original SDK afterwards
     original_sdk = get_sdk()
     try:
-        set_sdk(sdk)
+        set_sdk(sdk)  # type: ignore[arg-type]
         return build_options(
             system=system_text,
             schema=schema,
@@ -112,7 +112,7 @@ def options_to_config(
     Returns:
         ProgramConfig ready for git storage
     """
-    base_metadata = {"created_at": datetime.now().isoformat()}
+    base_metadata: dict[str, Any] = {"created_at": datetime.now().isoformat()}
     if metadata:
         base_metadata.update(metadata)
 
