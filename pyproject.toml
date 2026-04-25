@@ -40,7 +40,6 @@ evoskill = "src.cli.main:cli"
 
 [project.optional-dependencies]
 daytona = ["daytona>=0.1.0"]
-aws = ["boto3>=1.35.0"]
 
 [dependency-groups]
 dev = [

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -209,10 +210,20 @@ def _get_remote_backend(cfg):
 @click.option("--rebuild", is_flag=True, default=False,
               help="Force rebuild the Docker image before running.")
 @click.option("--remote", is_flag=True, default=False,
-              help="Run the loop on a remote environment (Daytona/AWS).")
+              help="Run the loop on a remote Daytona sandbox.")
 def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, docker: bool,
             rebuild: bool, remote: bool):
     """Run the self-improvement loop."""
+    # Auto-select execution mode from config if no flag given.
+    # Skip inside containers (EVOSKILL_REMOTE=1) to avoid recursion.
+    if not docker and not remote and not os.environ.get("EVOSKILL_REMOTE"):
+        from src.cli.config import load_config as _lc
+        _cfg = _lc()
+        if _cfg.execution == 'docker':
+            docker = True
+        elif _cfg.execution == 'daytona':
+            remote = True
+
     if remote:
         cfg = load_config()
         if not cfg.remote:

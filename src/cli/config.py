@@ -77,16 +77,6 @@ class DaytonaConfig:
 
 
 @dataclass
-class AWSConfig:
-    region: str = 'us-east-1'
-    s3_bucket: str = ''
-    ecr_repo: str = ''
-    ecs_cluster: str = 'default'
-    task_cpu: str = '4096'
-    task_memory: str = '16384'
-
-
-@dataclass
 class DownloadConfig:
     all_branches: bool = False
     cache: bool = False
@@ -94,14 +84,13 @@ class DownloadConfig:
     feedback_history: bool = False
 
 
-_VALID_REMOTE_TARGETS = ('daytona', 'aws')
+_VALID_REMOTE_TARGETS = ('daytona',)
 
 
 @dataclass
 class RemoteConfig:
     target: str = 'daytona'
     daytona: DaytonaConfig | None = None
-    aws: AWSConfig | None = None
     download: DownloadConfig = field(default_factory=DownloadConfig)
 
 
@@ -112,6 +101,7 @@ class ProjectConfig:
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     scorer: ScorerConfig = field(default_factory=ScorerConfig)
     remote: RemoteConfig | None = None
+    execution: str = 'local'  # 'local', 'docker', or 'daytona'
     project_root: Path = field(default_factory=Path.cwd)
     task_description: str = ''
     task_constraints: str = ''
@@ -202,21 +192,18 @@ def load_config(start: Path | None = None) -> ProjectConfig:
             env_key = os.environ.get('DAYTONA_API_KEY')
             daytona_cfg = DaytonaConfig(api_key=env_key)
 
-        aws_cfg: AWSConfig | None = None
-        if 'aws' in remote_raw:
-            aws_cfg = AWSConfig(**remote_raw['aws'])
-
         download_cfg = DownloadConfig(**remote_raw.get('download', {}))
 
         remote = RemoteConfig(
             target=target,
             daytona=daytona_cfg,
-            aws=aws_cfg,
             download=download_cfg,
         )
 
     task_path = root / EVOSKILL_DIR / 'task.md'
     description, constraints = _parse_task_md(task_path.read_text()) if task_path.exists() else ('', '')
+
+    execution = raw.get('execution', 'local')
 
     return ProjectConfig(
         harness=harness,
@@ -224,6 +211,7 @@ def load_config(start: Path | None = None) -> ProjectConfig:
         dataset=dataset,
         scorer=scorer,
         remote=remote,
+        execution=execution,
         project_root=root,
         task_description=description,
         task_constraints=constraints,

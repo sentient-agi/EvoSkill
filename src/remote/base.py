@@ -17,7 +17,7 @@ class RunInfo:
     """Persisted to .evoskill/remote_run.json to track an active remote run."""
 
     run_id: str
-    target: str  # "daytona" or "aws"
+    target: str  # "daytona"
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     status: str = "running"
     # Backend-specific fields
