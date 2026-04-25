@@ -38,6 +38,9 @@ dependencies = [
 [project.scripts]
 evoskill = "src.cli.main:cli"
 
+[project.optional-dependencies]
+daytona = ["daytona>=0.1.0"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.0",

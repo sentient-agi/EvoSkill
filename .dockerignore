@@ -1,0 +1,11 @@
+.venv
+.git
+__pycache__
+*.pyc
+node_modules
+.pytest_cache
+.cache
+notebooks
+assets
+*.egg-info
+.evoskill

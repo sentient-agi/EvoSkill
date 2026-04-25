@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +14,16 @@ from src.harness.model_aliases import (
     default_model_for_harness,
     normalize_harness_model,
 )
+
+def _docker_path_overrides() -> dict[str, str]:
+    """Read path overrides injected by the Docker launcher."""
+    raw = os.environ.get("EVOSKILL_PATH_OVERRIDES", "")
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
 
 EVOSKILL_DIR = '.evoskill'
 
@@ -55,11 +67,41 @@ class ScorerConfig:
 
 
 @dataclass
+class DaytonaConfig:
+    api_key: str | None = None
+    image: str = ''
+    cpu: int = 4
+    memory: int = 8        # GB
+    disk: int = 10         # GB
+    timeout: int = 0       # 0 = no auto-stop
+
+
+@dataclass
+class DownloadConfig:
+    all_branches: bool = False
+    cache: bool = False
+    reports: bool = True
+    feedback_history: bool = False
+
+
+_VALID_REMOTE_TARGETS = ('daytona',)
+
+
+@dataclass
+class RemoteConfig:
+    target: str = 'daytona'
+    daytona: DaytonaConfig | None = None
+    download: DownloadConfig = field(default_factory=DownloadConfig)
+
+
+@dataclass
 class ProjectConfig:
     harness: HarnessConfig = field(default_factory=HarnessConfig)
     evolution: EvolutionConfig = field(default_factory=EvolutionConfig)
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     scorer: ScorerConfig = field(default_factory=ScorerConfig)
+    remote: RemoteConfig | None = None
+    execution: str = 'local'  # 'local', 'docker', or 'daytona'
     project_root: Path = field(default_factory=Path.cwd)
     task_description: str = ''
     task_constraints: str = ''
@@ -70,7 +112,10 @@ class ProjectConfig:
 
     @property
     def dataset_path(self) -> Path:
-        """Return the absolute path to the dataset CSV."""
+        """Return the dataset path, with container override support."""
+        override = _docker_path_overrides().get("dataset_path")
+        if override:
+            return Path(override)
         return Path(self.dataset.path)
 
 
@@ -111,19 +156,62 @@ def load_config(start: Path | None = None) -> ProjectConfig:
     harness_raw = dict(raw.get('harness', {}))
     harness_name = harness_raw.get('name', 'claude')
     harness_raw['model'] = normalize_harness_model(harness_name, harness_raw.get('model'))
+
+    # Docker path overrides for data_dirs
+    overrides = _docker_path_overrides()
+    if "data_dirs" in overrides:
+        harness_raw['data_dirs'] = [d.strip() for d in overrides["data_dirs"].split(",") if d.strip()]
+
     harness = HarnessConfig(**harness_raw)
     evolution = EvolutionConfig(**raw.get('evolution', {}))
     dataset = DatasetConfig(**raw.get('dataset', {}))
     scorer = ScorerConfig(**raw.get('scorer', {}))
 
+    # Parse remote config
+    remote: RemoteConfig | None = None
+    remote_raw = raw.get('remote')
+    if remote_raw is not None:
+        target = remote_raw.get('target', 'daytona')
+        if target not in _VALID_REMOTE_TARGETS:
+            raise ValueError(
+                f"Unsupported remote target '{target}'. "
+                f"Valid targets: {', '.join(_VALID_REMOTE_TARGETS)}"
+            )
+
+        daytona_cfg: DaytonaConfig | None = None
+        if 'daytona' in remote_raw:
+            daytona_cfg = DaytonaConfig(**remote_raw['daytona'])
+
+        # Daytona API key: toml takes precedence, fall back to env var
+        if daytona_cfg is not None and not daytona_cfg.api_key:
+            env_key = os.environ.get('DAYTONA_API_KEY')
+            if env_key:
+                daytona_cfg.api_key = env_key
+        elif target == 'daytona' and daytona_cfg is None:
+            # target is daytona but no [remote.daytona] section — create with defaults
+            env_key = os.environ.get('DAYTONA_API_KEY')
+            daytona_cfg = DaytonaConfig(api_key=env_key)
+
+        download_cfg = DownloadConfig(**remote_raw.get('download', {}))
+
+        remote = RemoteConfig(
+            target=target,
+            daytona=daytona_cfg,
+            download=download_cfg,
+        )
+
     task_path = root / EVOSKILL_DIR / 'task.md'
     description, constraints = _parse_task_md(task_path.read_text()) if task_path.exists() else ('', '')
+
+    execution = raw.get('execution', 'local')
 
     return ProjectConfig(
         harness=harness,
         evolution=evolution,
         dataset=dataset,
         scorer=scorer,
+        remote=remote,
+        execution=execution,
         project_root=root,
         task_description=description,
         task_constraints=constraints,
