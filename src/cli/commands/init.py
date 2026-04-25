@@ -305,7 +305,7 @@ def init_cmd():
                 'target': 'daytona',
                 'daytona': {
                     'api_key': api_key_input.strip(),
-                    'image': 'python:3.12-slim',
+                    'image': '',
                     'cpu': 4,
                     'memory': 8,
                     'disk': 10,

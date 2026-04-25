@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Any
 
 import click
@@ -222,43 +223,49 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, docker: bool,
         backend = _get_remote_backend(cfg)
         console.print(f"\n  [bold]EvoSkill Remote[/bold] — {cfg.remote.target}\n")
 
-        console.print("  [1/4] Creating sandbox...", end="")
-        backend.setup(cfg)
-        console.print(f" [green]done[/green]")
+        try:
+            console.print("  [1/4] Creating sandbox...", end="")
+            backend.setup(cfg)
+            console.print(f" [green]done[/green]")
 
-        # Show what will be uploaded
-        dataset_path = cfg.dataset_path.resolve()
-        project_root = cfg.project_root.resolve()
-        external_dataset = not dataset_path.is_relative_to(project_root)
-        external_dirs = [d for d in cfg.harness.data_dirs
-                         if not Path(d).resolve().is_relative_to(project_root)]
+            dataset_path = cfg.dataset_path.resolve()
+            project_root = cfg.project_root.resolve()
+            external_dataset = not dataset_path.is_relative_to(project_root)
+            external_dirs = [d for d in cfg.harness.data_dirs
+                             if not Path(d).resolve().is_relative_to(project_root)]
 
-        console.print("  [2/4] Uploading...", end="")
-        backend.upload(cfg)
-        console.print(f" [green]done[/green]")
-        console.print(f"         project files → /workspace/")
-        if external_dataset:
-            console.print(f"         dataset ({dataset_path.name}) → /mnt/dataset/")
-        if external_dirs:
-            for d in external_dirs:
-                name = Path(d).name
-                console.print(f"         {name} → /mnt/data/{name}/")
+            console.print("  [2/4] Uploading...", end="")
+            backend.upload(cfg)
+            console.print(f" [green]done[/green]")
+            console.print(f"         project files → /workspace/")
+            if external_dataset:
+                console.print(f"         dataset ({dataset_path.name}) → /mnt/dataset/")
+            if external_dirs:
+                for d in external_dirs:
+                    name = Path(d).name
+                    console.print(f"         {name} → /mnt/data/{name}/")
 
-        console.print("  [3/4] Installing EvoSkill...", end="")
-        # install happens inside backend.run before launching
-        console.print(f" [green]done[/green]")
+            console.print("  [3/4] Installing EvoSkill...", end="")
+            console.print(f" [green]done[/green]")
 
-        extra_args = []
-        if continue_loop:
-            extra_args.append("--continue")
-        if verbose:
-            extra_args.append("--verbose")
-        if quiet:
-            extra_args.append("--quiet")
+            extra_args = []
+            if continue_loop:
+                extra_args.append("--continue")
+            if verbose:
+                extra_args.append("--verbose")
+            if quiet:
+                extra_args.append("--quiet")
 
-        console.print("  [4/4] Starting loop...", end="")
-        run_info = backend.run(cfg, extra_args=extra_args or None)
-        console.print(f" [green]done[/green]")
+            console.print("  [4/4] Starting loop...", end="")
+            run_info = backend.run(cfg, extra_args=extra_args or None)
+            console.print(f" [green]done[/green]")
+
+        except Exception:
+            console.print(f" [red]failed[/red]")
+            console.print("\n  Cleaning up sandbox...", end="")
+            backend.cleanup_current(cfg)
+            console.print(" [green]done[/green]\n")
+            raise
 
         console.print(f"\n  Run: {run_info.run_id}")
         console.print(f"\n  [bold]Next steps:[/bold]")

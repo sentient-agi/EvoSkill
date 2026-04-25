@@ -69,7 +69,7 @@ class ScorerConfig:
 @dataclass
 class DaytonaConfig:
     api_key: str | None = None
-    image: str = 'evoskill:latest'
+    image: str = ''
     cpu: int = 4
     memory: int = 8        # GB
     disk: int = 10         # GB

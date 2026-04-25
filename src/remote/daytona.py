@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -18,6 +19,8 @@ from src.remote.sync import (
     remap_data_dirs,
     upload_file_list,
 )
+
+SESSION_ID = "evoskill-run"
 
 
 def _make_client(api_key: str):
@@ -88,7 +91,18 @@ class DaytonaBackend(RemoteBackend):
         self._ensure_client(cfg)
         daytona_cfg = cfg.remote.daytona
 
+        if not daytona_cfg.image:
+            raise ValueError(
+                "No Docker image configured for Daytona. "
+                "Build your image with 'docker build -t evoskill .' then "
+                "push to a registry and set image in config.toml:\n"
+                "  [remote.daytona]\n"
+                '  image = "your-registry/evoskill:latest"'
+            )
+
         env_vars = _collect_api_keys()
+        env_vars["CLAUDE_CODE_ACCEPT_TOS"] = "yes"
+        env_vars["EVOSKILL_REMOTE"] = "1"
 
         params = _create_sandbox_params(
             image=daytona_cfg.image,
@@ -137,14 +151,14 @@ class DaytonaBackend(RemoteBackend):
             sandbox.fs.upload_file(dataset_path.read_bytes(), container_dataset)
             self._path_overrides["dataset_path"] = container_dataset
 
-        # 4. Upload external data dirs (tar + upload + extract for speed)
+        # 4. Upload external data dirs via tar (chunked if > 50MB)
+        MAX_CHUNK = 50 * 1024 * 1024
         mappings = remap_data_dirs(cfg.harness.data_dirs, project_root)
         container_data_dirs = []
 
         for mapping in mappings:
             container_data_dirs.append(mapping.container_path)
             if mapping.needs_upload:
-                # Tar locally, upload single file, extract on sandbox
                 with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
                     tar_path = f.name
                 subprocess.run(
@@ -152,109 +166,112 @@ class DaytonaBackend(RemoteBackend):
                     check=True,
                 )
                 tar_bytes = Path(tar_path).read_bytes()
-                remote_tar = f"/tmp/{mapping.host_path.name}.tar.gz"
-                sandbox.fs.upload_file(tar_bytes, remote_tar)
-                sandbox.process.exec(
-                    f"mkdir -p {mapping.container_path} && "
-                    f"tar xzf {remote_tar} -C /mnt/data/ && "
-                    f"rm {remote_tar}",
-                )
                 Path(tar_path).unlink(missing_ok=True)
+
+                if len(tar_bytes) <= MAX_CHUNK:
+                    remote_tar = f"/tmp/{mapping.host_path.name}.tar.gz"
+                    sandbox.fs.upload_file(tar_bytes, remote_tar)
+                    sandbox.process.exec(
+                        f"mkdir -p {mapping.container_path} && "
+                        f"tar xzf {remote_tar} -C /mnt/data/ && "
+                        f"rm {remote_tar}",
+                    )
+                else:
+                    sandbox.process.exec("mkdir -p /tmp/chunks")
+                    for i in range(0, len(tar_bytes), MAX_CHUNK):
+                        chunk = tar_bytes[i:i + MAX_CHUNK]
+                        sandbox.fs.upload_file(chunk, f"/tmp/chunks/part_{i:010d}")
+                    sandbox.process.exec(
+                        f"cat /tmp/chunks/part_* > /tmp/combined.tar.gz && "
+                        f"mkdir -p {mapping.container_path} && "
+                        f"tar xzf /tmp/combined.tar.gz -C /mnt/data/ && "
+                        f"rm -rf /tmp/chunks /tmp/combined.tar.gz",
+                    )
 
         if container_data_dirs:
             self._path_overrides["data_dirs"] = ",".join(container_data_dirs)
 
     def run(self, cfg: ProjectConfig, extra_args: list[str] | None = None) -> RunInfo:
+        from daytona import SessionExecuteRequest
+
         sandbox = self._sandbox
 
-        # Install EvoSkill and capture output for debugging
-        install_result = sandbox.process.exec(
-            "cd /workspace && pip install -e . 2>&1 | tail -5",
+        # Install EvoSkill (--no-deps: image already has all runtime deps)
+        sandbox.process.exec(
+            "cd /workspace && pip install --no-deps -e . 2>&1",
             cwd="/workspace",
         )
 
-        # Write a launcher script so background execution is reliable
+        # Preflight checks
+        preflight = sandbox.process.exec(
+            "echo '=== evoskill ===' && which evoskill && "
+            "echo '=== ANTHROPIC_API_KEY ===' && "
+            "([ -n \"$ANTHROPIC_API_KEY\" ] && echo 'set' || echo 'NOT SET') && "
+            "echo '=== python ===' && python --version && "
+            "echo '=== git ===' && git --version",
+        )
+        if "NOT SET" in preflight.result and cfg.harness.name == "claude":
+            raise RuntimeError(
+                f"Preflight failed: ANTHROPIC_API_KEY not set in sandbox.\n"
+                f"Full diagnostics:\n{preflight.result}"
+            )
+
+        # Build run script with path overrides
         env_lines = []
         if self._path_overrides:
             overrides_json = json.dumps(self._path_overrides)
-            env_lines.append(f'export EVOSKILL_PATH_OVERRIDES=\'{overrides_json}\'')
+            env_lines.append(f"export EVOSKILL_PATH_OVERRIDES='{overrides_json}'")
 
         cmd = "evoskill run"
         if extra_args:
             cmd += " " + " ".join(extra_args)
 
-        script = "#!/bin/bash\n"
-        script += "cd /workspace\n"
-        for line in env_lines:
-            script += line + "\n"
-        script += f"{cmd} > /workspace/evoskill.log 2>&1\n"
-        script += "echo $? > /workspace/evoskill.exit_code\n"
+        # Build run command (no script file needed — session executes directly)
+        env_prefix = ""
+        if env_lines:
+            env_prefix = " && ".join(env_lines) + " && "
 
-        sandbox.fs.upload_file(script.encode(), "/workspace/run.sh")
-        sandbox.process.exec("chmod +x /workspace/run.sh")
+        full_cmd = f"cd /workspace && {env_prefix}{cmd}"
 
-        # Launch via nohup + disown so it survives session end
-        sandbox.process.exec(
-            "nohup bash /workspace/run.sh > /dev/null 2>&1 & disown",
-        )
-
-        # Brief pause then verify it started
-        import time
-        time.sleep(2)
-        check = sandbox.process.exec(
-            "pgrep -f 'evoskill run' > /dev/null 2>&1 && echo 'started' || "
-            "(cat /workspace/evoskill.log 2>/dev/null; echo 'FAILED_TO_START')",
-        )
-        if "FAILED_TO_START" in check.result:
-            # Show what went wrong
-            raise RuntimeError(
-                f"Remote run failed to start. Output:\n{check.result}"
-            )
+        # Launch via Daytona session (survives API call returning)
+        sandbox.process.create_session(SESSION_ID)
+        req = SessionExecuteRequest(command=full_cmd, run_async=True)
+        response = sandbox.process.execute_session_command(SESSION_ID, req)
 
         # Save run info
         run_info = RunInfo(
             run_id=f"daytona-{sandbox.id}",
             target="daytona",
-            extra={"sandbox_id": sandbox.id},
+            extra={
+                "sandbox_id": sandbox.id,
+                "session_id": SESSION_ID,
+                "cmd_id": response.cmd_id,
+            },
         )
         run_info.save(cfg.project_root)
         return run_info
 
     def status(self, cfg: ProjectConfig, run_info: RunInfo) -> str:
         sandbox_id = run_info.extra.get("sandbox_id")
-        if not sandbox_id:
-            raise ValueError("No sandbox_id in run info")
+        session_id = run_info.extra.get("session_id", SESSION_ID)
+        cmd_id = run_info.extra.get("cmd_id")
+        if not sandbox_id or not cmd_id:
+            raise ValueError("No sandbox_id or cmd_id in run info")
 
         client = self._ensure_client(cfg)
         sandbox = _get_sandbox(client, sandbox_id)
 
-        # Check if evoskill process is still running
-        proc_check = sandbox.process.exec(
-            "pgrep -f 'evoskill run' > /dev/null 2>&1 && echo 'alive' || echo 'done'",
-        )
-        is_running = "alive" in proc_check.result
+        cmd_info = sandbox.process.get_session_command(session_id, cmd_id)
+        is_running = cmd_info.exit_code is None
 
-        # Read checkpoint for progress
-        checkpoint = sandbox.process.exec(
-            "cat /workspace/.claude/loop_checkpoint.json 2>/dev/null || echo '{}'",
-        )
-        iteration = ""
-        try:
-            data = json.loads(checkpoint.result)
-            if "iteration" in data:
-                max_iter = cfg.evolution.iterations
-                iteration = f" (iteration {data['iteration']}/{max_iter})"
-        except (json.JSONDecodeError, ValueError):
-            pass
+        # Get logs for progress info
+        logs = sandbox.process.get_session_command_logs(session_id, cmd_id)
+        log_text = logs.output or logs.stdout or ""
 
-        # Read last lines of log for score or errors
-        tail = sandbox.process.exec(
-            "tail -20 /workspace/evoskill.log 2>/dev/null || echo ''",
-        )
         last_score = ""
         has_error = False
         error_line = ""
-        for line in tail.result.splitlines():
+        for line in log_text.splitlines()[-20:]:
             if "Score:" in line:
                 last_score = f"\n  Last:    {line.strip()}"
             if "Error" in line or "Traceback" in line or "Exception" in line:
@@ -262,53 +279,47 @@ class DaytonaBackend(RemoteBackend):
                 error_line = line.strip()
 
         if is_running:
-            return f"running{iteration}{last_score}"
-        elif has_error:
-            return f"failed{iteration}\n  Error:   {error_line}"
+            return f"running{last_score}"
+        elif cmd_info.exit_code != 0 or has_error:
+            return f"failed (exit_code={cmd_info.exit_code})\n  Error:   {error_line}"
         else:
-            return f"completed{iteration}{last_score}"
+            return f"completed{last_score}"
 
     def logs(self, cfg: ProjectConfig, run_info: RunInfo, follow: bool = False) -> Iterator[str]:
         sandbox_id = run_info.extra.get("sandbox_id")
-        if not sandbox_id:
-            raise ValueError("No sandbox_id in run info")
+        session_id = run_info.extra.get("session_id", SESSION_ID)
+        cmd_id = run_info.extra.get("cmd_id")
+        if not sandbox_id or not cmd_id:
+            raise ValueError("No sandbox_id or cmd_id in run info")
 
         client = self._ensure_client(cfg)
         sandbox = _get_sandbox(client, sandbox_id)
 
         if follow:
-            # Stream: read current content then poll for new lines
-            import time
             last_size = 0
             while True:
-                result = sandbox.process.exec(
-                    "cat /workspace/evoskill.log 2>/dev/null || echo ''",
-                )
-                content = result.result
+                logs = sandbox.process.get_session_command_logs(session_id, cmd_id)
+                content = logs.output or logs.stdout or ""
                 if len(content) > last_size:
-                    new_content = content[last_size:]
-                    for line in new_content.splitlines():
+                    for line in content[last_size:].splitlines():
                         yield line
                     last_size = len(content)
 
-                # Check if process is still running
-                proc_check = sandbox.process.exec(
-                    "pgrep -f 'evoskill run' > /dev/null 2>&1 && echo 'alive' || echo 'done'",
-                )
-                if "done" in proc_check.result:
-                    # One final read
-                    result = sandbox.process.exec("cat /workspace/evoskill.log 2>/dev/null || echo ''")
-                    if len(result.result) > last_size:
-                        for line in result.result[last_size:].splitlines():
+                cmd_info = sandbox.process.get_session_command(session_id, cmd_id)
+                if cmd_info.exit_code is not None:
+                    # Final read
+                    logs = sandbox.process.get_session_command_logs(session_id, cmd_id)
+                    final = logs.output or logs.stdout or ""
+                    if len(final) > last_size:
+                        for line in final[last_size:].splitlines():
                             yield line
-                    yield "--- Run completed ---"
+                    yield f"--- Run completed (exit_code={cmd_info.exit_code}) ---"
                     break
                 time.sleep(5)
         else:
-            result = sandbox.process.exec(
-                "tail -50 /workspace/evoskill.log 2>/dev/null || echo 'No logs yet'",
-            )
-            for line in result.result.splitlines():
+            logs = sandbox.process.get_session_command_logs(session_id, cmd_id)
+            content = logs.output or logs.stdout or ""
+            for line in content.splitlines()[-50:]:
                 yield line
 
     def download(self, cfg: ProjectConfig, run_info: RunInfo) -> None:
@@ -341,9 +352,20 @@ class DaytonaBackend(RemoteBackend):
             f.write(bundle_bytes)
             local_bundle = f.name
 
-        # 4. Unbundle locally
-        args = bundle_unbundle_args(local_bundle)
-        subprocess.run(args, cwd=str(project_root), check=True)
+        # 4. Unbundle locally and create branches from the refs
+        result = subprocess.run(
+            bundle_unbundle_args(local_bundle),
+            cwd=str(project_root), check=True, capture_output=True, text=True,
+        )
+        for line in result.stdout.splitlines():
+            parts = line.strip().split()
+            if len(parts) == 2 and parts[1].startswith("refs/heads/"):
+                sha, ref = parts
+                branch_name = ref.removeprefix("refs/heads/")
+                subprocess.run(
+                    ["git", "branch", "-f", branch_name, sha],
+                    cwd=str(project_root), capture_output=True,
+                )
 
         # 5. Download file-based results
         paths = download_file_list(download_cfg)
@@ -365,4 +387,14 @@ class DaytonaBackend(RemoteBackend):
 
         client = self._ensure_client(cfg)
         sandbox = _get_sandbox(client, sandbox_id)
-        sandbox.stop()
+        client.delete(sandbox)
+
+    def cleanup_current(self, cfg: ProjectConfig) -> None:
+        """Delete the sandbox created during this session (for crash recovery)."""
+        if not self._sandbox:
+            return
+        try:
+            client = self._ensure_client(cfg)
+            client.delete(self._sandbox)
+        except Exception:
+            pass

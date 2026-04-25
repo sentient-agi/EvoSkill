@@ -122,10 +122,15 @@ def remote_download():
     if cfg.remote.download.feedback_history:
         console.print(f"    feedback_history.md       for local continuation")
 
+    # Clean up sandbox after successful download
+    console.print("\n  Cleaning up sandbox...", end="")
+    backend.stop(cfg, run_info)
+    RunInfo.clear(cfg.project_root)
+    console.print(" [green]done[/green]")
+
     console.print(f"\n  [bold]Next:[/bold]")
     console.print(f"    evoskill run              continue evolving locally")
-    console.print(f"    evoskill skills           see discovered skills")
-    console.print(f"    evoskill remote stop      clean up remote sandbox\n")
+    console.print(f"    evoskill skills           see discovered skills\n")
 
 
 @click.group("remote")
