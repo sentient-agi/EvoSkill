@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Any
 
 import click
@@ -12,6 +13,7 @@ from rich.live import Live
 from rich.table import Table
 from rich.text import Text
 
+from src.cli.config import load_config
 from src.cli.report import RunReport, SkillEntry
 
 console = Console()
@@ -186,6 +188,15 @@ class LoopDisplay:
 
 # ── command ──────────────────────────────────────────────────────────────────
 
+def _get_remote_backend(cfg):
+    """Return the appropriate remote backend based on config."""
+    target = cfg.remote.target
+    if target == "daytona":
+        from src.remote.daytona import DaytonaBackend
+        return DaytonaBackend()
+    raise ValueError(f"Unsupported remote target: {target}")
+
+
 @click.command("run")
 @click.option("--continue", "continue_loop", is_flag=True, default=False,
               help="Resume from the current frontier.")
@@ -193,8 +204,91 @@ class LoopDisplay:
               help="Show full failure examples and per-sample results.")
 @click.option("--quiet", is_flag=True, default=False,
               help="Show progress table only, no inline proposer output.")
-def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
+@click.option("--docker", is_flag=True, default=False,
+              help="Run the loop inside a Docker container.")
+@click.option("--rebuild", is_flag=True, default=False,
+              help="Force rebuild the Docker image before running.")
+@click.option("--remote", is_flag=True, default=False,
+              help="Run the loop on a remote environment (Daytona/AWS).")
+def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, docker: bool,
+            rebuild: bool, remote: bool):
     """Run the self-improvement loop."""
+    if remote:
+        cfg = load_config()
+        if not cfg.remote:
+            console.print("[red]Error:[/red] No [remote] section in config.toml. "
+                          "Add remote config first.")
+            raise SystemExit(1)
+
+        backend = _get_remote_backend(cfg)
+        console.print(f"\n  [bold]EvoSkill Remote[/bold] — {cfg.remote.target}\n")
+
+        try:
+            console.print("  [1/4] Creating sandbox...", end="")
+            backend.setup(cfg)
+            console.print(f" [green]done[/green]")
+
+            dataset_path = cfg.dataset_path.resolve()
+            project_root = cfg.project_root.resolve()
+            external_dataset = not dataset_path.is_relative_to(project_root)
+            external_dirs = [d for d in cfg.harness.data_dirs
+                             if not Path(d).resolve().is_relative_to(project_root)]
+
+            console.print("  [2/4] Uploading...", end="")
+            backend.upload(cfg)
+            console.print(f" [green]done[/green]")
+            console.print(f"         project files → /workspace/")
+            if external_dataset:
+                console.print(f"         dataset ({dataset_path.name}) → /mnt/dataset/")
+            if external_dirs:
+                for d in external_dirs:
+                    name = Path(d).name
+                    console.print(f"         {name} → /mnt/data/{name}/")
+
+            console.print("  [3/4] Installing EvoSkill...", end="")
+            console.print(f" [green]done[/green]")
+
+            extra_args = []
+            if continue_loop:
+                extra_args.append("--continue")
+            if verbose:
+                extra_args.append("--verbose")
+            if quiet:
+                extra_args.append("--quiet")
+
+            console.print("  [4/4] Starting loop...", end="")
+            run_info = backend.run(cfg, extra_args=extra_args or None)
+            console.print(f" [green]done[/green]")
+
+        except Exception:
+            console.print(f" [red]failed[/red]")
+            console.print("\n  Cleaning up sandbox...", end="")
+            backend.cleanup_current(cfg)
+            console.print(" [green]done[/green]\n")
+            raise
+
+        console.print(f"\n  Run: {run_info.run_id}")
+        console.print(f"\n  [bold]Next steps:[/bold]")
+        console.print(f"    evoskill remote status       check progress")
+        console.print(f"    evoskill remote logs -f       stream live output")
+        console.print(f"    evoskill remote download     pull results when done")
+        console.print(f"    evoskill remote stop          cancel the run\n")
+        return
+
+    if docker:
+        from src.docker.launcher import launch_docker
+
+        cfg = load_config()
+        extra_args = []
+        if continue_loop:
+            extra_args.append("--continue")
+        if verbose:
+            extra_args.append("--verbose")
+        if quiet:
+            extra_args.append("--quiet")
+        launch_docker(cfg, extra_args=extra_args, rebuild=rebuild)
+        return
+
     from src.harness import Agent, set_sdk
     from src.agent_profiles.base_agent.base_agent import make_base_agent_options_from_task
     from src.agent_profiles.prompt_generator.prompt_generator import (
@@ -209,7 +303,6 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
     from src.agent_profiles.skill_proposer.skill_proposer import (
         make_skill_proposer_options,
     )
-    from src.cli.config import load_config
     from src.cli.shared import load_and_split, make_scorer
     from src.loop import LoopAgents, LoopConfig, SelfImprovingLoop
     from src.registry import ProgramManager

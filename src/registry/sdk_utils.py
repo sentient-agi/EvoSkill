@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
@@ -37,6 +38,10 @@ def config_to_options(
         Harness-specific options (ClaudeAgentOptions or dict) ready for Agent()
     """
     from src.harness import build_options, set_sdk, get_sdk
+
+    # Headless sandbox: bypass all permission prompts since no one can approve.
+    if os.environ.get("EVOSKILL_REMOTE") == "1":
+        permission_mode = "bypassPermissions"
 
     # Extract system prompt text from the stored dict
     system_prompt = config.system_prompt or {}
