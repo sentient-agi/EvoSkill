@@ -30,7 +30,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN npm install -g @anthropic-ai/claude-code opencode-ai && npm cache clean --force
 
 RUN ARCH=$(uname -m) && \
-    curl -fsSL "https://github.com/block/goose/releases/latest/download/goose-${ARCH}-unknown-linux-gnu.tar.gz" \
+    GOOSE_VER=$(curl -sL "https://api.github.com/repos/block/goose/releases/latest" \
+      | grep -m1 '"tag_name"' | cut -d'"' -f4) && \
+    if [ -z "$GOOSE_VER" ]; then \
+      GOOSE_VER=$(curl -sL "https://api.github.com/repos/block/goose/releases" \
+        | grep -m1 '"tag_name"' | cut -d'"' -f4); \
+    fi && \
+    echo "Installing goose ${GOOSE_VER} for ${ARCH}" && \
+    curl -fsSL "https://github.com/block/goose/releases/download/${GOOSE_VER}/goose-${ARCH}-unknown-linux-gnu.tar.gz" \
     | tar xz -C /usr/local/bin/
 
 # Python deps — core + all harness SDKs.
