@@ -1,409 +1,47 @@
-<div align="center">
-    <img src="./assets/evoskill_logo.png" alt="alt text" width="80%"/>
-    <br>
-    <h1>EvoSkill: Automated Skill Discovery for Coding Agents</h1>
-</div>
+![Sentient Logo](assets/sentient-logo-new-M.png)
 
+# EvoSkill: Automated Skill discovery For Multi-Agent Systems
 
-<p align="center">
-  <a href="https://www.alphaxiv.org/abs/2603.02766"><img src="https://img.shields.io/badge/Paper-f73c6f?style=for-the-badge" alt="Paper"></a>
-  <a href="https://www.sentient.xyz/blog/evoskill-automated-skill-induction-from-agent-failures"><img src="https://img.shields.io/badge/Blog-f73c6f?style=for-the-badge" alt="Blog"></a>
-  <a href="https://sentient.xyz"><img src="https://img.shields.io/badge/Built%20by-Sentient%20Labs-f73c6f?style=for-the-badge" alt="Built by Sentient Labs"></a>
-  <a href="https://x.com/SentientAGI"> <img src="https://img.shields.io/badge/-SentientAGI-grey?logo=x&style=for-the-badge"/>
-  <a href="https://github.com/sentient-agi/EvoSkill/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache 2.0-007ec6?style=for-the-badge" alt="License: Apache 2.0"></a>
-</p>
+**Automatically discover high-performance agent skills for any task!**
 
-<b>Turn your general AI agents into state-of-the-art specialists with a benchmark and EvoSkill, a toolkit for automatically creating and improving AI skills, compatible with Claude Code, Codex CLI, OpenCode, OpenHands, Goose, and more.</b>
+[![Homepage](https://img.shields.io/badge/Sentient-Homepage-%23EAEAEA?logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHNyZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzNDEuMzMzIiBoZWlnaHQ9IjM0MS4zMzMiIHZpZXdCb3g9IjAgMCAyNTYgMjU2Ij48cGF0aCBkPSJNMTMyLjUgMjguNC0yOC40YzAtLjMuMi0uNS41LS41aDI3LjJhLjUuNSAwIDAgMSAuNS41djI3LjJjMCAuMy0uMi41LS41LjVIMTMyLjVhLjUuNSAwIDAgMS0uNS0uNXoiLz48L3N2Zz4%3D&link=https%3A%2F%2Fsentient.xyz%2F)](https://sentient.xyz/)
+[![GitHub](https://img.shields.io/badge/Github-sentient_agi-181717?logo=github)](https://github.com/sentient-agi)
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-SentientAGI-ffc107?color=ffc107&logoColor=white)](https://huggingface.co/Sentientagi)
+[![Discord](https://img.shields.io/badge/Discord-SentientAGI-7289da?logo=discord&logoColor=white&color=7289da)](https://discord.gg/sentientfoundation)
+[![Twitter Follow](https://img.shields.io/badge/-SentientAGI-grey?logo=x&link=https%3A%2F%2Fx.com%2FSentientAGI%2F)](https://x.com/SentientAGI)
 
-<b>EvoSkill</b> significantly extends the feedback-driven idea of <b>[GEPA](https://github.com/sentient-agi/gepa-plus)</b> from single-file optimization to complete agent evolution. Instead of only revising one prompt in place like GEPA, EvoSkill proposes multiple skill and prompt mutations jointly, evaluates new variants on held-out data, and has each iteration produce an entirely new agent program.
+[Paper (Preprint)](https://www.sentient.xyz/blog/recursive-open-meta-agent) •
+[Build Agents for $$$](https://www.sentient.xyz/)
 
-<p align="center">
-  <img src="./assets/examples.png" alt="EvoSkill Architecture" style="width: 75%;">
-</p>
+## 📑 Table of Contents
 
-Install in seconds, then run `evoskill init` and `evoskill run` to supercharge any coding agent with <b>AI-created skills and prompts</b> automatically. Depending on the agent, you are free to use <b>any model provider</b> of your choice ([OpenRouter](https://openrouter.ai/models?q=g), [Anthropic](https://platform.claude.com/docs/en/about-claude/models/overview), [OpenAI](https://platform.openai.com/), [Fireworks](https://fireworks.ai/), and more) and <b>any model</b> you want (Claude, GLM, Minimax, Kimi, GPT, Gemini, Qwen, and others).
-
-Also join us on [Discord](https://discord.gg/sentientfoundation) to discuss your experience, share suggestions, or show off your work!
-
-## 🤖 Supported agents
-
-<table>
-  <thead>
-    <tr>
-      <th>Agent</th>
-      <th>Support</th>
-      <th>Notes</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><a href="https://www.anthropic.com/claude-code">Claude Code</a></td>
-      <td>✅</td>
-      <td></td>
-    </tr>
-    <tr>
-      <td><a href="https://opencode.ai/">OpenCode</a></td>
-      <td>✅</td>
-      <td>CLI v1.4.0+ required (structured output support)</td>
-    </tr>
-    <tr>
-      <td><a href="https://github.com/OpenHands/OpenHands">OpenHands</a></td>
-      <td>✅</td>
-      <td>No native structured output; uses fallback JSON extraction</td>
-    </tr>
-    <tr>
-      <td><a href="https://github.com/block/goose">Goose</a></td>
-      <td>✅</td>
-      <td>CLI v1.25.0+ required (skill discovery via summon extension)</td>
-    </tr>
-    <tr>
-      <td><a href="https://openai.com/index/introducing-codex/">Codex CLI</a></td>
-      <td>✅</td>
-      <td>Skill discovery via .agents/skills/ symlink</td>
-    </tr>
-  </tbody>
-</table>   
-
-## 🎨 Features
-
-<table>
-  <thead>
-    <tr>
-      <th>Capability</th>
-      <th>Status</th>
-      <th>Explanation</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><b>Evolution with a benchmark</b></td>
-      <td>✅</td>
-      <td>
-        Skills can be effectively improved against your own or academic benchmarks.
-      </td>
-    </tr>
-    <tr>
-      <td><b>Cross-agent transferability</b></td>
-      <td>✅</td>
-      <td>
-        <a href="https://agentskills.io">Skills</a> are packaged as reusable folders with instructions, metadata, and helper scripts, compatible with many coding agents.
-      </td>
-    </tr>
-    <tr>
-      <td><b>Cross-model transferability</b></td>
-      <td>✅</td>
-      <td>
-        Demonstrated in <a href="https://arxiv.org/html/2604.01687v1">EvoSkills</a>, skills evolved with a fixed LLM can transfer their performance increase to other LLMs.
-      </td>
-    </tr>
-    <tr>
-      <td><b>Cross-task transferability</b></td>
-      <td>✅</td>
-      <td>
-        Generated skills can be generic enough to transfer across tasks, for instance a SealQA skill improving BrowseComp performance (as shown in <a href="https://arxiv.org/abs/2603.02766">EvoSkill</a>).
-      </td>
-    </tr>
-    <tr>
-      <td><b>Evolution without a benchmark</b></td>
-      <td>🛠️</td>
-      <td>
-        An open research direction where benchmarks are generated on the fly (ex. <a href="https://github.com/NousResearch/hermes-agent-self-evolution">Hermes-Agent self-evolution</a>).
-      </td>
-    </tr>
-    <tr>
-      <td><b>Continuous evolution</b></td>
-      <td>🛠️</td>
-      <td>
-        Integrating the ability to improve skills from regular usage.
-      </td>
-    </tr>
-  </tbody>
-</table>
-
-## Table of Contents
-
-- [Installation](#installation)
-- [Quickstart](#quickstart)
-- [CLI Reference](#cli-reference)
-- [Configuration Reference](#configuration-reference)
-- [How It Works](#how-it-works)
-- [Git Branches](#git-branches)
-- [When the Loop Gets Stuck](#when-the-loop-gets-stuck)
-- [Python API](#python-api)
-- [Citation](#citation)
-- [License](#license)
-
-
-## Installation
-
-**Requirements:**
-- Python 3.12+
-- [`uv`](https://github.com/astral-sh/uv) (recommended) or `pip`
-
-```bash
-# Using uv (recommended)
-uv sync
-
-# Or using pip
-pip install -e .
-```
-
-**Agent CLI (install whichever harness you plan to use):**
-
-```bash
-brew install --cask claude-code    # Claude Code
-brew install opencode              # OpenCode (v1.4.0+)
-brew install --cask codex          # Codex CLI
-brew install block-goose-cli       # Goose (v1.25.0+)
-```
-
-**Common auth setup:**
-
-```bash
-# Anthropic (Claude Code harness)
-export ANTHROPIC_API_KEY=your-key-here
-
-# OpenAI (Codex harness)
-export OPENAI_API_KEY=your-key-here
-
-# OpenRouter (OpenCode / Goose / OpenHands harnesses)
-export OPENROUTER_API_KEY=your-key-here
-```
-
-OpenRouter-backed evolution runs also accept `LLM_API_KEY`, but `OPENROUTER_API_KEY` is the preferred env var.
+- [🧠 What is EvoSkill?](#-what-is-evoskill)
+- [🏗️ How It Works](#️-how-it-works)
+- [📦 Installation & Setup](#-installation--setup)
+- [🆓 Running on a Budget (Free & Open Models)](#-running-on-a-budget-free--open-models)
+- [🐍 Python API](#-python-api)
+- [⚡ Quickstart: Running the Self-Improvement Loop](#-quickstart-running-the-self-improvement-loop)
+- [📊 Running Evaluations](#-running-evaluations)
+- [🔑 Key Concepts](#-key-concepts)
+- [🧩 Extending EvoSkill: Adding a New Task](#-extending-evoskill-adding-a-new-task)
+- [📚 Citation](#-citation)
+- [📄 License](#-license)
 
 ---
 
-## Quickstart
+## 🧠 What is EvoSkill?
 
-### 1. Initialize a project
+EvoSkill is a self-improving agent framework that **automatically discovers high-performance skills** for AI agents. Rather than relying on manual prompt engineering, EvoSkill runs an evolutionary loop that tests an agent on benchmark questions, identifies failure patterns, proposes improvements (new skills or prompt mutations), evaluates the changes, and keeps the best-performing variants.
 
-Run `evoskill init` inside any git repository:
+The core insight is simple: treat agent configurations as programs that can be iterated on automatically. Each "program" is a versioned combination of a system prompt and a set of skills. EvoSkill maintains a **frontier** of the top-N performing programs, uses failures to drive targeted improvements, and tracks everything through git branches for full reproducibility.
 
-```bash
-$ evoskill init
-
-  EvoSkill — Project Setup
-  Which harness? › claude
-  Evolution mode? › skill_only — agent learns new skills (recommended)
-  Dataset path? › /absolute/path/to/questions.csv
-  Question column name? › question
-  Ground truth column name? › answer
-  Category column name? (leave blank if none) ›
-  Additional folders the agent can interact with? › /absolute/path/to/data_dir
-```
-
-This creates `.evoskill/config.toml` and `.evoskill/task.md`.
-
-- **Dataset path** — absolute path to your CSV file containing questions and ground-truth answers.
-- **Data dirs** — absolute paths to any additional directories the agent needs access to during runs (e.g. reference documents, databases). Comma-separated if multiple.
-
-### 2. Describe your task
-
-Edit `.evoskill/task.md` to describe what the agent should do:
-
-```markdown
-# Task
-
-Answer questions about quarterly financial reports.
-Return only the numeric answer with units.
-
-## Examples
-- "What was revenue in Q3?" → "$4.2B"
+EvoSkill has been validated on multiple benchmarks including DABStep (data analysis), SEAL-QA (search-augmented QA), and OfficeQA, demonstrating that automated skill discovery can match or exceed hand-tuned agent configurations.
 
 ---
 
-# Constraints
-- Always include units in the answer
-- Do not explain your reasoning, just return the answer
-```
+## 🏗️ How It Works
 
-### 3. Run the loop
-
-```bash
-evoskill run
-```
-
-EvoSkill will run the evolutionary loop and print a live progress table:
-
-```bash
-  Iter  Accuracy  Δ          Skills  Frontier  Status
-  1     42.0%     —          0       [1]       baseline
-  2     51.3%     +9.3%      1       [1, 2]    ★ new best
-  3     49.7%     -1.6%      1       [1, 2]    discarded
-  ...
-```
-
-### 4. Evaluate and inspect
-
-```bash
-evoskill eval          # score the best program on the validation set
-evoskill skills        # list all discovered skills
-evoskill diff          # see what changed vs baseline
-evoskill logs          # view past run history
-```
-
-### 5. Use the best program
-
-After the loop finishes, the best program lives on a git branch:
-
-```bash
-git branch | grep program/     # list all program branches
-git checkout program/iter-skill-3   # switch to the best one
-```
-
-From there you can inspect what the loop discovered:
-
-```bash
-cat .claude/program.yaml       # system prompt, tools, score
-ls .claude/skills/             # all learned skills
-```
-
-Copy `.claude/program.yaml` and `.claude/skills/` into your deployment to use the evolved agent configuration.
-
-## CLI Reference
-
-| Command | Description |
-|---------|-------------|
-| `evoskill init` | Initialize a new project (creates `.evoskill/`) |
-| `evoskill run` | Run the self-improvement loop |
-| `evoskill eval` | Evaluate the best program on the validation set |
-| `evoskill skills` | List all skills discovered so far |
-| `evoskill diff` | Diff baseline vs best, or between two iterations |
-| `evoskill logs` | Show recent run history |
-| `evoskill reset` | Delete all program branches and start fresh |
-
-### `evoskill run`
-
-```bash
-evoskill run [--continue] [--verbose] [--quiet]
-```
-
-| Flag | Description |
-|------|-------------|
-| `--continue` | Resume from the existing frontier instead of starting fresh. Preserves all `program/*` branches, `frontier/*` tags, feedback history, and the sampling checkpoint so the loop picks up exactly where it left off. |
-| `--verbose` | Show per-sample pass/fail results |
-| `--quiet` | Show the progress table only, suppress proposer output |
-
-### `evoskill diff`
-
-```bash
-evoskill diff              # baseline → current best
-evoskill diff 3 7          # iteration 3 vs iteration 7
-```
-
-The diff is scoped to the `.claude/` directory — it shows changes to skills and the system prompt, not your source code.
-
-### `evoskill logs`
-
-```bash
-evoskill logs              # last 5 runs (default)
-evoskill logs --last 10    # last 10 runs
-```
-
-### `evoskill reset`
-
-```bash
-evoskill reset             # prompts for confirmation
-```
-
-Deletes all `program/*` branches, `frontier/*` tags, the loop checkpoint, and feedback history. Your source code, `config.toml`, `task.md`, and any skills in `.claude/skills/` are left untouched.
-
-## Configuration Reference
-
-`evoskill init` creates `.evoskill/config.toml`. All fields are optional — defaults are shown below.
-
-```toml
-[harness]
-name = "claude"        # "claude", "opencode", "codex", "goose", or "openhands"
-model = "sonnet"       # Claude alias, Codex model name, or provider/model for OpenCode/Goose/OpenHands
-data_dirs = ["/absolute/path/to/data_dir"]  # extra directories the agent can read
-
-[evolution]
-mode = "skill_only"          # "skill_only" or "prompt_only"
-iterations = 20
-frontier_size = 3
-concurrency = 4
-no_improvement_limit = 5
-
-[dataset]
-path = "/absolute/path/to/questions.csv"  # absolute path to the dataset CSV
-question_column = "question"
-ground_truth_column = "ground_truth"
-category_column = ""         # optional, for stratified sampling
-train_ratio = 0.18
-val_ratio = 0.12
-
-[scorer]
-type = "multi_tolerance"     # see scorer types below
-```
-
-**Common evolution model setups:**
-
-Anthropic:
-
-```toml
-[harness]
-name = "claude"
-model = "claude-sonnet-4-6"
-```
-
-OpenAI:
-
-```toml
-[harness]
-name = "codex"
-model = "gpt-5"
-```
-
-OpenRouter:
-
-```toml
-[harness]
-name = "opencode"
-model = "openrouter/openai/gpt-5-mini"
-```
-
-Notes:
-- `claude` is Anthropic-only.
-- `codex` uses bare OpenAI model names such as `gpt-5`, `o3`, or `codex-mini-latest`.
-- `opencode`, `goose`, and `openhands` are multi-provider harnesses and can also use Claude and OpenAI models.
-- `opencode`, `goose`, and `openhands` accept `provider/model` strings such as `anthropic/claude-sonnet-4-6`, `openai/gpt-5`, or `openrouter/openai/gpt-5-mini`.
-
-### Scorer types
-
-| Type | Description |
-|------|-------------|
-| `multi_tolerance` | Flexible string matching: exact, numeric tolerance, list overlap (default) |
-| `exact` | Case-insensitive exact string match |
-| `llm` | LLM-as-judge grading with a custom rubric |
-| `script` | Shell script scorer — receives `{predicted}` and `{expected}` as variables |
-
-**LLM scorer options:**
-
-```toml
-[scorer]
-type = "llm"
-rubric = "Award 1.0 if the answer is numerically correct within 5%, 0.0 otherwise."
-model = "claude-sonnet-4-6"   # defaults to claude-sonnet-4-6
-provider = "anthropic"        # "anthropic", "openai", "google", or "openrouter"
-```
-
-For OpenRouter-backed scoring, set `provider = "openrouter"` and use an OpenRouter model ID such as `openai/gpt-5-mini` or `google/gemini-2.5-flash`. Authentication uses `OPENROUTER_API_KEY` and falls back to `LLM_API_KEY` if needed.
-
-**Script scorer options:**
-
-```toml
-[scorer]
-type = "script"
-command = "python score.py --predicted {predicted} --expected {expected}"
-```
-
-## How It Works
-
-<p align="center">
-  <img src="./assets/evoskill_diagram.jpg" alt="EvoSkill Architecture" style="max-width: 75%; width: 75%;" />
-</p>
+![EvoSkill Architecture](assets/evoskill.jpg)
 
 The self-improvement loop follows five stages:
 
@@ -415,37 +53,140 @@ The self-improvement loop follows five stages:
 
 This cycle repeats for a configurable number of iterations, automatically converging on stronger agent configurations.
 
-## Git Branches
+---
 
-EvoSkill uses your repo's git history to version every program it creates. During a run it automatically creates and switches between branches — you don't need to do anything. After a run your branch layout will look like:
+## 📦 Installation & Setup
 
+**Requirements:**
+
+- Python 3.12+
+- [`uv`](https://github.com/astral-sh/uv) (recommended) or `pip`
+- Docker (for LiveCodeBench evaluation with secure code execution sandbox)
+
+**Install dependencies:**
+
+```bash
+# Using uv (recommended)
+uv sync
+
+# Or using pip
+pip install -e .
 ```
-main                      ← your code, untouched
-program/base              ← initial baseline agent
-program/iter-skill-1      ← after iteration 1
-program/iter-skill-2      ← after iteration 2
-...
+
+**Environment variables:**
+Either login to **Claude Code** or use your API key
+
+```bash
+# Required — used by the Claude agent SDK
+export ANTHROPIC_API_KEY=your-key-here
 ```
 
-Frontier members are marked with `frontier/*` tags. EvoSkill only ever writes to branches prefixed `program/`, so there is no risk of it touching your working branch.
+**SDK and Model Selection:**
 
-## When the Loop Gets Stuck
+Use `--sdk` and `--model` to configure which SDK and model to use:
 
-If accuracy stops improving, try the following:
+```bash
+# Claude SDK (default)
+uv run python scripts/run_eval.py --sdk claude --model claude-sonnet-4-5-20250514
 
-1. **Check the feedback log** — `.claude/feedback_history.md` records what the proposer tried each iteration and why it succeeded or failed.
-2. **Resume instead of restarting** — `evoskill run --continue` picks up from the last frontier rather than discarding progress.
-3. **Reset and start fresh** — `evoskill reset` clears all branches and lets you start over with a revised `task.md`.
+# OpenCode SDK with different models
+uv run python scripts/run_eval.py --sdk opencode --model deepseek-ai/DeepSeek-V3
+uv run python scripts/run_eval.py --sdk opencode --model google/gemini-2.0-flash-exp
+```
 
-## Python API
+**Dataset preparation:**
 
-For programmatic usage, EvoSkill exposes a high-level Python API.
+Place your benchmark datasets in the `.dataset/` directory:
 
-### `EvoSkill`
+- DABStep: `.dataset/dabstep_data.csv`
+- SEAL-QA: `.dataset/seal-0.csv`
+- OfficeQA: see `scripts/run_eval.py` for expected path
+
+---
+
+## 🆓 Running on a Budget (Free & Open Models)
+
+You do **not** need a paid Claude Code subscription to use EvoSkill.
+The framework natively supports multiple SDKs and model providers through the `--sdk` flag.
+
+### ✅ Validate your environment first
+
+Before running the loop, use the included environment validator to catch missing API keys, wrong Python versions, or misconfigured dependencies in one command:
+
+```bash
+python scripts/validate_env.py
+```
+
+Check a specific SDK and model combination:
+
+```bash
+python scripts/validate_env.py --sdk opencode --model google/gemini-2.0-flash-exp
+```
+
+List all free and low-cost model options:
+
+```bash
+python scripts/validate_env.py --list-free-options
+```
+
+---
+
+### Option 1 — Gemini Flash via OpenRouter (Free, no billing required)
+
+[OpenRouter](https://openrouter.ai) offers `google/gemini-2.0-flash-exp` at zero cost. Sign up, get your key, and run:
+
+```bash
+export OPENROUTER_API_KEY=your-key-here
+uv run python scripts/run_eval.py --sdk opencode --model google/gemini-2.0-flash-exp
+```
+
+### Option 2 — DeepSeek-V3 (Very low cost)
+
+DeepSeek-V3 via OpenRouter is one of the most capable open models at a fraction of the cost of proprietary APIs:
+
+```bash
+export OPENROUTER_API_KEY=your-key-here
+uv run python scripts/run_eval.py --sdk opencode --model deepseek-ai/DeepSeek-V3
+```
+
+### Option 3 — Anthropic Free Tier (Claude Haiku)
+
+Sign up for a free API key at [console.anthropic.com](https://console.anthropic.com). Claude Haiku is the lowest-cost Anthropic model and works well for exploration runs:
+
+```bash
+export ANTHROPIC_API_KEY=your-key-here
+uv run python scripts/run_eval.py --sdk claude --model claude-haiku-4-5-20251001
+```
+
+### 💡 Tip: Limit samples to explore for free
+
+Use `--num-samples` to cap how many benchmark questions are evaluated. This keeps API costs near zero while you validate your setup:
+
+```bash
+uv run python scripts/run_eval.py --sdk opencode --model google/gemini-2.0-flash-exp --num-samples 20
+```
+
+| SDK | Model | Cost | Notes |
+|---|---|---|---|
+| `opencode` | `google/gemini-2.0-flash-exp` | **Free** | OpenRouter free tier |
+| `opencode` | `deepseek-ai/DeepSeek-V3` | ~$0.001/1k tokens | Extremely low cost |
+| `claude` | `claude-haiku-4-5-20251001` | Low | Cheapest Anthropic model |
+
+---
+
+## 🐍 Python API
+
+EvoSkill provides a high-level Python API that reduces the boilerplate needed to run the self-improvement loop or standalone evaluations to just a few lines.
+
+### `EvoSkill` — Run the self-improvement loop
 
 ```python
 from src.api import EvoSkill
 
+# Minimal — uses task defaults
+result = await EvoSkill(dataset=".dataset/seal-0.csv", task="sealqa").run()
+
+# Full configuration
 evo = EvoSkill(
     task="sealqa",
     model="sonnet",
@@ -459,11 +200,14 @@ evo = EvoSkill(
 )
 result = await evo.run()
 
-# Synchronous usage
+# Synchronous usage (wraps asyncio.run)
 result = EvoSkill(task="base").run_sync()
+
+# Preview dataset splits without running
+print(evo.dataset_info)
 ```
 
-### `EvalRunner`
+### `EvalRunner` — Run standalone evaluation
 
 ```python
 from src.api import EvalRunner
@@ -473,25 +217,201 @@ summary = await EvalRunner(
     model="sonnet",
     max_concurrent=8,
 ).run()
+
+print(f"Accuracy: {summary.accuracy:.1%} ({summary.correct}/{summary.successful})")
 ```
 
+### Built-in tasks
 
-## Citation
+Three tasks are registered out of the box:
 
-If you use EvoSkill in your research, please cite the [original paper](https://arxiv.org/abs/2603.02766):
+| Task | Agent | Default Dataset | Scorer |
+|---|---|---|---|
+| `"base"` | Base agent | `.dataset/new_runs_base/solved_dataset.csv` | Multi-tolerance (default) |
+| `"sealqa"` | SEAL-QA agent | `.dataset/seal-0.csv` | LLM-graded (GPT) |
+
+```python
+from src.api import list_tasks
+print(list_tasks())  # ['base', 'dabstep', 'sealqa']
+```
+
+### Registering a custom task
+
+```python
+from src.api import TaskConfig, register_task
+
+register_task(TaskConfig(
+    name="my_task",
+    make_agent_options=make_my_agent_options,
+    scorer=my_scorer_fn,  # (question, predicted, ground_truth) -> float
+    column_renames={"label": "ground_truth", "topic": "category"},
+    default_dataset=".dataset/my_data.csv",
+))
+
+result = await EvoSkill(task="my_task").run()
+```
+
+---
+
+## ⚡ Quickstart: Running the Self-Improvement Loop
+
+The CLI scripts remain available for users who prefer the command line.
+
+Run the evolutionary skill discovery loop on a benchmark:
+
+**OfficeQA:**
+
+```bash
+python scripts/run_loop.py --mode skill_only --max-iterations 20
+```
+
+**SEAL-QA:**
+
+```bash
+python scripts/run_loop_sealqa.py --mode skill_only --max-iterations 20
+```
+
+**Key CLI flags:**
+
+| Flag | Description | Default |
+|---|---|---|
+| `--mode` | Evolution mode: `skill_only` or `prompt_only` | `skill_only` |
+| `--max-iterations` | Number of improvement iterations | `20` |
+| `--frontier-size` | Number of top programs to keep | `3` |
+| `--concurrency` | Concurrent evaluations | `4` |
+| `--continue` | Resume from existing frontier | off |
+| `--no-cache` | Disable run caching | off |
+| `--model` | Base agent model (`opus`, `sonnet`, `haiku`) | `opus` |
+
+---
+
+## 📊 Running Evaluations
+
+Evaluate an agent configuration on a full benchmark dataset:
+
+**OfficeQA:**
+
+```bash
+python scripts/run_eval.py --model opus --max-concurrent 8
+```
+
+**SEAL-QA:**
+
+```bash
+python scripts/run_eval_sealqa.py --model opus --max-concurrent 8
+```
+
+Common eval flags: `--output <path>`, `--max-concurrent <n>`, `--num-samples <n>`, `--no-resume`.
+
+---
+
+## 🔑 Key Concepts
+
+- **Program** — A versioned agent configuration (system prompt + skills), stored as a git branch.
+- **Frontier** — The top-N highest-scoring programs, tracked via git tags and branches.
+- **Evolution Mode** — `skill_only` discovers new reusable skills; `prompt_only` optimizes the system prompt directly.
+- **Skill** — A reusable capability file written to `.claude/skills/` that the agent can invoke during execution.
+- **Proposer** — Analyzes agent failures and suggests what skill or prompt change would help.
+- **Generator** — Takes a proposal and produces the actual skill file or prompt rewrite.
+
+---
+
+## 🧩 Extending EvoSkill: Adding a New Task
+
+EvoSkill is designed to be extended to new benchmarks. There are two approaches: using the **Python API** (recommended) or creating **standalone scripts**.
+
+### Option A: Using `register_task` (recommended)
+
+#### 1. Create an Agent Profile
+
+Add a new directory under `src/agent_profiles/` for your task:
+
+```
+src/agent_profiles/my_task_agent/
+├── __init__.py
+├── my_task_agent.py    # Options factory
+└── prompt.txt          # (optional) task-specific system prompt
+```
+
+Your agent module should expose a `make_*_agent_options` factory that returns `ClaudeAgentOptions`. See `src/agent_profiles/dabstep_agent/dabstep_agent.py` or `src/agent_profiles/sealqa_agent/sealqa_agent.py` for reference.
+
+Then register the exports in `src/agent_profiles/__init__.py`.
+
+#### 2. Create a Scorer (optional)
+
+Add a scorer under `src/evaluation/` that compares the agent's output to ground truth:
+
+```python
+# src/evaluation/my_task_scorer.py
+
+def score_my_task(question: str, predicted: str, ground_truth: str) -> float:
+    """Return 1.0 if correct, 0.0 otherwise."""
+    return 1.0 if predicted.strip().lower() == ground_truth.strip().lower() else 0.0
+```
+
+For more complex grading (e.g. partial credit or LLM-based judging), see `src/evaluation/sealqa_scorer.py`. If no scorer is provided, the default multi-tolerance scorer is used.
+
+#### 3. Register and run
+
+```python
+from src.api import TaskConfig, register_task, EvoSkill, EvalRunner
+
+register_task(TaskConfig(
+    name="my_task",
+    make_agent_options=make_my_task_agent_options,
+    scorer=score_my_task,
+    column_renames={"label": "ground_truth", "topic": "category"},
+    default_dataset=".dataset/my_data.csv",
+))
+
+# Run the self-improvement loop
+result = await EvoSkill(task="my_task").run()
+
+# Or run a standalone evaluation
+summary = await EvalRunner(task="my_task", model="sonnet").run()
+```
+
+### Option B: Standalone scripts
+
+You can also create scripts directly under `scripts/` following the existing patterns.
+
+**Evaluation script** — loads your dataset and runs `evaluate_full()`:
+
+```python
+from src.agent_profiles import Agent, make_my_task_agent_options
+from src.evaluation.eval_full import evaluate_full
+from src.schemas import AgentResponse
+
+agent = Agent(make_my_task_agent_options(model="opus"), AgentResponse)
+results = await evaluate_full(agent=agent, items=items, output_path=output, ...)
+```
+
+See `scripts/run_eval_dabstep.py` for a complete example.
+
+**Loop script** — follow the pattern in `scripts/run_loop.py`. The key ingredients are:
+
+- A **dataset split** function (train set for failure analysis, validation set for scoring)
+- Your **agent options factory** and **scorer** wired into `SelfImprovingLoop`
+- A `LoopConfig` with your chosen mode (`skill_only` or `prompt_only`)
+
+---
+
+## 📚 Citation
+
+If you use EvoSkill in your research, please cite:
 
 ```bibtex
 @misc{alzubi2026evoskillautomatedskilldiscovery,
-      title={EvoSkill: Automated Skill Discovery for Multi-Agent Systems}, 
-      author={Salaheddin Alzubi and Noah Provenzano and Jaydon Bingham and Weiyuan Chen and Tu Vu},
-      year={2026},
-      eprint={2603.02766},
-      archivePrefix={arXiv},
-      primaryClass={cs.AI},
-      url={https://arxiv.org/abs/2603.02766}, 
+  title={EvoSkill: Automated Skill Discovery for Multi-Agent Systems},
+  author={Salaheddin Alzubi and Noah Provenzano and Jaydon Bingham and Weiyuan Chen and Tu Vu},
+  year={2026},
+  eprint={2603.02766},
+  archivePrefix={arXiv},
+  primaryClass={cs.AI},
+  url={https://arxiv.org/abs/2603.02766},
 }
 ```
 
-## License
+## 📄 License
 
 This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENSE) file for details.
