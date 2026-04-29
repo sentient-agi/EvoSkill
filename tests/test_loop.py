@@ -111,6 +111,13 @@ class TestLoopConfig:
         assert LoopConfig().consecutive_proposer_failures_limit == 5
 
 
+def test_multi_tolerance_scorer_empty_prediction_scores_zero() -> None:
+    from src.loop.runner import _score_multi_tolerance
+
+    assert _score_multi_tolerance("question", "", "42") == 0.0
+    assert _score_multi_tolerance("question", None, "42") == 0.0
+
+
 # ===========================================================================
 # build_proposer_query
 # ===========================================================================

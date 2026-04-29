@@ -70,8 +70,9 @@ class ProjectConfig:
 
     @property
     def dataset_path(self) -> Path:
-        """Return the absolute path to the dataset CSV."""
-        return Path(self.dataset.path)
+        """Return the dataset CSV path, resolving relative paths from project_root."""
+        path = Path(self.dataset.path)
+        return path if path.is_absolute() else self.project_root / path
 
 
 def _find_project_root(start: Path | None = None) -> Path | None:
@@ -91,18 +92,43 @@ def _parse_task_md(text: str) -> tuple[str, str]:
     return description, constraints
 
 
-def load_config(start: Path | None = None) -> ProjectConfig:
-    """Find and load the project config. Exits with a message if not found."""
-    root = _find_project_root(start)
+def _resolve_config_override(config_path: Path) -> tuple[Path, Path]:
+    """Resolve an explicit config path and the project root it belongs to."""
+    path = config_path.expanduser()
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    else:
+        path = path.resolve()
+
+    root = _find_project_root(path.parent)
     if root is None:
         import sys
-        print("Error: no .evoskill/ directory found. Run 'evoskill init' first.")
+        print(
+            f"Error: no .evoskill/ directory found above config file {path}."
+        )
         sys.exit(1)
 
-    config_path = root / EVOSKILL_DIR / 'config.toml'
+    return root, path
+
+
+def load_config(
+    start: Path | None = None,
+    config_path: Path | None = None,
+) -> ProjectConfig:
+    """Find and load the project config. Exits with a message if not found."""
+    if config_path is not None:
+        root, config_path = _resolve_config_override(config_path)
+    else:
+        root = _find_project_root(start)
+        if root is None:
+            import sys
+            print("Error: no .evoskill/ directory found. Run 'evoskill init' first.")
+            sys.exit(1)
+        config_path = root / EVOSKILL_DIR / 'config.toml'
+
     if not config_path.exists():
         import sys
-        print(f"Error: {config_path} not found. Run 'evoskill init' first.")
+        print(f"Error: config file not found at {config_path}.")
         sys.exit(1)
 
     with open(config_path, 'rb') as f:

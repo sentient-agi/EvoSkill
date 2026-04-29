@@ -76,12 +76,16 @@ def _normalize_provider_model(provider: str, model: str) -> str:
 
 async def call_llm(provider: str, model: str, prompt: str) -> str:
     """Call the requested LLM provider and return the raw text response."""
+    from src.harness.provider_auth import ensure_provider_api_key
+
+    provider = provider.strip().lower()
     normalized_model = _normalize_provider_model(provider, model)
+    api_key = ensure_provider_api_key(provider)
 
     if provider == "anthropic":
         import anthropic
 
-        client = anthropic.AsyncAnthropic()
+        client = anthropic.AsyncAnthropic(api_key=api_key)
         response = await client.messages.create(
             model=normalized_model,
             max_tokens=16,
@@ -97,7 +101,7 @@ async def call_llm(provider: str, model: str, prompt: str) -> str:
                 "openai package not installed. Run: uv add openai"
             ) from exc
 
-        client = openai.AsyncOpenAI()
+        client = openai.AsyncOpenAI(api_key=api_key)
         response = await client.chat.completions.create(
             model=normalized_model,
             max_tokens=16,
@@ -112,12 +116,6 @@ async def call_llm(provider: str, model: str, prompt: str) -> str:
             raise RuntimeError(
                 "openai package not installed. Run: uv add openai"
             ) from exc
-
-        api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("LLM_API_KEY")
-        if not api_key:
-            raise RuntimeError(
-                "OpenRouter API key not configured. Set OPENROUTER_API_KEY or LLM_API_KEY."
-            )
 
         default_headers: dict[str, str] = {}
         if referer := os.environ.get("OPENROUTER_HTTP_REFERER"):
@@ -145,7 +143,7 @@ async def call_llm(provider: str, model: str, prompt: str) -> str:
                 "google-genai package not installed. Run: uv add google-genai"
             ) from exc
 
-        client = genai.Client()
+        client = genai.Client(api_key=api_key)
         response = await client.aio.models.generate_content(model=normalized_model, contents=prompt)
         return response.text
 

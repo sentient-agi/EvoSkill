@@ -72,6 +72,7 @@ class TestExecuteQuery:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     ):
         set_sdk("opencode")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
         popen_calls = []
         session_resp, chat_resp, msgs_resp = _make_server_responses()
 
@@ -128,6 +129,7 @@ class TestExecuteQuery:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
     ):
         set_sdk("opencode")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
         popen_count = 0
 
         def fake_popen(*a, **kw):

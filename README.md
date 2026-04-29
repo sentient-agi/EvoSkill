@@ -276,7 +276,7 @@ Copy `.claude/program.yaml` and `.claude/skills/` into your deployment to use th
 ### `evoskill run`
 
 ```bash
-evoskill run [--continue] [--verbose] [--quiet]
+evoskill run [--continue] [--verbose] [--quiet] [--config PATH]
 ```
 
 | Flag | Description |
@@ -284,6 +284,9 @@ evoskill run [--continue] [--verbose] [--quiet]
 | `--continue` | Resume from the existing frontier instead of starting fresh. Preserves all `program/*` branches, `frontier/*` tags, feedback history, and the sampling checkpoint so the loop picks up exactly where it left off. |
 | `--verbose` | Show per-sample pass/fail results |
 | `--quiet` | Show the progress table only, suppress proposer output |
+| `--config PATH` | Load a specific config TOML file instead of `.evoskill/config.toml` |
+
+`evoskill eval` also accepts `--config PATH`.
 
 ### `evoskill diff`
 
@@ -311,7 +314,7 @@ Deletes all `program/*` branches, `frontier/*` tags, the loop checkpoint, and fe
 
 ## Configuration Reference
 
-`evoskill init` creates `.evoskill/config.toml`. All fields are optional — defaults are shown below.
+`evoskill init` creates `.evoskill/config.toml`. All fields are optional — defaults are shown below. Relative dataset and data directory paths are resolved from the project root, meaning the directory containing `.evoskill`.
 
 ```toml
 [harness]
@@ -327,7 +330,7 @@ concurrency = 4
 no_improvement_limit = 5
 
 [dataset]
-path = "/absolute/path/to/questions.csv"  # absolute path to the dataset CSV
+path = "data/questions.csv"  # relative to project root, or an absolute path
 question_column = "question"
 ground_truth_column = "ground_truth"
 category_column = ""         # optional, for stratified sampling
@@ -336,6 +339,20 @@ val_ratio = 0.12
 
 [scorer]
 type = "multi_tolerance"     # see scorer types below
+```
+
+Alternate configs can live next to the default config:
+
+```text
+.evoskill/config.toml
+.evoskill/config.openrouter.toml
+```
+
+Run with an explicit config:
+
+```bash
+evoskill eval --config .evoskill/config.openrouter.toml
+evoskill run --config .evoskill/config.openrouter.toml
 ```
 
 **Common evolution model setups:**

@@ -24,39 +24,41 @@ examples/officeqa/
 pip install -e .
 ```
 
-### 2. Set your API key
+### 2. Set up an isolated git repo
 
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-```
-
-### 3. Update paths in config
-
-Open `.evoskill/config.toml` and replace the two placeholder paths with absolute paths on your machine:
-
-```toml
-# data_dirs — point to the treasury bulletins
-data_dirs = [
-    "/your/path/to/examples/officeqa/data/treasury_bulletins",
-]
-
-# dataset path — point to the sample CSV
-path = "/your/path/to/examples/officeqa/data/officeqa_sample.csv"
-```
-
-### 4. Run
+EvoSkill stores program versions as git branches. Run the setup script so those branches stay inside this example directory and don't touch the parent repo:
 
 ```bash
 cd examples/officeqa
+bash setup.sh
+```
 
-# Single evaluation pass
-evoskill eval
+### 3. Choose a config and run
 
-# Full evolution loop (discovers and refines skills)
+#### Option A: Claude (default)
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+evoskill eval --verbose
 evoskill run
 ```
 
-### 5. Inspect results
+Uses `.evoskill/config.toml` (`claude` harness, `anthropic/claude-sonnet-4-6`).
+
+#### Option B: OpenRouter via OpenCode
+
+```bash
+brew install opencode
+export OPENROUTER_API_KEY="sk-or-..."
+
+evoskill eval --config .evoskill/config.openrouter.toml --verbose
+evoskill run --config .evoskill/config.openrouter.toml
+```
+
+Uses `.evoskill/config.openrouter.toml` (`opencode` harness, `openrouter/openai/gpt-5-mini`). Swap the model ID for any other OpenRouter model.
+
+### 4. Inspect results
 
 ```bash
 evoskill skills    # List discovered skills

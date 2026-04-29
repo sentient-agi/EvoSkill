@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import click
 from rich.console import Console
@@ -13,7 +14,9 @@ console = Console()
 
 @click.command('eval')
 @click.option('--verbose', is_flag=True, default=False, help='Show per-question results.')
-def eval_cmd(verbose: bool):
+@click.option('--config', 'config_path', type=click.Path(dir_okay=False, path_type=Path),
+              default=None, help='Load a specific config TOML file.')
+def eval_cmd(verbose: bool, config_path: Path | None):
     """Evaluate the best skills on the validation set."""
     from src.harness import Agent, set_sdk
     from src.agent_profiles.base_agent.base_agent import make_base_agent_options
@@ -22,7 +25,7 @@ def eval_cmd(verbose: bool):
     from src.evaluation import evaluate_agent_parallel
     from src.registry import ProgramManager
     from src.schemas import AgentResponse
-    cfg = load_config()
+    cfg = load_config(config_path=config_path)
     sdk = cfg.harness.name
     set_sdk(sdk)
 

@@ -37,6 +37,9 @@ def _score_multi_tolerance(question: str, predicted: str, ground_truth: str) -> 
       - 5.0%  tolerance: 0.50
       - 10.0% tolerance: 0.33
     """
+    if not str(predicted or "").strip():
+        return 0.0
+
     weighted_sum = 0.0
     weight_total = 0.0
     for tol in TOLERANCE_LEVELS:
@@ -146,7 +149,7 @@ class SelfImprovingLoop:
 
         # Paths
         self._project_root = Path(getattr(self.manager, "cwd", Path.cwd())).resolve()
-        self._feedback_path = self._project_root / ".claude" / "feedback_history.md"
+        self._feedback_path = self._project_root / ".evoskill" / "feedback_history.md"
         self._prompt_path = (
             self._project_root / "src" / "agent_profiles" / "base_agent" / "prompt.txt"
         )
@@ -167,7 +170,7 @@ class SelfImprovingLoop:
         self._iteration_offset = 0
 
         # Checkpoint file for exact resume
-        self._checkpoint_path = self._project_root / ".claude" / "loop_checkpoint.json"
+        self._checkpoint_path = self._project_root / ".evoskill" / "loop_checkpoint.json"
 
         # Cost tracking
         self._total_cost: float = 0.0

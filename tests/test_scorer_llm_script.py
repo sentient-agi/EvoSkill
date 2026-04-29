@@ -152,11 +152,13 @@ class TestLLMScorer:
                 return FakeResponse()
 
         class FakeAsyncAnthropic:
-            def __init__(self):
+            def __init__(self, *, api_key=None):
+                captured["api_key"] = api_key
                 self.messages = FakeMessages()
 
         fake_anthropic = types.SimpleNamespace(AsyncAnthropic=FakeAsyncAnthropic)
         monkeypatch.setitem(sys.modules, "anthropic", fake_anthropic)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 
         from src.cli.shared import make_scorer
 
@@ -168,6 +170,7 @@ class TestLLMScorer:
         score = scorer("Q?", "A", "A")
 
         assert score == 1.0
+        assert captured["api_key"] == "test-anthropic-key"
 
     def test_llm_scorer_works_inside_running_event_loop(self, monkeypatch):
         """LLM scorer works when called from inside a running event loop."""

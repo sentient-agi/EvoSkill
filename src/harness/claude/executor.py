@@ -13,6 +13,8 @@ from typing import Any, Type
 
 from pydantic import BaseModel, ValidationError
 
+from ..provider_auth import ensure_provider_api_key
+
 
 async def execute_query(options: Any, query: str) -> list[Any]:
     """Execute a query via Claude SDK.
@@ -24,6 +26,8 @@ async def execute_query(options: Any, query: str) -> list[Any]:
     Returns:
         List of messages: [SystemMessage, ..., ResultMessage]
     """
+    ensure_provider_api_key("anthropic")
+
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
     # If someone passed a dict to Claude SDK (e.g., from config_to_options),

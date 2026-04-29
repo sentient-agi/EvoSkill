@@ -1,12 +1,12 @@
-# EvoSkill example configuration - OfficeQA (10-question sample).
+# EvoSkill example configuration - OfficeQA using OpenRouter via OpenCode.
 # Paths are relative to examples/officeqa when you run commands from this directory.
 
 [harness]
-# Agent runtime used to execute EvoSkill runs.
-name = "claude"
+# OpenRouter is demonstrated through the OpenCode harness.
+name = "opencode"
 
-# Default model for the selected runtime.
-model = "anthropic/claude-sonnet-4-6"
+# Any OpenRouter model ID can be used after the openrouter/ prefix.
+model = "openrouter/openai/gpt-5-mini"
 
 # Additional folders the agent can interact with during runs.
 data_dirs = [
@@ -39,7 +39,7 @@ no_improvement_limit = 3
 failure_samples = 2
 
 [dataset]
-# Absolute path to the dataset CSV.
+# Dataset CSV path, resolved relative to this example directory.
 path = "data/officeqa_sample.csv"
 
 # CSV column containing the question or task input.

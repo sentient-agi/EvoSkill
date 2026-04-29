@@ -12,8 +12,9 @@ from src.schemas import AgentResponse
 
 
 @pytest.fixture(autouse=True)
-def _reset_sdk() -> None:
+def _reset_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
     set_sdk("claude")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
     yield
     set_sdk("claude")
 

@@ -91,6 +91,105 @@ def test_load_config_reads_timeout_and_retry_settings(tmp_path: Path) -> None:
     assert cfg.harness.max_retries == 1
 
 
+def test_dataset_path_resolves_relative_to_project_root(tmp_path: Path) -> None:
+    from src.cli.config import load_config
+
+    project_root = _write_project(
+        tmp_path,
+        (
+            "[dataset]\n"
+            'path = "data/questions.csv"\n'
+        ),
+    )
+
+    cfg = load_config(project_root)
+
+    assert cfg.dataset_path == project_root / "data/questions.csv"
+
+
+def test_dataset_path_preserves_absolute_path(tmp_path: Path) -> None:
+    from src.cli.config import load_config
+
+    absolute_path = tmp_path / "external" / "questions.csv"
+    project_root = _write_project(
+        tmp_path,
+        (
+            "[dataset]\n"
+            f'path = "{absolute_path}"\n'
+        ),
+    )
+
+    cfg = load_config(project_root)
+
+    assert cfg.dataset_path == absolute_path
+
+
+def test_load_config_reads_explicit_config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.cli.config import load_config
+
+    project_root = _write_project(
+        tmp_path,
+        '[harness]\nname = "claude"\n',
+    )
+    alternate_config = project_root / ".evoskill" / "config.openrouter.toml"
+    alternate_config.write_text(
+        (
+            '[harness]\n'
+            'name = "opencode"\n'
+            'model = "openrouter/openai/gpt-5-mini"\n'
+            '\n'
+            '[dataset]\n'
+            'path = "data/questions.csv"\n'
+        )
+    )
+    monkeypatch.chdir(project_root)
+
+    cfg = load_config(config_path=Path(".evoskill/config.openrouter.toml"))
+
+    assert cfg.harness.name == "opencode"
+    assert cfg.harness.model == "openrouter/openai/gpt-5-mini"
+    assert cfg.dataset_path == project_root / "data/questions.csv"
+
+
+def test_load_config_explicit_config_path_preserves_project_root(tmp_path: Path) -> None:
+    from src.cli.config import load_config
+
+    project_root = _write_project(tmp_path, '[harness]\nname = "claude"\n')
+    alternate_config = project_root / ".evoskill" / "config.codex.toml"
+    alternate_config.write_text('[harness]\nname = "codex"\n')
+
+    cfg = load_config(config_path=alternate_config)
+
+    assert cfg.project_root == project_root
+    assert cfg.harness.name == "codex"
+    assert cfg.harness.model == "codex-mini-latest"
+
+
+def test_load_config_explicit_config_requires_evoskill_root(tmp_path: Path) -> None:
+    from src.cli.config import load_config
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[harness]\nname = "claude"\n')
+
+    with pytest.raises(SystemExit):
+        load_config(config_path=config_path)
+
+
+def test_officeqa_openrouter_config_loads() -> None:
+    from src.cli.config import load_config
+
+    example_root = Path(__file__).resolve().parents[1] / "examples" / "officeqa"
+    config_path = example_root / ".evoskill" / "config.openrouter.toml"
+
+    cfg = load_config(config_path=config_path)
+
+    assert cfg.project_root == example_root
+    assert cfg.harness.name == "opencode"
+    assert cfg.harness.model == "openrouter/openai/gpt-5-mini"
+    assert cfg.dataset_path == example_root / "data" / "officeqa_sample.csv"
+    assert cfg.harness.data_dirs == ["data/treasury_bulletins"]
+
+
 def test_load_config_applies_timeout_and_retry_defaults(tmp_path: Path) -> None:
     from src.cli.config import load_config
 

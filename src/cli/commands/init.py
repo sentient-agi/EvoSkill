@@ -1,6 +1,7 @@
 """evoskill init — interactive project setup."""
 
 import json
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -266,6 +267,19 @@ def init_cmd():
         },
     )
     (evoskill_dir / 'task.md').write_text(TASK_MD_TEMPLATE)
+
+    # Save init-time state (original branch for reset landing)
+    original_branch = 'main'
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+            cwd=cwd, capture_output=True, text=True, check=True,
+        )
+        original_branch = result.stdout.strip() or 'main'
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    state = {'original_branch': original_branch}
+    (evoskill_dir / 'state.json').write_text(json.dumps(state, indent=2) + '\n')
 
     click.echo(f'  ✓ Created {cwd}/{EVOSKILL_DIR}')
     click.echo('')

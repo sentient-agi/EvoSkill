@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Any
 
 import click
@@ -193,7 +194,9 @@ class LoopDisplay:
               help="Show full failure examples and per-sample results.")
 @click.option("--quiet", is_flag=True, default=False,
               help="Show progress table only, no inline proposer output.")
-def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
+@click.option("--config", "config_path", type=click.Path(dir_okay=False, path_type=Path),
+              default=None, help="Load a specific config TOML file.")
+def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path | None):
     """Run the self-improvement loop."""
     from src.harness import Agent, set_sdk
     from src.agent_profiles.base_agent.base_agent import make_base_agent_options_from_task
@@ -212,7 +215,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
     from src.cli.config import load_config
     from src.cli.shared import load_and_split, make_scorer
     from src.loop import LoopAgents, LoopConfig, SelfImprovingLoop
-    from src.registry import ProgramManager
+    from src.registry import ProgramManager, ProgramManagerError
     from src.schemas import (
         AgentResponse,
         PromptGeneratorResponse,
@@ -220,7 +223,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
         SkillProposerResponse,
         ToolGeneratorResponse,
     )
-    cfg = load_config()
+    cfg = load_config(config_path=config_path)
 
     # Validate task.md
     if not cfg.task_description:
@@ -323,6 +326,9 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
             task_constraints=cfg.task_constraints,
         )
         result = asyncio.run(loop.run())
+    except ProgramManagerError as exc:
+        console.print(f"\n[red]Error:[/red] {exc}\n")
+        raise SystemExit(1) from exc
     finally:
         display.stop()
 

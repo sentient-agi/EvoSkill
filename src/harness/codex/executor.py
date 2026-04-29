@@ -31,6 +31,8 @@ from typing import Any, Callable, Type
 
 from pydantic import BaseModel, ValidationError
 
+from ..provider_auth import ensure_provider_api_key
+
 
 async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
     """Execute a query via the Codex SDK.
@@ -58,6 +60,8 @@ async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
         Wrapped in a list for consistency with Claude ([messages])
         and OpenCode ([message]) executors.
     """
+    ensure_provider_api_key("openai")
+
     # Lazy import — only fails if someone actually uses the codex harness
     # without installing the SDK. Same pattern as claude/executor.py and
     # opencode/executor.py.
