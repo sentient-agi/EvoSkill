@@ -3,10 +3,10 @@
 
 [harness]
 # OpenRouter is demonstrated through the OpenCode harness.
-name = "opencode"
+name = "openhands"
 
 # Any OpenRouter model ID can be used after the openrouter/ prefix.
-model = "openrouter/openai/gpt-5-mini"
+model = "openrouter/minimax/minimax-m2.7"
 
 # Additional folders the agent can interact with during runs.
 data_dirs = [

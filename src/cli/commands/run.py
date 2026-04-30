@@ -114,11 +114,11 @@ class LoopDisplay:
                 )
 
         elif event == "sample":
-            if self.verbose:
+            if not self.quiet:
                 icon = "✓" if data["passed"] else "✗"
                 style = "green" if data["passed"] else "red"
                 self._live.console.print(
-                    f"  [{data['category']}] {icon} {data['question'][:60]}",
+                    f"   {icon} [{data['category']}] {data['question'][:60]}",
                     style=style,
                 )
 

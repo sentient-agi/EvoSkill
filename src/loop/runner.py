@@ -317,7 +317,8 @@ class SelfImprovingLoop:
                     answer.strip().lower(),
                 )
                 status = "[OK]" if avg_score >= 0.8 else "[FAIL]"
-                _log("", f"    {status} [{category}] {question[:40]}...")
+                if self.on_event is None:
+                    _log("", f"    {status} [{category}] {question[:40]}...")
                 self._emit("sample", question=question, category=category, score=avg_score, passed=avg_score >= 0.8)
                 if avg_score < 0.8:
                     failures.append((trace, agent_answer, answer, category))

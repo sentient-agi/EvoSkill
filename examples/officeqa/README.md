@@ -24,46 +24,46 @@ examples/officeqa/
 pip install -e .
 ```
 
-### 2. Set up an isolated git repo
-
-EvoSkill stores program versions as git branches. Run the setup script so those branches stay inside this example directory and don't touch the parent repo:
+### 2. Run the demo
 
 ```bash
 cd examples/officeqa
-bash setup.sh
+export ANTHROPIC_API_KEY="sk-ant-..."   # or OPENROUTER_API_KEY for OpenRouter
+bash demo.sh
 ```
 
-### 3. Choose a config and run
+The demo script handles everything: sets up an isolated git repo, lets you pick a config, runs the full evolution loop, and shows discovered skills.
 
-#### Option A: Claude (default)
+To run on a Daytona sandbox instead of locally:
 
 ```bash
+bash demo.sh --remote
+```
+
+### Manual setup (alternative)
+
+If you prefer running commands individually:
+
+```bash
+cd examples/officeqa
+bash setup.sh                          # initialize isolated git repo
+
+# Option A: Claude
 export ANTHROPIC_API_KEY="sk-ant-..."
+evoskill run --verbose
 
-evoskill eval --verbose
-evoskill run
-```
-
-Uses `.evoskill/config.toml` (`claude` harness, `anthropic/claude-sonnet-4-6`).
-
-#### Option B: OpenRouter via OpenCode
-
-```bash
-brew install opencode
+# Option B: OpenRouter via OpenCode
 export OPENROUTER_API_KEY="sk-or-..."
-
-evoskill eval --config .evoskill/config.openrouter.toml --verbose
-evoskill run --config .evoskill/config.openrouter.toml
+evoskill run --verbose --config .evoskill/config.openrouter.toml
 ```
 
-Uses `.evoskill/config.openrouter.toml` (`opencode` harness, `openrouter/openai/gpt-5-mini`). Swap the model ID for any other OpenRouter model.
-
-### 4. Inspect results
+### Inspect results
 
 ```bash
 evoskill skills    # List discovered skills
-evoskill logs      # View logs
 evoskill diff      # Compare skill versions
+evoskill logs      # View logs
+evoskill reset     # Start fresh and try another config
 ```
 
 ## Configuration notes
