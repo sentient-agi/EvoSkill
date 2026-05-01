@@ -19,7 +19,7 @@ from typing import Any, Callable, Type
 
 from pydantic import BaseModel, SecretStr, ValidationError
 
-from ..provider_auth import ensure_openrouter_api_key
+from ..provider_auth import ensure_provider_api_key
 
 logger = logging.getLogger(__name__)
 _WARNED_ONCE = False
@@ -110,16 +110,7 @@ def _build_tool_objects(
 
 def _resolve_api_key(options: dict[str, Any]) -> SecretStr | None:
     provider_id = str(options.get("provider_id", "")).lower()
-    if provider_id == "anthropic":
-        value = os.environ.get("ANTHROPIC_API_KEY")
-        if value:
-            return SecretStr(value)
-    if provider_id == "openrouter":
-        return SecretStr(ensure_openrouter_api_key(provider_id))
-    value = os.environ.get("LLM_API_KEY")
-    if value:
-        return SecretStr(value)
-    return None
+    return SecretStr(ensure_provider_api_key(provider_id))
 
 
 def _extract_text(value: Any) -> str:
@@ -349,7 +340,12 @@ async def _run_fallback_extraction(
         },
         temperature=0,
     )
-    extracted_text = _extract_text(response.message)
+    response_message = getattr(response, "message", None)
+    if response_message is None:
+        choices = getattr(response, "choices", None) or []
+        if choices:
+            response_message = getattr(choices[0], "message", None)
+    extracted_text = _extract_text(response_message)
     return _parse_output(extracted_text, response_model)
 
 

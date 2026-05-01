@@ -26,6 +26,8 @@ config.json
 .DS_Store
 .dataset/
 
+.agents/
+
 # Cache
 .cache/
 *.txt

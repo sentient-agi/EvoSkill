@@ -1,5 +1,5 @@
-# EvoSkill example configuration — OfficeQA (10-question sample).
-# Update the absolute paths below to match your machine before running.
+# EvoSkill example configuration - OfficeQA (10-question sample).
+# Paths are relative to examples/officeqa when you run commands from this directory.
 
 [harness]
 # Agent runtime used to execute EvoSkill runs.
@@ -9,9 +9,8 @@ name = "claude"
 model = "anthropic/claude-sonnet-4-6"
 
 # Additional folders the agent can interact with during runs.
-# ⚠️  Replace with the absolute path to the treasury_bulletins directory on your machine.
 data_dirs = [
-    "/ABSOLUTE/PATH/TO/examples/officeqa/data/treasury_bulletins",
+    "data/treasury_bulletins",
 ]
 
 # Maximum time allowed for one agent attempt, in seconds.
@@ -41,8 +40,7 @@ failure_samples = 2
 
 [dataset]
 # Absolute path to the dataset CSV.
-# ⚠️  Replace with the absolute path to officeqa_sample.csv on your machine.
-path = "/ABSOLUTE/PATH/TO/examples/officeqa/data/officeqa_sample.csv"
+path = "data/officeqa_sample.csv"
 
 # CSV column containing the question or task input.
 question_column = "question"

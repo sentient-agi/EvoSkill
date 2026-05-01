@@ -38,7 +38,7 @@ Example usage:
 """
 
 from .models import ProgramConfig
-from .manager import ProgramManager
+from .manager import ProgramManager, ProgramManagerError
 from .sdk_utils import (
     config_to_options,
     options_to_config,
@@ -51,6 +51,7 @@ __all__ = [
     # Core classes
     "ProgramConfig",
     "ProgramManager",
+    "ProgramManagerError",
     # SDK utilities
     "config_to_options",
     "options_to_config",

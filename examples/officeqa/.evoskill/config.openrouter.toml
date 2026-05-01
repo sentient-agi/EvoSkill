@@ -1,0 +1,62 @@
+# EvoSkill example configuration - OfficeQA using OpenRouter via OpenCode.
+# Paths are relative to examples/officeqa when you run commands from this directory.
+
+[harness]
+# OpenRouter is demonstrated through the OpenCode harness.
+name = "openhands"
+
+# Any OpenRouter model ID can be used after the openrouter/ prefix.
+model = "openrouter/minimax/minimax-m2.7"
+
+# Additional folders the agent can interact with during runs.
+data_dirs = [
+    "data/treasury_bulletins",
+]
+
+# Maximum time allowed for one agent attempt, in seconds.
+timeout_seconds = 600
+
+# How many times to retry a failed or timed-out agent attempt.
+max_retries = 2
+
+[evolution]
+# What EvoSkill is allowed to optimize: skills or the base prompt.
+mode = "skill_only"
+
+# Maximum number of improvement iterations to run.
+iterations = 3
+
+# How many top programs to keep in the frontier at once.
+frontier_size = 2
+
+# How many evaluations can run in parallel.
+concurrency = 2
+
+# Stop after this many iterations with no improvement.
+no_improvement_limit = 3
+
+# How many failing examples to sample when proposing changes.
+failure_samples = 2
+
+[dataset]
+# Dataset CSV path, resolved relative to this example directory.
+path = "data/officeqa_sample.csv"
+
+# CSV column containing the question or task input.
+question_column = "question"
+
+# CSV column containing the expected answer.
+ground_truth_column = "answer"
+
+# CSV column used to group or stratify examples.
+category_column = "difficulty"
+
+# Fraction of each category used for training samples.
+train_ratio = 0.4
+
+# Fraction of each category used for validation samples.
+val_ratio = 0.2
+
+[scorer]
+# Scoring rule used to compare predictions against ground truth.
+type = "multi_tolerance"

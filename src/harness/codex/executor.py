@@ -31,6 +31,8 @@ from typing import Any, Callable, Type
 
 from pydantic import BaseModel, ValidationError
 
+from ..provider_auth import ensure_provider_api_key
+
 
 async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
     """Execute a query via the Codex SDK.
@@ -47,7 +49,7 @@ async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
         options: Dict built by build_codex_options() with keys:
             - system: system prompt text
             - output_schema: JSON schema dict for structured output
-            - model: model name (e.g., "codex-mini-latest")
+            - model: model name (e.g., "gpt-5.1-codex-mini")
             - working_directory: path where the agent operates
             - tools: tool names (metadata only, not sent to SDK)
             - data_dirs: extra data directory paths
@@ -58,6 +60,8 @@ async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
         Wrapped in a list for consistency with Claude ([messages])
         and OpenCode ([message]) executors.
     """
+    api_key = ensure_provider_api_key("openai")
+
     # Lazy import — only fails if someone actually uses the codex harness
     # without installing the SDK. Same pattern as claude/executor.py and
     # opencode/executor.py.
@@ -76,10 +80,16 @@ async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
     # Create a new Codex instance and start a thread.
     # Unlike OpenCode (which manages a persistent HTTP server), Codex
     # handles its own process lifecycle internally.
-    codex = Codex()
-    thread = codex.start_thread({
+    codex = Codex({"api_key": api_key})
+    thread_opts: dict[str, Any] = {
         "working_directory": options.get("working_directory", "."),
-    })
+    }
+    if options.get("model"):
+        thread_opts["model"] = options["model"]
+    if options.get("data_dirs"):
+        thread_opts["additional_directories"] = options["data_dirs"]
+
+    thread = codex.start_thread(thread_opts)
 
     # Pass the output_schema so Codex constrains the model's response
     # to match our Pydantic schema (e.g., AgentResponse, SkillProposerResponse).
@@ -93,7 +103,9 @@ async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
     #   .id — unique turn identifier
     #   .thread_id — the thread this turn belongs to
     #   .items — tool call results (file reads, bash executions, etc.)
-    turn = await thread.run(query, run_opts)
+    system_prompt = str(options.get("system") or "").strip()
+    prompt = f"{system_prompt}\n\n{query}" if system_prompt else query
+    turn = await thread.run(prompt, run_opts)
 
     # Wrap in list for consistency with other executors.
     # Agent.run() always receives list[Any] and passes it to parse_response().

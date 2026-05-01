@@ -184,19 +184,21 @@ Run `evoskill init` inside any git repository:
 $ evoskill init
 
   EvoSkill — Project Setup
-  Which harness? › claude
-  Evolution mode? › skill_only — agent learns new skills (recommended)
-  Dataset path? › /absolute/path/to/questions.csv
-  Question column name? › question
-  Ground truth column name? › answer
-  Category column name? (leave blank if none) ›
-  Additional folders the agent can interact with? › /absolute/path/to/data_dir
+
+  Which agent runtime? › claude
+  Absolute path to dataset CSV? › /path/to/questions.csv
+  Question/input column name? › question
+  Answer column name? › answer
+  Category column name? ›
+  Additional data directories? ›
+  How do you want to run EvoSkill? › Local
 ```
 
 This creates `.evoskill/config.toml` and `.evoskill/task.md`.
 
-- **Dataset path** — absolute path to your CSV file containing questions and ground-truth answers.
-- **Data dirs** — absolute paths to any additional directories the agent needs access to during runs (e.g. reference documents, databases). Comma-separated if multiple.
+- **Dataset path** — absolute path to your CSV with questions and ground-truth answers.
+- **Data dirs** — absolute paths to directories the agent needs (e.g. reference documents). Comma-separated if multiple.
+- **Execution mode** — Local (direct), Docker (containerized, supports remote via `DOCKER_HOST`), or Daytona (managed cloud sandbox).
 
 ### 2. Describe your task
 
@@ -224,7 +226,9 @@ Return only the numeric answer with units.
 evoskill run
 ```
 
-EvoSkill will run the evolutionary loop and print a live progress table:
+EvoSkill uses the execution mode you chose during `evoskill init` (local, Docker, or Daytona). You can override with `--docker` or `--remote` flags.
+
+EvoSkill prints a live progress table:
 
 ```bash
   Iter  Accuracy  Δ          Skills  Frontier  Status
@@ -267,23 +271,35 @@ Copy `.claude/program.yaml` and `.claude/skills/` into your deployment to use th
 |---------|-------------|
 | `evoskill init` | Initialize a new project (creates `.evoskill/`) |
 | `evoskill run` | Run the self-improvement loop |
+| `evoskill run --docker` | Run in a Docker container |
+| `evoskill run --remote` | Run on a Daytona sandbox |
 | `evoskill eval` | Evaluate the best program on the validation set |
 | `evoskill skills` | List all skills discovered so far |
 | `evoskill diff` | Diff baseline vs best, or between two iterations |
 | `evoskill logs` | Show recent run history |
 | `evoskill reset` | Delete all program branches and start fresh |
+| `evoskill remote status` | Check progress of a remote run |
+| `evoskill remote logs` | View logs from a remote run |
+| `evoskill remote download` | Pull results from a completed remote run |
+| `evoskill remote stop` | Stop and clean up a remote run |
 
 ### `evoskill run`
 
 ```bash
-evoskill run [--continue] [--verbose] [--quiet]
+evoskill run [--continue] [--verbose] [--quiet] [--config PATH] [--docker] [--remote] [--rebuild]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--continue` | Resume from the existing frontier instead of starting fresh. Preserves all `program/*` branches, `frontier/*` tags, feedback history, and the sampling checkpoint so the loop picks up exactly where it left off. |
+| `--continue` | Resume from the existing frontier instead of starting fresh. |
 | `--verbose` | Show per-sample pass/fail results |
 | `--quiet` | Show the progress table only, suppress proposer output |
+| `--config PATH` | Load a specific config TOML file instead of `.evoskill/config.toml` |
+| `--docker` | Run inside a Docker container (builds image from `Dockerfile` if needed) |
+| `--remote` | Run on a Daytona sandbox (requires `[remote]` config) |
+| `--rebuild` | Force rebuild the Docker image before running |
+
+`evoskill eval` also accepts `--config PATH`.
 
 ### `evoskill diff`
 
@@ -311,7 +327,7 @@ Deletes all `program/*` branches, `frontier/*` tags, the loop checkpoint, and fe
 
 ## Configuration Reference
 
-`evoskill init` creates `.evoskill/config.toml`. All fields are optional — defaults are shown below.
+`evoskill init` creates `.evoskill/config.toml`. All fields are optional — defaults are shown below. Relative dataset and data directory paths are resolved from the project root, meaning the directory containing `.evoskill`.
 
 ```toml
 [harness]
@@ -327,7 +343,7 @@ concurrency = 4
 no_improvement_limit = 5
 
 [dataset]
-path = "/absolute/path/to/questions.csv"  # absolute path to the dataset CSV
+path = "data/questions.csv"  # relative to project root, or an absolute path
 question_column = "question"
 ground_truth_column = "ground_truth"
 category_column = ""         # optional, for stratified sampling
@@ -336,6 +352,20 @@ val_ratio = 0.12
 
 [scorer]
 type = "multi_tolerance"     # see scorer types below
+```
+
+Alternate configs can live next to the default config:
+
+```text
+.evoskill/config.toml
+.evoskill/config.openrouter.toml
+```
+
+Run with an explicit config:
+
+```bash
+evoskill eval --config .evoskill/config.openrouter.toml
+evoskill run --config .evoskill/config.openrouter.toml
 ```
 
 **Common evolution model setups:**
@@ -366,7 +396,7 @@ model = "openrouter/openai/gpt-5-mini"
 
 Notes:
 - `claude` is Anthropic-only.
-- `codex` uses bare OpenAI model names such as `gpt-5`, `o3`, or `codex-mini-latest`.
+- `codex` uses bare OpenAI model names such as `gpt-5`, `o3`, or `gpt-5.1-codex-mini`.
 - `opencode`, `goose`, and `openhands` are multi-provider harnesses and can also use Claude and OpenAI models.
 - `opencode`, `goose`, and `openhands` accept `provider/model` strings such as `anthropic/claude-sonnet-4-6`, `openai/gpt-5`, or `openrouter/openai/gpt-5-mini`.
 
@@ -397,6 +427,68 @@ For OpenRouter-backed scoring, set `provider = "openrouter"` and use an OpenRout
 [scorer]
 type = "script"
 command = "python score.py --predicted {predicted} --expected {expected}"
+```
+
+## Remote Execution
+
+EvoSkill runs can take hours. Use Docker or Daytona to run on remote hardware and free up your machine.
+
+### Docker (BYOC)
+
+Build the image from the included `Dockerfile`:
+
+```bash
+docker build -t evoskill .
+evoskill run --docker
+```
+
+To run on a remote server, point Docker to it:
+
+```bash
+export DOCKER_HOST=ssh://user@your-server
+evoskill run --docker
+```
+
+Monitor and stop:
+
+```bash
+docker compose -f .evoskill/docker-compose.yml logs -f
+docker compose -f .evoskill/docker-compose.yml down
+```
+
+### Daytona (Managed)
+
+Build, push your image, and configure:
+
+```bash
+docker build -t evoskill .
+docker tag evoskill your-registry/evoskill:latest
+docker push your-registry/evoskill:latest
+```
+
+Set in `.evoskill/config.toml`:
+
+```toml
+[remote]
+target = "daytona"
+
+[remote.daytona]
+api_key = "your-daytona-key"    # or set DAYTONA_API_KEY env var
+image = "your-registry/evoskill:latest"
+cpu = 4
+memory = 8
+disk = 10
+timeout = 60                    # auto-stop after 60 minutes
+```
+
+Then:
+
+```bash
+evoskill run --remote           # launch
+evoskill remote status          # check progress
+evoskill remote logs            # view output
+evoskill remote download        # pull results when done
+evoskill remote stop            # cancel and clean up
 ```
 
 ## How It Works

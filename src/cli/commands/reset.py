@@ -6,7 +6,7 @@ import click
 from rich.console import Console
 
 from src.agent_profiles.skill_generator import get_project_root
-from src.registry import ProgramManager
+from src.registry import ProgramManager, ProgramManagerError
 
 console = Console()
 
@@ -34,7 +34,11 @@ def reset_cmd(yes: bool):
     if not yes:
         click.confirm("  Proceed?", abort=True)
 
-    stats = manager.reset_all()
+    try:
+        stats = manager.reset_all()
+    except ProgramManagerError as exc:
+        console.print(f"\n  [red]Error:[/red] {exc}\n")
+        raise SystemExit(1) from exc
 
     console.print(
         f"\n  [green]Reset complete.[/green]  "

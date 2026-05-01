@@ -1,6 +1,7 @@
 """evoskill init — interactive project setup."""
 
 import json
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -89,8 +90,12 @@ def _render_config(config: dict) -> str:
         '# EvoSkill project configuration.',
         '# Edit these defaults if your task or runtime needs different behavior.',
         '',
-        '[harness]',
     ]
+    if config.get('execution', 'local') != 'local':
+        _append_toml_field(lines, 'Execution mode: "local", "docker", or "daytona".', 'execution', config['execution'])
+        lines.append('')
+
+    lines.append('[harness]')
     _append_toml_field(lines, 'Agent runtime used to execute EvoSkill runs.', 'name', config['harness']['name'])
     lines.append('')
     _append_toml_field(lines, 'Default model for the selected runtime.', 'model', config['harness']['model'])
@@ -135,6 +140,38 @@ def _render_config(config: dict) -> str:
         '[scorer]',
     ])
     _append_toml_field(lines, 'Scoring rule used to compare predictions against ground truth.', 'type', config['scorer']['type'])
+
+    if 'remote' in config and config['remote']:
+        rc = config['remote']
+        lines.extend(['', '', '[remote]'])
+        _append_toml_field(lines, 'Remote execution backend.', 'target', rc['target'])
+
+        if 'daytona' in rc:
+            dc = rc['daytona']
+            lines.extend(['', '[remote.daytona]'])
+            _append_toml_field(lines, 'Daytona API key. Can also use DAYTONA_API_KEY env var.', 'api_key', dc['api_key'])
+            lines.append('')
+            _append_toml_field(lines, 'Base Docker image for the sandbox.', 'image', dc['image'])
+            lines.append('')
+            _append_toml_field(lines, 'vCPUs allocated to the sandbox.', 'cpu', dc['cpu'])
+            lines.append('')
+            _append_toml_field(lines, 'Memory in GB allocated to the sandbox.', 'memory', dc['memory'])
+            lines.append('')
+            _append_toml_field(lines, 'Disk in GB allocated to the sandbox.', 'disk', dc['disk'])
+            lines.append('')
+            _append_toml_field(lines, 'Auto-stop timeout in minutes. 0 = never auto-stop.', 'timeout', dc['timeout'])
+
+        if 'download' in rc:
+            dl = rc['download']
+            lines.extend(['', '[remote.download]'])
+            _append_toml_field(lines, 'Download all program branches, not just the best.', 'all_branches', dl['all_branches'])
+            lines.append('')
+            _append_toml_field(lines, 'Download evaluation cache to avoid re-running locally.', 'cache', dl['cache'])
+            lines.append('')
+            _append_toml_field(lines, 'Download run reports.', 'reports', dl['reports'])
+            lines.append('')
+            _append_toml_field(lines, 'Download feedback history for local continuation.', 'feedback_history', dl['feedback_history'])
+
     return '\n'.join(lines) + '\n'
 
 
@@ -153,6 +190,11 @@ def _write_config(path: Path, answers: dict) -> None:
     config['dataset']['question_column'] = answers['question_col']
     config['dataset']['ground_truth_column'] = answers['gt_col']
     config['dataset']['category_column'] = answers['category_col']
+
+    if answers.get('execution', 'local') != 'local':
+        config['execution'] = answers['execution']
+    if answers.get('remote'):
+        config['remote'] = answers['remote']
 
     path.write_text(_render_config(config), encoding='utf-8')
 
@@ -203,24 +245,22 @@ def init_cmd():
             click.echo('  Aborted.')
             return
 
-    click.echo('  EvoSkill — Project Setup')
+    click.echo('  EvoSkill — Project Setup\n')
 
-    click.echo('\n  Note: OpenHands does not support native structured output.')
-    click.echo('  It uses fallback JSON extraction which may be less reliable.\n')
-
+    # 1. Agent runtime
     harness = questionary.select(
-        'Which agent runtime do you want to use?',
+        'Which agent runtime?',
         choices=['claude', 'opencode', 'codex', 'goose', 'openhands'],
         default=prompt_defaults['harness'],
     ).ask()
 
     if harness == 'openhands':
-        click.echo('\n  ⚠️  You selected OpenHands. Structured output uses fallback JSON')
-        click.echo('     extraction. Consider Claude Code, OpenCode, or Goose for')
-        click.echo('     more reliable structured output.\n')
+        click.echo('\n  Note: OpenHands uses fallback JSON extraction for structured output.')
+        click.echo('  Consider Claude, OpenCode, or Goose for more reliable results.\n')
 
+    # 2. Dataset
     dataset_path = questionary.text(
-        'Path to the dataset CSV?',
+        'Absolute path to dataset CSV?',
         default=prompt_defaults['dataset_path'],
         validate=_require_non_empty,
     ).ask()
@@ -235,16 +275,61 @@ def init_cmd():
         validate=_require_non_empty,
     ).ask()
     category_col = questionary.text(
-        'Category/difficulty column name?',
+        'Category column name? (leave blank if none)',
         default=prompt_defaults['category_col'],
-        validate=_require_non_empty,
     ).ask()
     data_dirs_raw = questionary.text(
-        'Additional folders the agent can interact with? (comma-separated paths, leave blank if none)',
+        'Additional data directories? (comma-separated absolute paths, blank if none)',
         default=prompt_defaults['data_dirs_raw'],
     ).ask()
 
-    if any(v is None for v in [harness, dataset_path, question_col, gt_col, category_col, data_dirs_raw]):
+    # 3. Execution mode
+    exec_mode = questionary.select(
+        'How do you want to run EvoSkill?',
+        choices=[
+            questionary.Choice('Local — run directly on this machine', value='local'),
+            questionary.Choice('Docker — run in a container (local or remote via DOCKER_HOST)', value='docker'),
+            questionary.Choice('Daytona — run on a managed Daytona sandbox', value='daytona'),
+        ],
+        default='local',
+    ).ask()
+
+    remote_config = None
+    if exec_mode == 'daytona':
+        import os
+        env_key = os.environ.get('DAYTONA_API_KEY', '')
+        api_key_input = questionary.text(
+            'Daytona API key?',
+            default=env_key if env_key else '',
+        ).ask()
+
+        image_input = questionary.text(
+            'Docker image for sandbox? (build with: docker build -t evoskill .)',
+            default='',
+        ).ask()
+
+        if api_key_input and api_key_input.strip():
+            remote_config = {
+                'target': 'daytona',
+                'daytona': {
+                    'api_key': api_key_input.strip(),
+                    'image': image_input.strip() if image_input else '',
+                    'cpu': 4,
+                    'memory': 8,
+                    'disk': 10,
+                    'timeout': 60,
+                },
+                'download': {
+                    'all_branches': False,
+                    'cache': False,
+                    'reports': True,
+                    'feedback_history': False,
+                },
+            }
+        else:
+            click.echo('  No API key provided. Skipping Daytona setup.')
+
+    if any(v is None for v in [harness, dataset_path, question_col, gt_col, data_dirs_raw, exec_mode]):
         click.echo('\n  Aborted.')
         raise SystemExit(1)
 
@@ -261,23 +346,48 @@ def init_cmd():
             'dataset_path': dataset_path,
             'question_col': question_col,
             'gt_col': gt_col,
-            'category_col': category_col,
+            'category_col': category_col or '',
             'data_dirs': data_dirs,
+            'execution': exec_mode,
+            'remote': remote_config,
         },
     )
     (evoskill_dir / 'task.md').write_text(TASK_MD_TEMPLATE)
 
-    click.echo(f'  ✓ Created {cwd}/{EVOSKILL_DIR}')
-    click.echo('')
-    click.echo(f'    Runtime: {harness}')
-    click.echo(f'    Dataset: {dataset_path}')
-    click.echo('    Columns:')
-    click.echo(f'      question: {question_col}')
-    click.echo(f'      answer: {gt_col}')
-    click.echo(f'      category: {category_col}')
-    click.echo(f'    Extra data dirs: {", ".join(data_dirs) if data_dirs else "none"}')
+    # Save init-time state (original branch for reset landing)
+    original_branch = 'main'
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+            cwd=cwd, capture_output=True, text=True, check=True,
+        )
+        original_branch = result.stdout.strip() or 'main'
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    state = {'original_branch': original_branch}
+    (evoskill_dir / 'state.json').write_text(json.dumps(state, indent=2) + '\n')
+
+    click.echo(f'\n  ✓ Created {cwd}/{EVOSKILL_DIR}')
+    click.echo(f'    Runtime:   {harness}')
+    click.echo(f'    Dataset:   {dataset_path}')
+    click.echo(f'    Columns:   {question_col}, {gt_col}' + (f', {category_col}' if category_col else ''))
+    click.echo(f'    Data dirs: {", ".join(data_dirs) if data_dirs else "none"}')
+    click.echo(f'    Execution: {exec_mode}')
+    if remote_config:
+        click.echo(f'    Image:     {remote_config["daytona"].get("image") or "(not set — build and push first)"}')
     click.echo('')
     click.echo('    Next:')
-    click.echo(f'      1. Fill in {cwd}/{EVOSKILL_DIR}/task.md')
-    click.echo(f'      2. Review {cwd}/{EVOSKILL_DIR}/config.toml if needed')
-    click.echo('      3. Run: evoskill run')
+    click.echo(f'      1. Edit {EVOSKILL_DIR}/task.md with your task description')
+    if exec_mode == 'docker':
+        click.echo('      2. Build image: docker build -t evoskill .')
+        click.echo('      3. Run: evoskill run --docker')
+    elif exec_mode == 'daytona':
+        if not remote_config or not remote_config['daytona'].get('image'):
+            click.echo('      2. Build and push image:')
+            click.echo('         docker build -t evoskill .')
+            click.echo('         docker tag evoskill <registry>/evoskill:latest')
+            click.echo('         docker push <registry>/evoskill:latest')
+            click.echo('         Then set image in .evoskill/config.toml')
+        click.echo(f'      {"3" if not remote_config or not remote_config["daytona"].get("image") else "2"}. Run: evoskill run --remote')
+    else:
+        click.echo('      2. Run: evoskill run')

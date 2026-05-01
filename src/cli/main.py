@@ -12,6 +12,7 @@ _COMMAND_SPECS = {
     "diff": ("src.cli.commands.diff", "diff_cmd", "Diff baseline vs best, or between two specific iterations."),
     "logs": ("src.cli.commands.logs", "logs_cmd", "Show recent run history."),
     "reset": ("src.cli.commands.reset", "reset_cmd", "Delete all program branches and frontier tags for a clean slate."),
+    "remote": ("src.cli.commands.remote", "remote_group", "Manage remote EvoSkill runs."),
 }
 
 

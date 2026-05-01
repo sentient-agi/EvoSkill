@@ -6,6 +6,7 @@ Each program is stored as a git branch with:
 - .claude/skills/: Generated skills for this program
 """
 
+import json
 import random
 import subprocess
 from pathlib import Path
@@ -14,6 +15,10 @@ from typing import Any
 import yaml
 
 from .models import ProgramConfig
+
+
+class ProgramManagerError(RuntimeError):
+    """Raised when EvoSkill cannot safely manipulate program git branches."""
 
 
 class ProgramManager:
@@ -175,18 +180,31 @@ class ProgramManager:
                 children.append(program)
         return children
 
+    def _read_original_branch(self) -> str:
+        """Read the original branch saved at init time from .evoskill/state.json."""
+        state_path = self.cwd / ".evoskill" / "state.json"
+        try:
+            data = json.loads(state_path.read_text())
+            return data.get("original_branch", "main")
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
+            return "main"
+
     def reset_all(self) -> dict[str, int]:
         """Delete all program branches, frontier tags, and loop state files.
 
         Returns:
             Dict with counts: {"branches": N, "tags": N, "files": N}
         """
-        # Detect a safe branch to land on (first non-program local branch)
+        # Land on the branch from which evoskill init was called
+        original = self._read_original_branch()
         all_branches = self._git_list_branches()
-        safe_branch = next(
-            (b for b in all_branches if not b.startswith(self.BRANCH_PREFIX)),
-            "main",
-        )
+        if original in all_branches:
+            safe_branch = original
+        else:
+            safe_branch = next(
+                (b for b in all_branches if not b.startswith(self.BRANCH_PREFIX)),
+                "main",
+            )
         self._git_checkout(safe_branch)
 
         # Delete all frontier/* tags
@@ -206,8 +224,8 @@ class ProgramManager:
         # Delete loop state files
         files_deleted = 0
         for rel_path in [
-            ".claude/loop_checkpoint.json",
-            ".claude/feedback_history.md",
+            ".evoskill/loop_checkpoint.json",
+            ".evoskill/feedback_history.md",
         ]:
             p = self.cwd / rel_path
             if p.exists():
@@ -428,8 +446,8 @@ class ProgramManager:
         if not result.stdout.strip():
             return False  # Nothing to commit
 
-        # Stage all changes
-        self._git_add(".")
+        # Stage only program-related files (not loop state in .evoskill/)
+        self._git_add(".claude/")
 
         # Get program name for default message
         try:
@@ -483,20 +501,53 @@ class ProgramManager:
 
     def _git_checkout(self, branch: str) -> None:
         """Checkout a branch, auto-stashing any uncommitted changes."""
+        # Skip if already on target branch
+        if self._git_current_branch() == branch:
+            return
+
         # Check for uncommitted changes
         result = self._run_git(["status", "--porcelain"], check=False)
         has_changes = bool(result.stdout.strip())
 
         # Stash if dirty (include untracked with -u so no files are lost)
+        stashed = False
         if has_changes:
-            self._run_git(["stash", "push", "-u", "-m", "auto-stash before checkout"])
+            stash_result = self._run_git(
+                ["stash", "push", "-u", "-m", "auto-stash before checkout"],
+                check=False,
+            )
+            if stash_result.returncode != 0:
+                raise ProgramManagerError(
+                    "Cannot switch EvoSkill program branches because Git could "
+                    "not stash the current working tree. Commit, stash, or clean "
+                    "your changes, then rerun.\n\n"
+                    f"git stash stderr:\n{stash_result.stderr.strip()}"
+                )
+            stashed = stash_result.returncode == 0
 
         # Perform checkout
-        self._run_git(["checkout", branch])
+        checkout_result = self._run_git(["checkout", branch], check=False)
+        if checkout_result.returncode != 0:
+            if stashed:
+                self._run_git(["stash", "apply"], check=False)
+            raise ProgramManagerError(
+                f"Cannot switch EvoSkill program branch to {branch!r}. "
+                "Commit, stash, or clean your changes, then rerun.\n\n"
+                f"git checkout stderr:\n{checkout_result.stderr.strip()}"
+            )
 
-        # Pop stash if we stashed
-        if has_changes:
-            self._run_git(["stash", "pop"], check=False)
+        # Pop stash if we stashed successfully
+        if stashed:
+            apply_result = self._run_git(["stash", "apply"], check=False)
+            if apply_result.returncode != 0:
+                raise ProgramManagerError(
+                    "EvoSkill switched branches, but Git could not re-apply "
+                    "your stashed changes cleanly. The auto-stash was left in "
+                    "the stash list. Resolve it with `git stash list` and "
+                    "`git stash apply`.\n\n"
+                    f"git stash apply stderr:\n{apply_result.stderr.strip()}"
+                )
+            self._run_git(["stash", "drop"], check=False)
 
     def _git_checkout_new(self, branch: str) -> None:
         """Create and checkout a new branch."""
@@ -528,10 +579,10 @@ class ProgramManager:
             # There are staged changes, commit them
             commit_result = self._run_git(["commit", "-m", message], check=False)
             if commit_result.returncode != 0:
-                # Log error but don't crash - common issues: no user config, lock file, etc.
-                import logging
-                logging.warning(
-                    f"Git commit failed (exit {commit_result.returncode}): {commit_result.stderr.strip()}"
+                raise ProgramManagerError(
+                    "Cannot save EvoSkill program changes because Git commit "
+                    f"failed with exit {commit_result.returncode}.\n\n"
+                    f"git commit stderr:\n{commit_result.stderr.strip()}"
                 )
 
     def _git_tag(self, tag: str) -> None:

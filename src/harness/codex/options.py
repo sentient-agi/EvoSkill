@@ -12,7 +12,7 @@ Key differences from Claude and OpenCode:
     - No tool name mapping needed (unlike OpenCode which maps "Read" → "read")
     - No server/permission management needed (unlike OpenCode which manages
       a local HTTP server and writes opencode.json for file access)
-    - Model names are passed directly ("codex-mini-latest", "o3", "gpt-5")
+    - Model names are passed directly ("gpt-5.1-codex-mini", "o3", "gpt-5")
       with no provider prefix (unlike OpenCode's "anthropic/claude-sonnet-4-6")
 """
 
@@ -26,7 +26,7 @@ from ..utils import resolve_project_root, resolve_data_dirs
 
 # Default model when none is specified. Codex-mini-latest is optimized
 # for use with the Codex CLI and is the cheapest option.
-DEFAULT_CODEX_MODEL = "codex-mini-latest"
+DEFAULT_CODEX_MODEL = "gpt-5.1-codex-mini"
 
 
 def _make_openai_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -68,7 +68,7 @@ def build_codex_options(
         tools: Tool names from the agent profile (e.g., ["Read", "Write", "Bash"]).
                Stored as metadata only — Codex has its own built-in tools.
         project_root: Path to the project root. Resolved automatically if None.
-        model: Codex model name (e.g., "codex-mini-latest", "o3", "gpt-5").
+        model: Codex model name (e.g., "gpt-5.1-codex-mini", "o3", "gpt-5").
                Defaults to DEFAULT_CODEX_MODEL if None.
         data_dirs: Extra data directories the agent should have access to.
                    If provided, their paths are appended to the system prompt

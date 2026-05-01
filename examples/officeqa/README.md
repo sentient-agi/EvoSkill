@@ -24,44 +24,46 @@ examples/officeqa/
 pip install -e .
 ```
 
-### 2. Set your API key
-
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-```
-
-### 3. Update paths in config
-
-Open `.evoskill/config.toml` and replace the two placeholder paths with absolute paths on your machine:
-
-```toml
-# data_dirs — point to the treasury bulletins
-data_dirs = [
-    "/your/path/to/examples/officeqa/data/treasury_bulletins",
-]
-
-# dataset path — point to the sample CSV
-path = "/your/path/to/examples/officeqa/data/officeqa_sample.csv"
-```
-
-### 4. Run
+### 2. Run the demo
 
 ```bash
 cd examples/officeqa
-
-# Single evaluation pass
-evoskill eval
-
-# Full evolution loop (discovers and refines skills)
-evoskill run
+export ANTHROPIC_API_KEY="sk-ant-..."   # or OPENROUTER_API_KEY for OpenRouter
+bash demo.sh
 ```
 
-### 5. Inspect results
+The demo script handles everything: sets up an isolated git repo, lets you pick a config, runs the full evolution loop, and shows discovered skills.
+
+To run on a Daytona sandbox instead of locally:
+
+```bash
+bash demo.sh --remote
+```
+
+### Manual setup (alternative)
+
+If you prefer running commands individually:
+
+```bash
+cd examples/officeqa
+bash setup.sh                          # initialize isolated git repo
+
+# Option A: Claude
+export ANTHROPIC_API_KEY="sk-ant-..."
+evoskill run --verbose
+
+# Option B: OpenRouter via OpenCode
+export OPENROUTER_API_KEY="sk-or-..."
+evoskill run --verbose --config .evoskill/config.openrouter.toml
+```
+
+### Inspect results
 
 ```bash
 evoskill skills    # List discovered skills
-evoskill logs      # View logs
 evoskill diff      # Compare skill versions
+evoskill logs      # View logs
+evoskill reset     # Start fresh and try another config
 ```
 
 ## Configuration notes

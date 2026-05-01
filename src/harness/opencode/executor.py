@@ -20,7 +20,11 @@ from typing import Any, Callable, Type
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from ..provider_auth import apply_openrouter_env, ensure_openrouter_api_key
+from ..provider_auth import (
+    PROVIDER_ENV_KEYS,
+    apply_provider_auth_env,
+    ensure_provider_api_key,
+)
 
 # ── module-level state ────────────────────────────────────────────────
 _SERVER_PORTS: dict[str, int] = {}
@@ -32,19 +36,6 @@ _TIMEOUT = 1800  # per-request HTTP timeout (30 min — opencode agents can take
 
 # ── provider auth ─────────────────────────────────────────────────────
 
-_PROVIDER_ENV_KEYS = {
-    "openrouter": ["OPENROUTER_API_KEY", "LLM_API_KEY"],
-    "anthropic": ["ANTHROPIC_API_KEY"],
-    "openai": ["OPENAI_API_KEY"],
-    "google": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
-    "groq": ["GROQ_API_KEY"],
-    "mistral": ["MISTRAL_API_KEY"],
-    "together": ["TOGETHER_API_KEY"],
-    "deepseek": ["DEEPSEEK_API_KEY"],
-    "xai": ["XAI_API_KEY"],
-}
-
-
 def _push_provider_auth(base_url: str) -> None:
     """Push all available API keys from env into the opencode server's auth store.
 
@@ -52,7 +43,7 @@ def _push_provider_auth(base_url: str) -> None:
     This syncs any provider keys found in the environment so the server can
     authenticate regardless of which provider the user configures.
     """
-    for provider, env_vars in _PROVIDER_ENV_KEYS.items():
+    for provider, env_vars in PROVIDER_ENV_KEYS.items():
         for var in env_vars:
             key = os.environ.get(var)
             if key:
@@ -150,7 +141,7 @@ def _ensure_server(options: dict[str, Any]) -> str:
 
     port = _find_free_port()
     env = dict(os.environ)
-    apply_openrouter_env(options.get("provider_id"), env)
+    apply_provider_auth_env(options.get("provider_id"), env)
 
     proc = subprocess.Popen(
         ["opencode", "serve", "--port", str(port), "--hostname", "127.0.0.1"],
@@ -177,7 +168,7 @@ async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
     if not isinstance(options, dict):
         raise TypeError(f"OpenCode executor requires dict options, got {type(options)}")
 
-    ensure_openrouter_api_key(options.get("provider_id"))
+    ensure_provider_api_key(options.get("provider_id"))
     base_url = _ensure_server(options)
 
     async with httpx.AsyncClient(base_url=base_url, timeout=_TIMEOUT) as client:
