@@ -25,6 +25,8 @@ def build_claudecode_options(
     setting_sources: list[str] | None = None,
     permission_mode: str | None = None,
     max_buffer_size: int | None = None,
+    mcp_servers: dict[str, Any] | None = None,
+    max_turns: int | None = None,
 ) -> Any:
     """Build ClaudeAgentOptions for the Claude SDK."""
     from claude_agent_sdk import ClaudeAgentOptions
@@ -51,6 +53,10 @@ def build_claudecode_options(
         kwargs["max_buffer_size"] = max_buffer_size
     if data_dirs is not None:
         kwargs["add_dirs"] = resolve_data_dirs(root, data_dirs)
+    if mcp_servers is not None:
+        kwargs["mcp_servers"] = mcp_servers
+    if max_turns is not None:
+        kwargs["max_turns"] = max_turns
 
     options = ClaudeAgentOptions(**kwargs)
     normalized_model = strip_model_provider(

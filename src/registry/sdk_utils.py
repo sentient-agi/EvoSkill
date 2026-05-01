@@ -43,9 +43,12 @@ def config_to_options(
     if os.environ.get("EVOSKILL_REMOTE") == "1":
         permission_mode = "bypassPermissions"
 
-    # Extract system prompt text from the stored dict
-    system_prompt = config.system_prompt or {}
-    system_text = system_prompt.get("content") or system_prompt.get("append", "")
+    # Extract system prompt text — handles both str and dict formats
+    system_prompt = config.system_prompt or ""
+    if isinstance(system_prompt, str):
+        system_text = system_prompt
+    else:
+        system_text = system_prompt.get("content") or system_prompt.get("append", "")
 
     # Extract schema from stored output_format
     # Codex/Goose store as {"schema": {...}}, Claude/OpenCode store the full format
@@ -124,13 +127,9 @@ def options_to_config(
     # Goose / Openhands / Opencode / Goose
     if isinstance(options, dict):
 
-        # PrgConf : system prompt 
+        # PrgConf : system prompt — store as plain string when possible
         system_text = options.get("system", "")
-        system_prompt = (
-            system_text
-            if isinstance(system_text, dict)
-            else {"type": "text", "content": system_text}
-        )
+        system_prompt = system_text if isinstance(system_text, (str, dict)) else str(system_text)
 
         # PrgConf : allowed tools 
         tools = options.get("tools", {})

@@ -1,0 +1,17 @@
+# AppWorld data (190MB+, downloaded via `appworld download data`)
+data/
+
+# Python
+__pycache__/
+*.pyc
+
+# HALO experiment outputs
+experiments/outputs/
+
+# EvoSkill state (keep feedback_history.md — needed across branch switches)
+.evoskill/loop_checkpoint.json
+.evoskill/reports/
+.cache/
+
+# OS
+.DS_Store

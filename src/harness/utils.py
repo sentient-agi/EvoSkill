@@ -57,6 +57,8 @@ def build_options(
     setting_sources: list[str] | None = None,
     permission_mode: str | None = None,
     max_buffer_size: int | None = None,
+    mcp_servers: dict[str, Any] | None = None,
+    max_turns: int | None = None,
 ) -> Any:
     """Route to the correct builder for the active SDK.
 
@@ -81,6 +83,8 @@ def build_options(
             setting_sources=setting_sources,
             permission_mode=permission_mode,
             max_buffer_size=max_buffer_size,
+            mcp_servers=mcp_servers,
+            max_turns=max_turns,
         )
     
     if sdk == "opencode":

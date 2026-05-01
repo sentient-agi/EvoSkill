@@ -26,9 +26,9 @@ class ProgramConfig(BaseModel):
         default=0, description="Number of mutations from base program"
     )
 
-    # Agent configuration
-    system_prompt: dict[str, Any] = Field(
-        description="System prompt configuration for ClaudeAgentOptions"
+    # Agent configuration — str for plain text prompts, dict for SDK-specific config
+    system_prompt: str | dict[str, Any] = Field(
+        description="System prompt: plain text string or SDK-specific config dict"
     )
     allowed_tools: list[str] = Field(
         default_factory=list, description="List of allowed tool names"
@@ -64,7 +64,7 @@ class ProgramConfig(BaseModel):
         self,
         name: str,
         *,
-        system_prompt: dict[str, Any] | None = None,
+        system_prompt: str | dict[str, Any] | None = None,
         allowed_tools: list[str] | None = None,
         output_format: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
