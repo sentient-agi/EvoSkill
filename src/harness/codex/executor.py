@@ -81,9 +81,15 @@ async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
     # Unlike OpenCode (which manages a persistent HTTP server), Codex
     # handles its own process lifecycle internally.
     codex = Codex()
-    thread = codex.start_thread({
+    thread_opts: dict[str, Any] = {
         "working_directory": options.get("working_directory", "."),
-    })
+    }
+    if options.get("model"):
+        thread_opts["model"] = options["model"]
+    if options.get("data_dirs"):
+        thread_opts["additional_directories"] = options["data_dirs"]
+
+    thread = codex.start_thread(thread_opts)
 
     # Pass the output_schema so Codex constrains the model's response
     # to match our Pydantic schema (e.g., AgentResponse, SkillProposerResponse).
@@ -97,7 +103,9 @@ async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
     #   .id — unique turn identifier
     #   .thread_id — the thread this turn belongs to
     #   .items — tool call results (file reads, bash executions, etc.)
-    turn = await thread.run(query, run_opts)
+    system_prompt = str(options.get("system") or "").strip()
+    prompt = f"{system_prompt}\n\n{query}" if system_prompt else query
+    turn = await thread.run(prompt, run_opts)
 
     # Wrap in list for consistency with other executors.
     # Agent.run() always receives list[Any] and passes it to parse_response().

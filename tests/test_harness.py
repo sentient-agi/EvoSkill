@@ -922,6 +922,63 @@ class TestCodexParseResponse:
 
 
 # ===========================================================================
+# TestCodexExecuteQuery — execute_query()
+# ===========================================================================
+
+class TestCodexExecuteQuery:
+    """Test Codex SDK invocation without requiring a real codex binary."""
+
+    def test_passes_thread_options_and_prompt_to_sdk(self, monkeypatch, tmp_path):
+        import asyncio
+        import sys
+        import types
+
+        captured = {}
+
+        class FakeThread:
+            async def run(self, prompt, run_opts):
+                captured["prompt"] = prompt
+                captured["run_opts"] = run_opts
+                return types.SimpleNamespace(final_response='{"final_answer":"ok","reasoning":"r"}')
+
+        class FakeCodex:
+            def __init__(self):
+                captured["constructed"] = True
+
+            def start_thread(self, thread_opts):
+                captured["thread_opts"] = thread_opts
+                return FakeThread()
+
+        fake_sdk = types.ModuleType("openai_codex_sdk")
+        fake_sdk.Codex = FakeCodex
+        monkeypatch.setitem(sys.modules, "openai_codex_sdk", fake_sdk)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+        from src.harness.codex.executor import execute_query
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        options = {
+            "system": "System instructions.",
+            "output_schema": {"type": "object"},
+            "model": "codex-mini-latest",
+            "working_directory": str(tmp_path),
+            "data_dirs": [str(data_dir)],
+        }
+
+        result = asyncio.run(execute_query(options, "Answer this."))
+
+        assert result[0].final_response
+        assert captured["thread_opts"] == {
+            "working_directory": str(tmp_path),
+            "model": "codex-mini-latest",
+            "additional_directories": [str(data_dir)],
+        }
+        assert captured["run_opts"] == {"output_schema": {"type": "object"}}
+        assert captured["prompt"] == "System instructions.\n\nAnswer this."
+
+
+# ===========================================================================
 # TestSdkConfigGoose — goose SDK toggle and is_goose_sdk() helper
 # ===========================================================================
 

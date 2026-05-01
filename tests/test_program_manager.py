@@ -93,3 +93,28 @@ def test_git_checkout_leaves_stash_when_apply_fails(monkeypatch, tmp_path) -> No
         manager._git_checkout("program/base")
 
     assert ["stash", "drop"] not in calls
+
+
+def test_git_commit_raises_clear_error_when_commit_fails(monkeypatch, tmp_path) -> None:
+    manager = ProgramManager(cwd=tmp_path)
+
+    def fake_run_git(args, check=True):
+        if args == ["diff", "--cached", "--quiet"]:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="")
+        if args == ["commit", "-m", "save program"]:
+            return subprocess.CompletedProcess(
+                args,
+                128,
+                stdout="",
+                stderr=(
+                    "fatal: cannot update ref 'refs/heads/program/iter-skill-1': "
+                    "trying to write ref 'refs/heads/program/iter-skill-1' "
+                    "with nonexistent object 2e1c9de11e3256cd9efd81abcf625f9da47ffd1b"
+                ),
+            )
+        raise AssertionError(f"unexpected git call: {args}")
+
+    monkeypatch.setattr(manager, "_run_git", fake_run_git)
+
+    with pytest.raises(ProgramManagerError, match="Cannot save EvoSkill program changes"):
+        manager._git_commit("save program")

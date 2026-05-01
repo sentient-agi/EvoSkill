@@ -26,8 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # CLI tools for harnesses that need external binaries
 #   claude   — npm (claude-agent-sdk spawns this)
 #   opencode — npm (opencode harness spawns `opencode serve`)
+#   codex    — npm (openai-codex-sdk spawns `codex`)
 #   goose    — tarball from GitHub releases (goose harness spawns this)
-RUN npm install -g @anthropic-ai/claude-code opencode-ai && npm cache clean --force
+RUN npm install -g @anthropic-ai/claude-code opencode-ai @openai/codex && npm cache clean --force
 
 RUN ARCH=$(uname -m) && \
     GOOSE_VER=$(curl -sL "https://api.github.com/repos/block/goose/releases/latest" \
