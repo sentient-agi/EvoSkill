@@ -92,6 +92,7 @@ class RemoteConfig:
     target: str = 'daytona'
     daytona: DaytonaConfig | None = None
     download: DownloadConfig = field(default_factory=DownloadConfig)
+    command: str | None = None
 
 
 @dataclass
@@ -224,6 +225,7 @@ def load_config(
             target=target,
             daytona=daytona_cfg,
             download=download_cfg,
+            command=remote_raw.get('command'),
         )
 
     task_path = root / EVOSKILL_DIR / 'task.md'

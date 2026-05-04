@@ -22,6 +22,12 @@ def load_config() -> dict:
 
 def get_appworld_root() -> Path:
     """Get the AppWorld root path from config.json."""
+    if os.environ.get("EVOSKILL_REMOTE") == "1":
+        remote_root = Path("/workspace/examples/appworld2")
+        if remote_root.exists():
+            os.environ.setdefault("APPWORLD_ROOT", str(remote_root))
+            return remote_root
+
     config = load_config()
     root = Path(config["appworld_root"])
     if not root.exists():
@@ -52,6 +58,7 @@ def get_default_experiment_name() -> str:
 
 def build_runner_config(
     model: str | None = None,
+    provider: str | None = None,
     dataset: str = "dev",
     max_steps: int | None = None,
     max_predicted_apis: int = 20,
@@ -60,6 +67,8 @@ def build_runner_config(
 
     Args:
         model: Model name (default: from config.json).
+        provider: Optional model provider override. Use "openrouter" to run
+            OpenRouter-hosted models through the OpenAI-compatible API.
         dataset: Dataset split name.
         max_steps: Max agent turns per task (default: from config.json).
         max_predicted_apis: Max APIs from predictor.
@@ -69,11 +78,28 @@ def build_runner_config(
     """
     config = load_config()
     model = model or config.get("model", "claude-sonnet-4-20250514")
+    provider = provider or config.get("provider")
     max_steps = max_steps or config.get("max_steps", 50)
     prompts = get_prompts_path()
 
+    if model.startswith("openrouter/"):
+        provider = "openrouter"
+        model = model.removeprefix("openrouter/")
+
     # Determine model type based on prefix
-    if model.startswith("anthropic/") or model.startswith("claude"):
+    if provider == "openrouter":
+        model_type = "openai"
+        model_settings = {
+            "api_type": "chat_completions",
+            "base_url": os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            "api_key_env_name": "OPENROUTER_API_KEY",
+            "temperature": 0.0,
+            "seed": 100,
+            "tool_choice": "auto",
+            "parallel_tool_calls": True,
+            "store": False,
+        }
+    elif model.startswith("anthropic/") or model.startswith("claude"):
         model_type = "litellm"
         model_settings = {
             "api_type": "chat_completions",

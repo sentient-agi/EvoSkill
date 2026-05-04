@@ -31,6 +31,11 @@ from src.schemas import (
 )
 
 
+def model_slug(model: str) -> str:
+    """Return a filesystem-safe short model label for experiment names."""
+    return model.replace("/", "_").replace(":", "_").split("-")[0]
+
+
 def halo_scorer(
     question: str,
     predicted: str,
@@ -102,6 +107,9 @@ def make_halo_scorer(
 def build_evolution_loop(
     halo_root: str | Path,
     model: str | None = None,
+    runner_provider: str | None = None,
+    evolver_harness: str = "claude",
+    evolver_models: list[str] | None = None,
     experiment_name: str = "evoskill_evolution",
     max_iterations: int = 5,
     frontier_size: int = 2,
@@ -116,8 +124,10 @@ def build_evolution_loop(
         Configured SelfImprovingLoop ready to run.
     """
     from examples.appworld2.scripts.build_config import get_default_model, get_default_experiment_name
+    from src.harness import set_sdk
     halo_root = Path(halo_root)
     model = model or get_default_model()
+    set_sdk(evolver_harness)
 
     # Config: prompt_only mode, concurrency=1
     config = LoopConfig(
@@ -133,23 +143,36 @@ def build_evolution_loop(
     base_agent = HALOAgent(
         halo_root=halo_root,
         model=model,
+        provider=runner_provider,
         experiment_name=experiment_name,
     )
 
     # Evolution agents: EvoSkill's prompt proposer/generator
-    from src.agent_profiles import (
-        prompt_proposer_options,
-        prompt_generator_options,
-        skill_proposer_options,
-        skill_generator_options,
-    )
+    from src.agent_profiles.prompt_proposer import make_prompt_proposer_options
+    from src.agent_profiles.prompt_generator import make_prompt_generator_options
+    from src.agent_profiles.skill_proposer import make_skill_proposer_options
+    from src.agent_profiles.skill_generator import make_skill_generator_options
+
+    def cycling_options(factory):
+        models = list(evolver_models or [])
+        index = 0
+
+        def options():
+            nonlocal index
+            selected_model = None
+            if models:
+                selected_model = models[index % len(models)]
+                index += 1
+            return factory(project_root=str(halo_root), model=selected_model)
+
+        return options
 
     agents = LoopAgents(
         base=base_agent,
-        skill_proposer=Agent(skill_proposer_options, SkillProposerResponse),
-        prompt_proposer=Agent(prompt_proposer_options, PromptProposerResponse),
-        skill_generator=Agent(skill_generator_options, ToolGeneratorResponse),
-        prompt_generator=Agent(prompt_generator_options, PromptGeneratorResponse),
+        skill_proposer=Agent(cycling_options(make_skill_proposer_options), SkillProposerResponse),
+        prompt_proposer=Agent(cycling_options(make_prompt_proposer_options), PromptProposerResponse),
+        skill_generator=Agent(cycling_options(make_skill_generator_options), ToolGeneratorResponse),
+        prompt_generator=Agent(cycling_options(make_prompt_generator_options), PromptGeneratorResponse),
     )
 
     # Program manager — lives in appworld2/ (its own git repo, not HALO's).
@@ -209,6 +232,9 @@ def build_evolution_loop(
 async def main(
     halo_root: str | None = None,
     model: str | None = None,
+    runner_provider: str | None = None,
+    evolver_harness: str = "claude",
+    evolver_models: list[str] | None = None,
     dataset: str = "dev",
     max_iterations: int = 5,
     n_train: int = 20,
@@ -246,7 +272,12 @@ async def main(
         val_data.append((question, tid, "default"))
 
     print(f"=== EvoSkill Evolution on AppWorld ===")
-    print(f"Model: {model}")
+    print(f"Runner model: {model}")
+    if runner_provider:
+        print(f"Runner provider: {runner_provider}")
+    print(f"Evolver harness: {evolver_harness}")
+    if evolver_models:
+        print(f"Evolver models: {', '.join(evolver_models)}")
     print(f"Train: {len(train_ids)} tasks, Val: {len(val_ids)} tasks")
     print(f"Max iterations: {max_iterations}")
     print()
@@ -254,7 +285,10 @@ async def main(
     loop = build_evolution_loop(
         halo_root=halo_path,
         model=model,
-        experiment_name=f"evoskill_{model.split('-')[0]}_{dataset}",
+        runner_provider=runner_provider,
+        evolver_harness=evolver_harness,
+        evolver_models=evolver_models,
+        experiment_name=f"evoskill_{model_slug(model)}_{dataset}",
         max_iterations=max_iterations,
         train_pools=train_pools,
         val_data=val_data,
@@ -271,7 +305,15 @@ async def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run EvoSkill evolution on AppWorld via HALO")
     parser.add_argument("--halo-root", default=None, help="AppWorld root (default: from config.json)")
-    parser.add_argument("--model", default=None, help="Model (default: from config.json)")
+    parser.add_argument("--model", default=None, help="AppWorld runner model (default: from config.json)")
+    parser.add_argument("--runner-provider", default=None, help="Provider for the AppWorld runner, e.g. openrouter")
+    parser.add_argument("--evolver-harness", default="claude", help="EvoSkill harness for proposer/generator agents")
+    parser.add_argument(
+        "--evolver-model",
+        action="append",
+        dest="evolver_models",
+        help="Evolver model to use. Repeat to cycle models in order.",
+    )
     parser.add_argument("--dataset", default="dev")
     parser.add_argument("--max-iterations", type=int, default=5)
     parser.add_argument("--n-train", type=int, default=20)
@@ -281,6 +323,9 @@ if __name__ == "__main__":
     asyncio.run(main(
         halo_root=args.halo_root,
         model=args.model,
+        runner_provider=args.runner_provider,
+        evolver_harness=args.evolver_harness,
+        evolver_models=args.evolver_models,
         dataset=args.dataset,
         max_iterations=args.max_iterations,
         n_train=args.n_train,

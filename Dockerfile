@@ -48,6 +48,7 @@ RUN pip install --no-cache-dir \
     "openai-codex-sdk>=0.1.11" \
     "openhands-sdk>=1.16.1" \
     "openhands-tools>=1.16.1" \
+    "litellm" \
     "click>=8.1.8" \
     "rich>=14.2.0" \
     "pandas>=2.3.3" \
@@ -58,6 +59,22 @@ RUN pip install --no-cache-dir \
     "tqdm>=4.60.0" \
     "hatchling" \
     "daytona>=0.1.0"
+
+# AppWorld: install the main package normally, then appworld-agents with
+# --no-deps to bypass its stale openai<=1.99.8 pin (litellm 1.82+ needs
+# openai 2.x). Install its actual runtime deps separately.
+RUN pip install --no-cache-dir \
+    "appworld @ git+https://github.com/stonybrooknlp/appworld.git"
+
+RUN pip install --no-cache-dir --no-deps \
+    "appworld-agents @ git+https://github.com/stonybrooknlp/appworld.git#subdirectory=experiments"
+
+RUN pip install --no-cache-dir \
+    "openai-agents>=0.2.3" \
+    "mcp>=1.19.0" \
+    "jsonnet>=0.21.0" \
+    "jinja2>=3.1.3" \
+    "joblib>=1.3.1"
 
 # Git config for bundle operations
 RUN git config --global user.email "evoskill@sandbox" \

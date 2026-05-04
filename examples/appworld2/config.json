@@ -1,5 +1,5 @@
 {
-    "appworld_root": "/Users/sarveshkhetan/work/EvoSkill/examples/appworld2",
+    "appworld_root": "/Users/arihantbarjatya/Documents/EvoSkill_v2/evoskill/EvoSkill/examples/appworld2",
     "model": "claude-sonnet-4-20250514",
     "experiment_name": "evoskill",
     "max_steps": 50

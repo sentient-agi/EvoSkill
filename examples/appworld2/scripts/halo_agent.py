@@ -194,12 +194,14 @@ class HALOAgent(Agent[AgentResponse]):
         self,
         halo_root: str | Path,
         model: str | None = None,
+        provider: str | None = None,
         experiment_name: str | None = None,
         max_steps: int = 50,
     ) -> None:
         from examples.appworld2.scripts.build_config import get_default_model, get_default_experiment_name
         self._halo_root = Path(halo_root)
         self._model = model or get_default_model()
+        self._provider = provider
         self._experiment_name = experiment_name or get_default_experiment_name()
         self._max_steps = max_steps
         self.response_model = AgentResponse
@@ -228,7 +230,7 @@ class HALOAgent(Agent[AgentResponse]):
     def _build_config(self) -> dict[str, Any]:
         """Build runner_config matching HALO's setup."""
         from examples.appworld2.scripts.build_config import build_runner_config
-        return build_runner_config(model=self._model)
+        return build_runner_config(model=self._model, provider=self._provider)
 
     def _sync_prompt_to_halo(self) -> None:
         """Copy the evolved prompt from .claude/ to where HALO reads it."""
@@ -239,7 +241,7 @@ class HALOAgent(Agent[AgentResponse]):
         if src.exists():
             shutil.copy2(src, dst)
 
-    def _run_halo_and_evaluate(self, task_id: str, config: dict) -> None:
+    def _run_halo_and_evaluate(self, task_id: str, config: dict | None) -> None:
         """Run HALO's agent AND evaluate inside the AppWorld context.
 
         Serialized via self._lock — only one task runs at a time.
@@ -249,6 +251,7 @@ class HALOAgent(Agent[AgentResponse]):
         from appworld import AppWorld
 
         with self._lock:
+            config = config or self._build_config()
             cfg = deepcopy(config)
             api_predictor_config = cfg.pop("api_predictor")
             agent_config = cfg.pop("agent")
@@ -297,8 +300,6 @@ class HALOAgent(Agent[AgentResponse]):
         os.environ["APPWORLD_ROOT"] = str(self._halo_root)
         os.environ.setdefault("OPENAI_API_KEY", "unused-for-litellm")
 
-        config = self._build_config()
-
         # Run in a thread (HALO calls asyncio.run() internally).
         # The lock inside _run_halo_and_evaluate ensures only one task
         # runs at a time, even if asyncio.gather() launches multiple.
@@ -306,7 +307,7 @@ class HALOAgent(Agent[AgentResponse]):
         loop = asyncio.get_event_loop()
         with concurrent.futures.ThreadPoolExecutor() as pool:
             await loop.run_in_executor(
-                pool, self._run_halo_and_evaluate, task_id, config
+                pool, self._run_halo_and_evaluate, task_id, None
             )
 
         # Read results from disk

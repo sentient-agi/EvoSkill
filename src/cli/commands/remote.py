@@ -71,13 +71,16 @@ def remote_logs(follow: bool, tail: int):
         return
 
     backend = _get_remote_backend(cfg)
-    lines = list(backend.logs(cfg, run_info, follow=follow))
 
-    if tail > 0:
-        lines = lines[-tail:]
-
-    for line in lines:
-        console.print(line)
+    if follow:
+        for line in backend.logs(cfg, run_info, follow=True):
+            console.print(line)
+    else:
+        lines = list(backend.logs(cfg, run_info, follow=False))
+        if tail > 0:
+            lines = lines[-tail:]
+        for line in lines:
+            console.print(line)
 
 
 @click.command("stop")

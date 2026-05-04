@@ -222,8 +222,8 @@ class DaytonaBackend(RemoteBackend):
             overrides_json = json.dumps(self._path_overrides)
             env_lines.append(f"export EVOSKILL_PATH_OVERRIDES='{overrides_json}'")
 
-        cmd = "evoskill run"
-        if extra_args:
+        cmd = cfg.remote.command or "evoskill run"
+        if extra_args and not cfg.remote.command:
             cmd += " " + " ".join(extra_args)
 
         # Build run command (no script file needed — session executes directly)
