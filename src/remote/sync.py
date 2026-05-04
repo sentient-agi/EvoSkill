@@ -14,6 +14,7 @@ UPLOAD_EXCLUDES = (
     "node_modules",
     ".pytest_cache",
     ".cache",
+    ".git",
     "notebooks",
     "assets",
     "*.pyc",

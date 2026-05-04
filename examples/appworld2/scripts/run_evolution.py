@@ -113,8 +113,8 @@ def build_evolution_loop(
     experiment_name: str = "evoskill_evolution",
     max_iterations: int = 5,
     frontier_size: int = 2,
-    failure_samples: int = 2,
-    no_improvement_limit: int = 3,
+    failure_samples: int = 5,
+    no_improvement_limit: int = 5,
     train_pools: dict | None = None,
     val_data: list | None = None,
 ) -> SelfImprovingLoop:
@@ -137,7 +137,7 @@ def build_evolution_loop(
         failure_sample_count=failure_samples,
         no_improvement_limit=no_improvement_limit,
         evolution_mode="prompt_only",
-        samples_per_category=6,
+        samples_per_category=15,
     )
 
     # Base agent: HALOAgent wrapping HALO's runner
@@ -254,22 +254,30 @@ async def main(
     val_ids = all_ids[n_train : n_train + n_val]
 
     # Build train_pools and val_data in EvoSkill's expected format
-    # Read instructions from specs.json for each task
+    # Split by difficulty so evolution sees diverse failure types
     import json
 
-    train_pools: dict[str, list[tuple[str, str]]] = {"default": []}
+    def _get_difficulty(task_id: str) -> str:
+        meta_path = halo_path / "data" / "tasks" / task_id / "ground_truth" / "metadata.json"
+        if meta_path.exists():
+            return f"difficulty_{json.loads(meta_path.read_text()).get('difficulty', 0)}"
+        return "unknown"
+
+    train_pools: dict[str, list[tuple[str, str]]] = {}
     for tid in train_ids:
         specs_path = halo_path / "data" / "tasks" / tid / "specs.json"
         instruction = json.loads(specs_path.read_text())["instruction"]
         question = f"{tid}{SEPARATOR}{instruction}"
-        train_pools["default"].append((question, tid))  # ground_truth = task_id
+        cat = _get_difficulty(tid)
+        train_pools.setdefault(cat, []).append((question, tid))
 
     val_data: list[tuple[str, str, str]] = []
     for tid in val_ids:
         specs_path = halo_path / "data" / "tasks" / tid / "specs.json"
         instruction = json.loads(specs_path.read_text())["instruction"]
         question = f"{tid}{SEPARATOR}{instruction}"
-        val_data.append((question, tid, "default"))
+        cat = _get_difficulty(tid)
+        val_data.append((question, tid, cat))
 
     print(f"=== EvoSkill Evolution on AppWorld ===")
     print(f"Runner model: {model}")

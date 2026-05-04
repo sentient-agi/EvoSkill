@@ -338,7 +338,8 @@ class ProgramManager:
                 score = config.get_score()
                 if score is not None:
                     scored.append((name, score, index))
-            except Exception:
+            except Exception as e:
+                scored.append((name, 0.0, index))  # Include with 0 score rather than hiding
                 continue
         scored.sort(key=lambda item: (item[1], item[2]), reverse=True)
         return [(name, score) for name, score, _ in scored]
