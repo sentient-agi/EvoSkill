@@ -88,16 +88,13 @@ def build_runner_config(
 
     # Determine model type based on prefix
     if provider == "openrouter":
-        model_type = "openai"
+        model_type = "litellm"
+        model = f"openrouter/{model}"
         model_settings = {
             "api_type": "chat_completions",
-            "base_url": os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-            "api_key_env_name": "OPENROUTER_API_KEY",
             "temperature": 0.0,
-            "seed": 100,
             "tool_choice": "auto",
             "parallel_tool_calls": True,
-            "store": False,
         }
     elif model.startswith("anthropic/") or model.startswith("claude"):
         model_type = "litellm"

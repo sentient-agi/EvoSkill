@@ -137,6 +137,7 @@ def build_evolution_loop(
         failure_sample_count=failure_samples,
         no_improvement_limit=no_improvement_limit,
         evolution_mode="prompt_only",
+        samples_per_category=6,
     )
 
     # Base agent: HALOAgent wrapping HALO's runner
@@ -205,12 +206,11 @@ def build_evolution_loop(
     # Prompt path inside .claude/ so ProgramManager's git tracks it.
     loop._prompt_path = appworld2_root / ".claude" / "prompts" / "instructions.txt"
 
-    # Move feedback and checkpoint paths inside .claude/ so they survive
-    # git branch switches (ProgramManager stages .claude/ on commit).
-    loop._feedback_path = appworld2_root / ".claude" / "feedback_history.md"
-    loop._checkpoint_path = appworld2_root / ".claude" / "loop_checkpoint.json"
-    for p in [loop._feedback_path, loop._checkpoint_path]:
-        p.parent.mkdir(parents=True, exist_ok=True)
+    # Loop state (feedback, checkpoint) stays in .evoskill/ (the runner default).
+    # NOT in .claude/ — that's program state managed by ProgramManager's git.
+    # Putting loop state there causes stash conflicts on branch switches.
+    evoskill_dir = appworld2_root / ".evoskill"
+    evoskill_dir.mkdir(parents=True, exist_ok=True)
     if not loop._feedback_path.exists():
         loop._feedback_path.touch()
 

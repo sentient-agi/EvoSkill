@@ -319,7 +319,7 @@ class DaytonaBackend(RemoteBackend):
         else:
             logs = sandbox.process.get_session_command_logs(session_id, cmd_id)
             content = logs.output or logs.stdout or ""
-            for line in content.splitlines()[-50:]:
+            for line in content.splitlines():
                 yield line
 
     def download(self, cfg: ProjectConfig, run_info: RunInfo) -> None:

@@ -17,11 +17,13 @@ FROM python:3.12-slim
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
+        git-lfs \
         curl \
         build-essential \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && git lfs install
 
 # CLI tools for harnesses that need external binaries
 #   claude   — npm (claude-agent-sdk spawns this)
@@ -60,9 +62,9 @@ RUN pip install --no-cache-dir \
     "hatchling" \
     "daytona>=0.1.0"
 
-# AppWorld: install the main package normally, then appworld-agents with
-# --no-deps to bypass its stale openai<=1.99.8 pin (litellm 1.82+ needs
-# openai 2.x). Install its actual runtime deps separately.
+# AppWorld: pip install for Python code only. LFS bundle files (needed by
+# `appworld install`) are fetched at runtime via git clone + lfs pull.
+# --no-deps on appworld-agents to bypass its stale openai<=1.99.8 pin.
 RUN pip install --no-cache-dir \
     "appworld @ git+https://github.com/stonybrooknlp/appworld.git"
 
