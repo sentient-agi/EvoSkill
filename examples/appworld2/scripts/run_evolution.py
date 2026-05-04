@@ -137,7 +137,7 @@ def build_evolution_loop(
         failure_sample_count=failure_samples,
         no_improvement_limit=no_improvement_limit,
         evolution_mode="prompt_only",
-        samples_per_category=15,
+        samples_per_category=10,
     )
 
     # Base agent: HALOAgent wrapping HALO's runner
