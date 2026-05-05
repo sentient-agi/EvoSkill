@@ -31,6 +31,7 @@ config.json
 # Cache
 .cache/
 *.txt
+!**/prompt.txt
 output.txt
 scratch/
 
