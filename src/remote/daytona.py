@@ -296,30 +296,46 @@ class DaytonaBackend(RemoteBackend):
         sandbox = _get_sandbox(client, sandbox_id)
 
         if follow:
-            last_size = 0
-            while True:
-                logs = sandbox.process.get_session_command_logs(session_id, cmd_id)
-                content = logs.output or logs.stdout or ""
-                if len(content) > last_size:
-                    for line in content[last_size:].splitlines():
-                        yield line
-                    last_size = len(content)
+            import asyncio
+            import queue
+            import threading
 
-                cmd_info = sandbox.process.get_session_command(session_id, cmd_id)
-                if cmd_info.exit_code is not None:
-                    # Final read
-                    logs = sandbox.process.get_session_command_logs(session_id, cmd_id)
-                    final = logs.output or logs.stdout or ""
-                    if len(final) > last_size:
-                        for line in final[last_size:].splitlines():
-                            yield line
-                    yield f"--- Run completed (exit_code={cmd_info.exit_code}) ---"
+            log_queue: queue.Queue[str | None] = queue.Queue()
+
+            def _run_async_stream():
+                """Run the async log stream in a separate thread with its own event loop."""
+                async def _stream():
+                    await sandbox.process.get_session_command_logs_async(
+                        session_id, cmd_id,
+                        on_stdout=lambda chunk: log_queue.put(chunk),
+                        on_stderr=lambda chunk: log_queue.put(chunk),
+                    )
+                    log_queue.put(None)
+
+                loop = asyncio.new_event_loop()
+                try:
+                    loop.run_until_complete(_stream())
+                except Exception:
+                    log_queue.put(None)
+                finally:
+                    loop.close()
+
+            thread = threading.Thread(target=_run_async_stream, daemon=True)
+            thread.start()
+
+            while True:
+                chunk = log_queue.get()
+                if chunk is None:
+                    cmd_info = sandbox.process.get_session_command(session_id, cmd_id)
+                    exit_code = cmd_info.exit_code if cmd_info.exit_code is not None else 0
+                    yield f"--- Run completed (exit_code={exit_code}) ---"
                     break
-                time.sleep(5)
+                for line in chunk.splitlines():
+                    yield line
         else:
             logs = sandbox.process.get_session_command_logs(session_id, cmd_id)
             content = logs.output or logs.stdout or ""
-            for line in content.splitlines()[-50:]:
+            for line in content.splitlines():
                 yield line
 
     def download(self, cfg: ProjectConfig, run_info: RunInfo) -> None:
