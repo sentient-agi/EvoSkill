@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from src.harness import build_options
 from src.schemas import AgentResponse
 
+
+# Path to the prompt file (read at runtime)
+PROMPT_FILE = Path(__file__).parent / "prompt.txt"
 
 LIVECODEBENCH_AGENT_TOOLS = [
     "Read",
@@ -28,10 +32,12 @@ LIVECODEBENCH_AGENT_TOOLS = [
 def get_livecodebench_agent_options(model: str | None = None) -> Any:
     """Factory that creates agent options for LiveCodeBench evaluation.
 
-    Uses default system prompts (no custom append) and full tool access.
+    Reads prompt.txt from disk each time, allowing dynamic updates
+    without restarting the Python process.
     """
+    prompt_text = PROMPT_FILE.read_text().strip()
     return build_options(
-        system="",
+        system=prompt_text,
         schema=AgentResponse.model_json_schema(),
         tools=LIVECODEBENCH_AGENT_TOOLS,
         model=model,

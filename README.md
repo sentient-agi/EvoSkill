@@ -458,9 +458,20 @@ docker compose -f .evoskill/docker-compose.yml down
 
 ### Daytona (Managed)
 
-Build, push your image, and configure:
+Install the Daytona SDK and set your API key:
 
 ```bash
+pip install daytona
+export DAYTONA_API_KEY=your-daytona-key
+```
+
+Build and push your image (Daytona runs x86 sandboxes, so cross-compile if you're on Apple Silicon):
+
+```bash
+# On Apple Silicon (ARM) — cross-compile for x86
+docker buildx build --platform linux/amd64 -t your-registry/evoskill:latest --push .
+
+# On x86 Linux — standard build
 docker build -t evoskill .
 docker tag evoskill your-registry/evoskill:latest
 docker push your-registry/evoskill:latest
@@ -473,20 +484,22 @@ Set in `.evoskill/config.toml`:
 target = "daytona"
 
 [remote.daytona]
-api_key = "your-daytona-key"    # or set DAYTONA_API_KEY env var
 image = "your-registry/evoskill:latest"
-cpu = 4
-memory = 8
-disk = 10
-timeout = 60                    # auto-stop after 60 minutes
+cpu = 4          # max 4 vCPUs per sandbox
+memory = 8       # max 8 GB per sandbox
+disk = 10        # max 10 GB per sandbox
+timeout = 0      # 0 = no auto-stop, or minutes until auto-stop
 ```
+
+The `DAYTONA_API_KEY` can also be set as `api_key` under `[remote.daytona]`, but the env var is preferred to avoid committing secrets.
 
 Then:
 
 ```bash
 evoskill run --remote           # launch
 evoskill remote status          # check progress
-evoskill remote logs            # view output
+evoskill remote logs -f         # stream live output
+evoskill remote logs            # view last output
 evoskill remote download        # pull results when done
 evoskill remote stop            # cancel and clean up
 ```
