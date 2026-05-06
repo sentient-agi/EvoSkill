@@ -120,7 +120,7 @@ def test_openhands_meta_agent_builders_return_dicts_with_project_root(
         skill_generator,
         project_root=tmp_path,
         model=model,
-        required_tools=("Read", "Write", "Edit", "Skill"),
+        required_tools=("Read", "Write", "Edit"),
     )
     _assert_openhands_options(
         prompt_proposer,
