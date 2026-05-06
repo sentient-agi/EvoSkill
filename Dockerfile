@@ -72,3 +72,4 @@ RUN git config --global user.email "evoskill@sandbox" \
 
 WORKDIR /workspace
 USER evoskill
+ENV PATH="/home/evoskill/.local/bin:${PATH}"
