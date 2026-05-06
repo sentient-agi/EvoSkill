@@ -114,11 +114,14 @@ class DaytonaBackend(RemoteBackend):
         )
         self._sandbox = self._client.create(params)
 
-    def upload(self, cfg: ProjectConfig) -> None:
+    def upload(self, cfg: ProjectConfig, log=None) -> None:
         sandbox = self._sandbox
         project_root = cfg.project_root
+        if log is None:
+            log = lambda msg: None  # noqa: E731
 
         # 1. Create and upload git bundle
+        log("git bundle...")
         with tempfile.NamedTemporaryFile(suffix=".bundle", delete=False) as f:
             bundle_path = f.name
 
@@ -134,6 +137,8 @@ class DaytonaBackend(RemoteBackend):
 
         # 2. Upload project files (skip .git — handled by bundle)
         files = upload_file_list(project_root)
+        file_count = len(files)
+        log(f"project files ({file_count} files)...")
         for file_path in files:
             rel = file_path.relative_to(project_root)
             if rel.parts and rel.parts[0] == ".git":
@@ -146,6 +151,7 @@ class DaytonaBackend(RemoteBackend):
         # 3. Upload dataset if external
         dataset_path = cfg.dataset_path.resolve()
         if not _is_under(dataset_path, project_root.resolve()):
+            log(f"dataset ({dataset_path.name})...")
             container_dataset = f"/mnt/dataset/{dataset_path.name}"
             sandbox.fs.create_folder("/mnt/dataset", mode="755")
             sandbox.fs.upload_file(dataset_path.read_bytes(), container_dataset)
@@ -153,39 +159,59 @@ class DaytonaBackend(RemoteBackend):
 
         # 4. Upload external data dirs via tar (chunked if > 50MB)
         MAX_CHUNK = 50 * 1024 * 1024
+        MAX_UPLOAD = 1024 * 1024 * 1024  # 1GB compressed limit
         mappings = remap_data_dirs(cfg.harness.data_dirs, project_root)
         container_data_dirs = []
 
         for mapping in mappings:
             container_data_dirs.append(mapping.container_path)
             if mapping.needs_upload:
+                log(f"compressing {mapping.host_path.name}...")
                 with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
                     tar_path = f.name
                 subprocess.run(
                     ["tar", "czf", tar_path, "-C", str(mapping.host_path.parent), mapping.host_path.name],
                     check=True,
                 )
+                tar_size = Path(tar_path).stat().st_size
+                if tar_size > MAX_UPLOAD:
+                    Path(tar_path).unlink(missing_ok=True)
+                    raise RuntimeError(
+                        f"Data directory '{mapping.host_path.name}' is too large "
+                        f"({tar_size / 1024 / 1024:.0f}MB compressed) for Daytona upload. "
+                        f"Max is 1GB. Host the data externally and download it in the "
+                        f"remote command, or remove it from data_dirs."
+                    )
+
                 tar_bytes = Path(tar_path).read_bytes()
                 Path(tar_path).unlink(missing_ok=True)
+                tar_mb = len(tar_bytes) / 1024 / 1024
 
                 if len(tar_bytes) <= MAX_CHUNK:
+                    log(f"uploading {mapping.host_path.name} ({tar_mb:.0f}MB)...")
                     remote_tar = f"/tmp/{mapping.host_path.name}.tar.gz"
                     sandbox.fs.upload_file(tar_bytes, remote_tar)
+                    log(f"extracting {mapping.host_path.name}...")
                     sandbox.process.exec(
                         f"mkdir -p {mapping.container_path} && "
                         f"tar xzf {remote_tar} -C /mnt/data/ && "
                         f"rm {remote_tar}",
                     )
                 else:
+                    n_chunks = (len(tar_bytes) + MAX_CHUNK - 1) // MAX_CHUNK
+                    log(f"uploading {mapping.host_path.name} ({tar_mb:.0f}MB, {n_chunks} chunks)...")
                     sandbox.process.exec("mkdir -p /tmp/chunks")
-                    for i in range(0, len(tar_bytes), MAX_CHUNK):
+                    for idx, i in enumerate(range(0, len(tar_bytes), MAX_CHUNK)):
                         chunk = tar_bytes[i:i + MAX_CHUNK]
                         sandbox.fs.upload_file(chunk, f"/tmp/chunks/part_{i:010d}")
+                        log(f"  chunk {idx + 1}/{n_chunks}")
+                    log(f"extracting {mapping.host_path.name}...")
                     sandbox.process.exec(
                         f"cat /tmp/chunks/part_* > /tmp/combined.tar.gz && "
                         f"mkdir -p {mapping.container_path} && "
                         f"tar xzf /tmp/combined.tar.gz -C /mnt/data/ && "
                         f"rm -rf /tmp/chunks /tmp/combined.tar.gz",
+                        timeout=600,
                     )
 
         if container_data_dirs:

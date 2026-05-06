@@ -247,9 +247,11 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
             external_dirs = [d for d in cfg.harness.data_dirs
                              if not Path(d).resolve().is_relative_to(project_root)]
 
-            console.print("  [2/4] Uploading...", end="")
-            backend.upload(cfg)
-            console.print(f" [green]done[/green]")
+            console.print("  [2/4] Uploading...")
+            def _upload_log(msg):
+                console.print(f"         {msg}")
+            backend.upload(cfg, log=_upload_log)
+            console.print(f"         [green]done[/green]")
             console.print(f"         project files → /workspace/")
             if external_dataset:
                 console.print(f"         dataset ({dataset_path.name}) → /mnt/dataset/")
