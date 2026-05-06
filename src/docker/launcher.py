@@ -66,9 +66,10 @@ def _build_compose(cfg: ProjectConfig, extra_args: list[str]) -> dict:
     env_forward = [k for k in _API_KEY_VARS if k in os.environ]
 
     # Build the evoskill run command
+    import shlex
     cmd = "pip install --no-deps -e . > /dev/null 2>&1 && evoskill run"
     if extra_args:
-        cmd += " " + " ".join(extra_args)
+        cmd += " " + " ".join(shlex.quote(a) for a in extra_args)
 
     return {
         "services": {
@@ -87,28 +88,25 @@ def _build_compose(cfg: ProjectConfig, extra_args: list[str]) -> dict:
 
 def _write_compose(cfg: ProjectConfig, compose: dict) -> Path:
     """Write docker-compose.yml to .evoskill/."""
+    import yaml
+
     compose_path = cfg.evoskill_dir / COMPOSE_FILE
     svc = compose["services"]["evoskill"]
 
-    lines = ["services:", "  evoskill:"]
-    lines.append(f'    image: {svc["image"]}')
-    lines.append(f'    container_name: {svc["container_name"]}')
-    lines.append(f'    working_dir: {svc["working_dir"]}')
+    compose_dict = {
+        "services": {
+            "evoskill": {
+                "image": svc["image"],
+                "container_name": svc["container_name"],
+                "working_dir": svc["working_dir"],
+                "volumes": svc["volumes"],
+                "environment": svc["env_with_values"] + svc["env_forward"],
+                "command": svc["command"],
+            }
+        }
+    }
 
-    lines.append("    volumes:")
-    for v in svc["volumes"]:
-        lines.append(f"      - '{v}'")
-
-    lines.append("    environment:")
-    for e in svc["env_with_values"]:
-        lines.append(f"      - '{e}'")
-    for k in svc["env_forward"]:
-        lines.append(f"      - {k}")
-
-    lines.append(f"    command: {svc['command']}")
-    lines.append("")
-
-    compose_path.write_text("\n".join(lines))
+    compose_path.write_text(yaml.safe_dump(compose_dict, default_flow_style=False))
     return compose_path
 
 

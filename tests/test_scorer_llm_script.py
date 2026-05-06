@@ -217,15 +217,14 @@ class TestScriptScorer:
 
         assert score == 1.0
 
-    def test_script_scorer_uses_format_placeholders(self):
-        """Script scorer substitutes {predicted} and {expected} into the command."""
+    def test_script_scorer_uses_env_vars(self):
+        """Script scorer passes predicted/expected via PREDICTED and EXPECTED env vars."""
         from src.cli.shared import make_scorer
 
-        # Use python -c to compare the two values
         cfg = FakeProjectConfig(
             scorer=FakeScorerConfig(
                 type="script",
-                command='python3 -c "print(1.0 if \'{predicted}\' == \'{expected}\' else 0.0)"',
+                command='python3 -c "import os; print(1.0 if os.environ[\'PREDICTED\'] == os.environ[\'EXPECTED\'] else 0.0)"',
             )
         )
         scorer = make_scorer(cfg)

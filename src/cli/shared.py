@@ -224,16 +224,17 @@ def make_scorer(cfg: ProjectConfig):
             )
 
         def script_scorer(question: str, predicted: str, ground_truth: str) -> float:
-            # Use Template-style substitution to avoid KeyError on { } in answers
-            cmd = cfg.scorer.command.replace("{predicted}", predicted).replace("{expected}", ground_truth)
+            import os
+            base_cmd = shlex.split(cfg.scorer.command)
+            env = {**os.environ, "PREDICTED": predicted, "EXPECTED": ground_truth}
             try:
                 result = subprocess.run(
-                    shlex.split(cmd), capture_output=True, text=True, timeout=30,
+                    base_cmd, capture_output=True, text=True, timeout=30, env=env,
                 )
             except subprocess.TimeoutExpired:
                 import logging
                 logging.getLogger(__name__).warning(
-                    "Script scorer timed out (30s): %s", cmd[:120],
+                    "Script scorer timed out (30s): %s", cfg.scorer.command,
                 )
                 return 0.0
             try:

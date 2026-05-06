@@ -53,7 +53,7 @@ class EvalRunner:
         task: str = "base",
         *,
         model: str | None = None,
-        output: str = "results/eval_results.pkl",
+        output: str = "results/eval_results.json",
         max_concurrent: int = 8,
         resume: bool = True,
         num_samples: int | None = None,

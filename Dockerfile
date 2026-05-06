@@ -13,11 +13,19 @@
 FROM python:3.12-slim
 
 # System deps
+ARG NODE_MAJOR=20
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
+        ca-certificates \
+        gnupg \
+        libgomp1 \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+       | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+       > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # CLI tools for harnesses that need external binaries
@@ -27,15 +35,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #   goose    — tarball from GitHub releases (goose harness spawns this)
 RUN npm install -g @anthropic-ai/claude-code opencode-ai @openai/codex && npm cache clean --force
 
+ARG GOOSE_VERSION=v1.33.1
 RUN ARCH=$(uname -m) && \
-    GOOSE_VER=$(curl -sL "https://api.github.com/repos/block/goose/releases/latest" \
-      | grep -m1 '"tag_name"' | cut -d'"' -f4) && \
-    if [ -z "$GOOSE_VER" ]; then \
-      GOOSE_VER=$(curl -sL "https://api.github.com/repos/block/goose/releases" \
-        | grep -m1 '"tag_name"' | cut -d'"' -f4); \
-    fi && \
-    echo "Installing goose ${GOOSE_VER} for ${ARCH}" && \
-    curl -fsSL "https://github.com/block/goose/releases/download/${GOOSE_VER}/goose-${ARCH}-unknown-linux-gnu.tar.gz" \
+    echo "Installing goose ${GOOSE_VERSION} for ${ARCH}" && \
+    curl -fsSL "https://github.com/block/goose/releases/download/${GOOSE_VERSION}/goose-${ARCH}-unknown-linux-gnu.tar.gz" \
     | tar xz -C /usr/local/bin/
 
 # Python deps — core + all harness SDKs.
@@ -58,9 +61,15 @@ RUN pip install --no-cache-dir \
     "hatchling" \
     "daytona>=0.1.0"
 
+# Non-root user
+RUN useradd -m -s /bin/bash evoskill \
+    && mkdir -p /workspace && chown evoskill:evoskill /workspace
+
 # Git config for bundle operations
 RUN git config --global user.email "evoskill@sandbox" \
     && git config --global user.name "EvoSkill Sandbox" \
     && git config --global init.defaultBranch main
 
 WORKDIR /workspace
+USER evoskill
+ENV PATH="/home/evoskill/.local/bin:${PATH}"

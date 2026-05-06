@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import tempfile
 import time
@@ -187,15 +188,17 @@ class DaytonaBackend(RemoteBackend):
                 Path(tar_path).unlink(missing_ok=True)
                 tar_mb = len(tar_bytes) / 1024 / 1024
 
+                container_q = shlex.quote(mapping.container_path)
                 if len(tar_bytes) <= MAX_CHUNK:
                     log(f"uploading {mapping.host_path.name} ({tar_mb:.0f}MB)...")
                     remote_tar = f"/tmp/{mapping.host_path.name}.tar.gz"
+                    remote_tar_q = shlex.quote(remote_tar)
                     sandbox.fs.upload_file(tar_bytes, remote_tar)
                     log(f"extracting {mapping.host_path.name}...")
                     sandbox.process.exec(
-                        f"mkdir -p {mapping.container_path} && "
-                        f"tar xzf {remote_tar} -C /mnt/data/ && "
-                        f"rm {remote_tar}",
+                        f"mkdir -p {container_q} && "
+                        f"tar xzf {remote_tar_q} -C /mnt/data/ && "
+                        f"rm {remote_tar_q}",
                     )
                 else:
                     n_chunks = (len(tar_bytes) + MAX_CHUNK - 1) // MAX_CHUNK
@@ -208,7 +211,7 @@ class DaytonaBackend(RemoteBackend):
                     log(f"extracting {mapping.host_path.name}...")
                     sandbox.process.exec(
                         f"cat /tmp/chunks/part_* > /tmp/combined.tar.gz && "
-                        f"mkdir -p {mapping.container_path} && "
+                        f"mkdir -p {container_q} && "
                         f"tar xzf /tmp/combined.tar.gz -C /mnt/data/ && "
                         f"rm -rf /tmp/chunks /tmp/combined.tar.gz",
                         timeout=600,
@@ -246,11 +249,11 @@ class DaytonaBackend(RemoteBackend):
         env_lines = []
         if self._path_overrides:
             overrides_json = json.dumps(self._path_overrides)
-            env_lines.append(f"export EVOSKILL_PATH_OVERRIDES='{overrides_json}'")
+            env_lines.append(f"export EVOSKILL_PATH_OVERRIDES={shlex.quote(overrides_json)}")
 
         cmd = "evoskill run"
         if extra_args:
-            cmd += " " + " ".join(extra_args)
+            cmd += " " + " ".join(shlex.quote(a) for a in extra_args)
 
         # Build run command (no script file needed — session executes directly)
         env_prefix = ""
@@ -386,7 +389,7 @@ class DaytonaBackend(RemoteBackend):
         if download_cfg.all_branches:
             sandbox.process.exec("git bundle create /tmp/results.bundle --all", cwd="/workspace")
         elif best_branch:
-            sandbox.process.exec(f"git bundle create /tmp/results.bundle {best_branch}", cwd="/workspace")
+            sandbox.process.exec(f"git bundle create /tmp/results.bundle {shlex.quote(best_branch)}", cwd="/workspace")
 
         # 3. Download bundle
         bundle_bytes = sandbox.fs.download_file("/tmp/results.bundle")

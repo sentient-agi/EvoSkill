@@ -142,7 +142,7 @@ def test_opencode_meta_agent_builders_return_dicts_with_project_root(
         skill_generator,
         project_root=tmp_path,
         model=model,
-        required_tools=("read", "write", "edit", "skill"),
+        required_tools=("read", "write", "edit"),
     )
     _assert_opencode_options(
         prompt_proposer,

@@ -213,6 +213,12 @@ def load_config(
             env_key = os.environ.get('DAYTONA_API_KEY')
             if env_key:
                 daytona_cfg.api_key = env_key
+        elif daytona_cfg is not None and daytona_cfg.api_key:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Daytona API key loaded from config file — "
+                "prefer the DAYTONA_API_KEY environment variable to avoid committing secrets"
+            )
         elif target == 'daytona' and daytona_cfg is None:
             # target is daytona but no [remote.daytona] section — create with defaults
             env_key = os.environ.get('DAYTONA_API_KEY')

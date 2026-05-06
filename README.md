@@ -407,7 +407,7 @@ Notes:
 | `multi_tolerance` | Flexible string matching: exact, numeric tolerance, list overlap (default) |
 | `exact` | Case-insensitive exact string match |
 | `llm` | LLM-as-judge grading with a custom rubric |
-| `script` | Shell script scorer — receives `{predicted}` and `{expected}` as variables |
+| `script` | Shell script scorer — receives `PREDICTED` and `EXPECTED` as environment variables |
 
 **LLM scorer options:**
 
@@ -423,10 +423,20 @@ For OpenRouter-backed scoring, set `provider = "openrouter"` and use an OpenRout
 
 **Script scorer options:**
 
+The script scorer passes the agent's prediction and expected answer as environment variables `PREDICTED` and `EXPECTED`. Your script should read these from the environment (not from command-line arguments):
+
 ```toml
 [scorer]
 type = "script"
-command = "python score.py --predicted {predicted} --expected {expected}"
+command = "python score.py"
+```
+
+```python
+# score.py
+import os
+predicted = os.environ["PREDICTED"]
+expected = os.environ["EXPECTED"]
+print(1.0 if predicted.strip().lower() == expected.strip().lower() else 0.0)
 ```
 
 ## Remote Execution
@@ -596,6 +606,26 @@ If you use EvoSkill in your research, please cite the [original paper](https://a
       url={https://arxiv.org/abs/2603.02766}, 
 }
 ```
+
+## Security Considerations
+
+EvoSkill evaluates LLM-generated code and output. Treat all agent responses as **untrusted input**.
+
+### Trust model
+
+- **Agent output is adversarial.** Agents under evaluation may produce responses designed to manipulate scoring, escape sandboxes, or exfiltrate data. Never interpolate agent output into shell commands, file paths, or other interpreted contexts.
+- **Skill generation writes files.** The skill generator agent creates files on disk. Review generated skills before deploying them in production.
+- **Remote execution runs untrusted code.** Docker and Daytona sandboxes execute LLM-generated code with access to forwarded API keys. Use scoped or short-lived API keys for remote runs.
+
+### Safe configuration
+
+- **Script scorer:** The scorer passes agent predictions via environment variables (`PREDICTED`, `EXPECTED`), not command-line interpolation. Your scorer script should read `os.environ["PREDICTED"]` — do not use `{predicted}` placeholders in the command string.
+- **API keys:** Use environment variables (`ANTHROPIC_API_KEY`, `DAYTONA_API_KEY`, etc.) rather than storing keys in config files. The `.evoskill/` directory is gitignored by default, but custom config paths may not be.
+- **Docker:** The default Dockerfile runs as a non-root user. If you customize the Dockerfile, maintain a non-root `USER` directive.
+
+### Reporting vulnerabilities
+
+If you discover a security issue, please report it to the maintainers via a GitHub security advisory rather than a public issue.
 
 ## License
 

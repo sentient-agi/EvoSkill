@@ -1,6 +1,6 @@
 import asyncio
-import pickle
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Generic, TypeVar
 
@@ -22,12 +22,51 @@ class IndexedEvalResult(Generic[T]):
     error: str | None  # Error message if failed
 
 
+def _serialize_results(results: list[IndexedEvalResult]) -> str:
+    serialized = []
+    for r in results:
+        d = {
+            "index": r.index,
+            "question": r.question,
+            "ground_truth": r.ground_truth,
+            "error": r.error,
+            "trace": r.trace.model_dump(mode="json") if r.trace else None,
+        }
+        serialized.append(d)
+    return json.dumps(serialized, default=str)
+
+
+def _deserialize_results(data: str) -> list[IndexedEvalResult]:
+    items = json.loads(data)
+    results = []
+    for d in items:
+        trace = None
+        if d.get("trace") is not None:
+            try:
+                trace = AgentTrace.model_validate(d["trace"])
+            except Exception:
+                pass
+        results.append(IndexedEvalResult(
+            index=d["index"],
+            question=d["question"],
+            ground_truth=d["ground_truth"],
+            trace=trace,
+            error=d.get("error"),
+        ))
+    return results
+
+
 def load_results(path: Path) -> list[IndexedEvalResult]:
-    """Load results from pkl file."""
+    """Load results from JSON file."""
     if not path.exists():
         return []
-    with open(path, "rb") as f:
-        return pickle.load(f)
+    with open(path, "r") as f:
+        return _deserialize_results(f.read())
+
+
+def _save_results(path: Path, results: list[IndexedEvalResult]) -> None:
+    with open(path, "w") as f:
+        f.write(_serialize_results(results))
 
 
 def get_successful_indices(path: Path) -> set[int]:
@@ -52,7 +91,7 @@ async def evaluate_full(
     Args:
         agent: The agent to evaluate
         items: List of (index, question, ground_truth) tuples
-        output_path: Path to save pkl results
+        output_path: Path to save results (JSON)
         max_concurrent: Max concurrent agent runs (default 5)
         resume: If True, skip already-processed indices
 
@@ -71,9 +110,7 @@ async def evaluate_full(
         existing = load_results(output_path)
         kept_results = [r for r in existing if r.index not in failed_indices]
         if len(kept_results) < len(existing):
-            # Some failed results were removed, save the cleaned file
-            with open(output_path, "wb") as f:
-                pickle.dump(kept_results, f)
+            _save_results(output_path, kept_results)
             print(f"Removed {len(existing) - len(kept_results)} failed results for re-run")
 
         items = items_to_run
@@ -115,8 +152,7 @@ async def evaluate_full(
             async with lock:
                 existing = load_results(output_path)
                 existing.append(result)
-                with open(output_path, "wb") as f:
-                    pickle.dump(existing, f)
+                _save_results(output_path, existing)
 
             return result
 
