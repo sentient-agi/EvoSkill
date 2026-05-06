@@ -1,6 +1,9 @@
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+_SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 class SkillProposerResponse(BaseModel):
@@ -24,6 +27,15 @@ class SkillProposerResponse(BaseModel):
 
     related_iterations: list[str] = Field(default_factory=list)
     """List of relevant past iterations referenced in the proposal (e.g., ["iter-4", "iter-9"])."""
+
+    @field_validator("target_skill")
+    @classmethod
+    def validate_skill_name(cls, v: str | None) -> str | None:
+        if v is not None and not _SKILL_NAME_RE.match(v):
+            raise ValueError(
+                "target_skill must be 1-64 lowercase alphanumeric, hyphen, or underscore characters"
+            )
+        return v
 
     @model_validator(mode="after")
     def validate_edit_target(self) -> "SkillProposerResponse":
