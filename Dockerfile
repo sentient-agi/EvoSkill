@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #   goose    — tarball from GitHub releases (goose harness spawns this)
 RUN npm install -g @anthropic-ai/claude-code opencode-ai @openai/codex && npm cache clean --force
 
-ARG GOOSE_VERSION=v1.0.16
+ARG GOOSE_VERSION=v1.33.1
 RUN ARCH=$(uname -m) && \
     echo "Installing goose ${GOOSE_VERSION} for ${ARCH}" && \
     curl -fsSL "https://github.com/block/goose/releases/download/${GOOSE_VERSION}/goose-${ARCH}-unknown-linux-gnu.tar.gz" \
