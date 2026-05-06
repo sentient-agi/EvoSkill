@@ -26,6 +26,7 @@ dependencies = [
     "tomli-w>=1.2.0",
     "hatchling",
     "daytona>=0.1.0",
+    "harbor>=0.6.1",
 ]
 
 [project.scripts]

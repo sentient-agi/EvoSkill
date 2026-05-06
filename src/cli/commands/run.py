@@ -351,8 +351,19 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
     except FileNotFoundError:
         console.print(f"[red]Error:[/red] Dataset not found at {cfg.dataset_path}")
         raise SystemExit(1)
+    except Exception as exc:
+        # Catches HarborLoadError without importing it (avoids cycle).
+        if exc.__class__.__name__ == "HarborLoadError":
+            console.print(f"[red]Error:[/red] Harbor dataset: {exc}")
+            raise SystemExit(1)
+        raise
 
-    console.print(f"  Dataset: {cfg.dataset_path}  ({len(val_data)} val samples)\n")
+    if cfg.dataset.source == "harbor":
+        console.print(
+            f"  Harbor dataset: {cfg.dataset.harbor_tasks_root}  ({len(val_data)} val tasks)\n"
+        )
+    else:
+        console.print(f"  Dataset: {cfg.dataset_path}  ({len(val_data)} val samples)\n")
 
     # Build agents — use task.md description as the base agent prompt
     base_factory = make_base_agent_options_from_task(
@@ -361,13 +372,38 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
         data_dirs=cfg.harness.data_dirs,
         project_root=cfg.project_root,
     )
-    agents = LoopAgents(
-        base=Agent(
+
+    if cfg.harbor.enabled:
+        from src.harness.harbor import HarborAgent
+        skills_source = cfg.project_root / ".claude" / "skills"
+        base_agent = HarborAgent(
+            project_root=cfg.project_root,
+            skills_source_dir=skills_source,
+            inner_agent=cfg.harbor.inner_agent,
+            inner_model=cfg.harbor.inner_model,
+            env=cfg.harbor.env,
+            n_concurrent=cfg.harbor.n_concurrent,
+            timeout_seconds=cfg.harness.timeout_seconds,
+            max_retries=cfg.harness.max_retries,
+            jobs_dir=Path(cfg.harbor.jobs_dir) if cfg.harbor.jobs_dir else None,
+            container_skills_path=cfg.harbor.container_skills_path,
+            timeout_multiplier=cfg.harbor.timeout_multiplier,
+            extra_args=cfg.harbor.extra_args,
+        )
+        console.print(
+            f"  [cyan]Harbor mode:[/cyan] inner agent={cfg.harbor.inner_agent}  "
+            f"env={cfg.harbor.env}  n_concurrent={cfg.harbor.n_concurrent}\n"
+        )
+    else:
+        base_agent = Agent(
             base_factory,
             AgentResponse,
             timeout_seconds=cfg.harness.timeout_seconds,
             max_retries=cfg.harness.max_retries,
-        ),
+        )
+
+    agents = LoopAgents(
+        base=base_agent,
         skill_proposer=Agent(
             make_skill_proposer_options(
                 project_root=cfg.project_root,
