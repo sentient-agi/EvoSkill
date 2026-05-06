@@ -73,7 +73,7 @@ def ensure_skill_frontmatter(
         return False
 
     frontmatter = yaml.safe_dump(metadata, sort_keys=False).strip()
-    skill_path.write_text(f"---\n{frontmatter}\n---\n\n{body.lstrip()}")
+    skill_path.write_text(f"---\n{frontmatter}\n---\n\n{body.lstrip()}", encoding='utf-8')
     return True
 
 

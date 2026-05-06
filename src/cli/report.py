@@ -59,7 +59,7 @@ class RunReport:
         reports_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
         path = reports_dir / f'run-{timestamp}.md'
-        path.write_text(self._render_markdown())
+        path.write_text(self._render_markdown(), encoding='utf-8')
         return path
 
     def _render_markdown(self) -> str:
