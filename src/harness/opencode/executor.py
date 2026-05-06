@@ -88,14 +88,9 @@ def _kill_pid(pid: int) -> None:
 
 
 def _kill_all_opencode_servers() -> None:
-    """Kill all opencode serve processes on this machine."""
-    try:
-        subprocess.run(
-            ["pkill", "-f", "opencode serve"],
-            capture_output=True, timeout=5,
-        )
-    except Exception:
-        pass
+    """Kill all tracked opencode serve processes from this process."""
+    for pid in list(_SERVER_PIDS.values()):
+        _kill_pid(pid)
 
 
 def shutdown_project_server(project_root: str | Path | None) -> None:

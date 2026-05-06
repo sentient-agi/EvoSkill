@@ -468,7 +468,7 @@ class ProgramManager:
         config_path = self.cwd / self.PROGRAM_FILE
         config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, "w") as f:
-            yaml.dump(config.model_dump(), f, default_flow_style=False, sort_keys=False)
+            yaml.safe_dump(config.model_dump(), f, default_flow_style=False, sort_keys=False)
 
     def _read_config(self) -> ProgramConfig:
         """Read program config from YAML file."""
