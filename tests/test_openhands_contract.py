@@ -40,22 +40,22 @@ def test_openhands_base_agent_factories_return_dicts_with_project_root_and_model
 ) -> None:
     set_sdk("openhands")
 
-    from src.agent_profiles.base_agent.base_agent import (
-        make_base_agent_options,
-        make_base_agent_options_from_task,
+    from src.agent_profiles.solver.solver import (
+        make_solver_options,
+        make_solver_options_from_task,
     )
 
     model = "anthropic/claude-sonnet-4-5-20250929"
     external_data_dir = tmp_path.parent / "external-data"
     external_data_dir.mkdir()
 
-    task_factory = make_base_agent_options_from_task(
+    task_factory = make_solver_options_from_task(
         "Answer the question with the final answer only.",
         model=model,
         data_dirs=[str(external_data_dir)],
         project_root=tmp_path,
     )
-    eval_factory = make_base_agent_options(
+    eval_factory = make_solver_options(
         model=model,
         data_dirs=[str(external_data_dir)],
         project_root=tmp_path,

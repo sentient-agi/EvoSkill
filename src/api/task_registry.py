@@ -58,12 +58,12 @@ def list_tasks() -> list[str]:
 
 def _register_builtins() -> None:
     """Register only the base built-in task."""
-    from src.agent_profiles import make_base_agent_options
+    from src.agent_profiles import make_solver_options
 
     register_task(
         TaskConfig(
             name="base",
-            make_agent_options=make_base_agent_options,
+            make_agent_options=make_solver_options,
             scorer=None,
             default_dataset=".dataset/new_runs_base/solved_dataset.csv",
         )

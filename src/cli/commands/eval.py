@@ -16,7 +16,7 @@ console = Console()
 def eval_cmd(verbose: bool):
     """Evaluate the best skills on the validation set."""
     from src.harness import Agent, set_sdk
-    from src.agent_profiles.base_agent.base_agent import make_base_agent_options
+    from src.agent_profiles.solver.solver import make_solver_options
     from src.cli.config import load_config
     from src.cli.shared import load_and_split, make_scorer
     from src.evaluation import evaluate_agent_parallel
@@ -43,7 +43,7 @@ def eval_cmd(verbose: bool):
     console.print(f'\n  Evaluating [bold]{best}[/bold] on {len(val_data)} samples...\n')
 
     agent = Agent(
-        make_base_agent_options(
+        make_solver_options(
             model=cfg.harness.model,
             data_dirs=cfg.harness.data_dirs,
             project_root=cfg.project_root,

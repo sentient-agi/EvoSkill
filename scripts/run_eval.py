@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Run full evaluation on OfficeQA dataset."""
 
+# Register Phoenix OTEL tracing BEFORE any LLM SDK imports, so Anthropic
+# auto-instrumentation can patch the client and turn/tool spans land in
+# Phoenix. init_tracing is fail-soft — runs fine without a Phoenix server.
+from src.tracing import init_tracing
+init_tracing("evoskill-eval")
+
 import asyncio
 from pathlib import Path
 from typing import Literal, Optional
@@ -12,11 +18,10 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+from src.harness import Agent, set_sdk
 from src.agent_profiles import (
-    Agent,
-    base_agent_options,
-    make_base_agent_options,
-    set_sdk,
+    solver_options,
+    make_solver_options,
 )
 from src.evaluation.eval_full import evaluate_full, load_results
 from src.schemas import AgentResponse
@@ -70,16 +75,24 @@ async def main(settings: EvalSettings):
 
     print(f"Dataset: {len(data)} samples ({settings.difficulty})")
 
-    # Prepare items with index
+    # Prepare items with index + uid (uid optional — falls back to None when
+    # the dataset has no uid column, in which case spans use the default name).
+    has_uid = "uid" in data.columns
     items = [
-        (int(i), str(row["question"]), str(row["answer"])) for i, row in data.iterrows()
+        (
+            int(i),
+            str(row["uid"]) if has_uid else None,
+            str(row["question"]),
+            str(row["answer"]),
+        )
+        for i, row in data.iterrows()
     ]
 
     # Create agent and run
     agent_options = (
-        make_base_agent_options(model=settings.model)
+        make_solver_options(model=settings.model)
         if settings.model
-        else base_agent_options
+        else solver_options
     )
     agent = Agent(agent_options, AgentResponse)
 
@@ -99,12 +112,22 @@ async def main(settings: EvalSettings):
     successful = [r for r in all_results if r.error is None]
     failed = [r for r in all_results if r.error is not None]
 
+    # Sum cost from successful traces. Failed traces have trace=None or no cost.
+    costs = [
+        r.trace.total_cost_usd
+        for r in successful
+        if r.trace is not None and r.trace.total_cost_usd is not None
+    ]
+    total_cost = sum(costs)
+    avg_cost = (total_cost / len(costs)) if costs else 0.0
+
     print(f"\n{'=' * 50}")
     print(f"Total completed: {len(all_results)}/{len(data)}")
     print(f"Successful: {len(successful)}")
     print(f"Failed: {len(failed)}")
     if failed:
         print(f"Failed indices: {[r.index for r in failed]}")
+    print(f"[COST] Total: ${total_cost:.4f}  |  Avg/question: ${avg_cost:.4f}  ({len(costs)} priced)")
     print(f"Results saved to: {settings.output}")
 
 

@@ -6,7 +6,8 @@ Harness/SDK logic lives in src.harness, not here.
 
 from .proposer import proposer_options
 from .skill_generator import skill_generator_options
-from .base_agent import base_agent_options, make_base_agent_options
+from .solver import solver_options, make_solver_options
+from .officeqa_agent import officeqa_agent_options, make_officeqa_agent_options
 from .dabstep_agent import dabstep_agent_options, make_dabstep_agent_options
 from .sealqa_agent import sealqa_agent_options, make_sealqa_agent_options
 from .livecodebench_agent import (
@@ -21,8 +22,10 @@ from .skill_evolver import skill_evolver_options, make_skill_evolver_options
 __all__ = [
     "proposer_options",
     "skill_generator_options",
-    "base_agent_options",
-    "make_base_agent_options",
+    "solver_options",
+    "make_solver_options",
+    "officeqa_agent_options",
+    "make_officeqa_agent_options",
     "dabstep_agent_options",
     "make_dabstep_agent_options",
     "sealqa_agent_options",
