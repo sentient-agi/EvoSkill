@@ -177,41 +177,50 @@ class ProgramManager:
     def _snapshot_skills(self, name: str) -> None:
         """Capture the live project skills tree under workspace snapshot store.
 
-        No-op if the project skills directory doesn't exist (e.g., on a
-        fresh-cold-start before any skill has been written).
+        Always creates the snapshot directory, even when the project skills
+        tree is empty or missing. An empty snapshot is the *correct* record
+        for a program that has no skills (e.g., the base program created
+        before any evolver mutation), and is what `_restore_skills` needs
+        to wipe leftover skills from a discarded child mutation when the
+        loop switches back to the parent.
         """
         import shutil
         src = self._project_skills_dir
-        if not src.exists():
-            return
         dest = self._snapshot_dir_for(name)
         # Wipe any prior snapshot for this program (e.g., from an aborted run)
         # so the fresh copy is authoritative.
         if dest.exists():
             shutil.rmtree(dest, ignore_errors=True)
         dest.mkdir(parents=True, exist_ok=True)
-        # copytree requires an empty target on macOS without dirs_exist_ok.
-        shutil.copytree(src, dest, dirs_exist_ok=True)
+        if src.exists():
+            # copytree requires an empty target on macOS without dirs_exist_ok.
+            shutil.copytree(src, dest, dirs_exist_ok=True)
+        # If src doesn't exist, dest is left as an empty dir — the marker
+        # that "this program has no skills" — which restore will use.
 
     def _restore_skills(self, name: str) -> None:
         """Restore the project skills tree from the snapshot taken at create.
 
-        No-op if no snapshot exists for this program (e.g., a program created
-        before snapshotting was wired up). In that case the live skill tree
-        is left untouched.
+        Replaces the live tree wholesale to match the snapshot. When the
+        snapshot is empty (e.g., the base program), the live tree is wiped
+        — this is load-bearing: without it, a discarded child mutation's
+        skill files would persist on disk and bleed into subsequent
+        iterations.
+
+        No-op only if no snapshot exists at all (e.g., a program created by
+        an older version that didn't snapshot). That case is for backward
+        compat — modern programs always have at least an empty snapshot.
         """
         import shutil
         snap = self._snapshot_dir_for(name)
         if not snap.exists():
             return
         dest = self._project_skills_dir
-        # Replace the live tree wholesale: remove anything not in snapshot,
-        # then copy snapshot in. This matters when later iterations created
-        # NEW skill directories that didn't exist when this program was made
-        # — those need to disappear when we switch back.
         if dest.exists():
             shutil.rmtree(dest, ignore_errors=True)
         dest.mkdir(parents=True, exist_ok=True)
+        # When snap is empty, this copies nothing — leaving dest empty,
+        # which is exactly what we want.
         shutil.copytree(snap, dest, dirs_exist_ok=True)
 
     def get_current(self) -> ProgramConfig:
