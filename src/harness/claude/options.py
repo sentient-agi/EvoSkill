@@ -25,8 +25,17 @@ def build_claudecode_options(
     setting_sources: list[str] | None = None,
     permission_mode: str | None = None,
     max_buffer_size: int | None = None,
+    disallowed_tools: Iterable[str] | None = None,
+    thinking: dict | None = None,
+    effort: str | None = None,
 ) -> Any:
-    """Build ClaudeAgentOptions for the Claude SDK."""
+    """Build ClaudeAgentOptions for the Claude SDK.
+
+    `thinking` accepts a ThinkingConfig dict — `{"type": "adaptive"}`,
+    `{"type": "enabled", "budget_tokens": N}`, or `{"type": "disabled"}`.
+    `effort` accepts "low" | "medium" | "high" | "max" (a coarser knob).
+    Both can be set together; effort layers on top of thinking.
+    """
     from claude_agent_sdk import ClaudeAgentOptions
 
     root = resolve_project_root(project_root)
@@ -51,6 +60,12 @@ def build_claudecode_options(
         kwargs["max_buffer_size"] = max_buffer_size
     if data_dirs is not None:
         kwargs["add_dirs"] = resolve_data_dirs(root, data_dirs)
+    if disallowed_tools is not None:
+        kwargs["disallowed_tools"] = list(disallowed_tools)
+    if thinking is not None:
+        kwargs["thinking"] = thinking
+    if effort is not None:
+        kwargs["effort"] = effort
 
     options = ClaudeAgentOptions(**kwargs)
     normalized_model = strip_model_provider(

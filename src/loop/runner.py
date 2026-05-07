@@ -6,12 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Generic, TypeVar
 
+from opentelemetry import trace as otel_trace
+
 from src.harness import Agent, AgentTrace, is_claude_sdk, is_opencode_sdk, is_openhands_sdk, is_goose_sdk, is_codex_sdk
 from src.cache import RunCache, CacheConfig
 from src.registry.sdk_utils import options_to_config
 from src.loop.trace_db import TraceDB
 from src.loop.reviewer import BackgroundReviewer
 from src.loop.constraints import gate as constraint_gate
+
+_tracer = otel_trace.get_tracer("evoskill.loop")
 
 
 def _log(phase: str, message: str = "", indent: int = 0) -> None:
@@ -29,25 +33,66 @@ def _log(phase: str, message: str = "", indent: int = 0) -> None:
         print(f"{prefix}{message}")
 
 
-def _score_multi_tolerance(question: str, predicted: str, ground_truth: str) -> float:
-    """Score answer using weighted average across tolerance levels.
+import math as _math
 
-    Weights favor stricter tolerances: weight = 1 / (1 + 20 * tolerance)
-    This gives approximate weights:
-      - 0.0%  tolerance: 1.00 (exact match, highest priority)
-      - 1.0%  tolerance: 0.83
-      - 2.5%  tolerance: 0.67
-      - 5.0%  tolerance: 0.50
-      - 10.0% tolerance: 0.33
+def _measure_rel_error(predicted: str, ground_truth: str) -> float:
+    """Binary-search for the smallest tolerance at which `score_answer` passes.
+
+    That minimum tolerance approximates the relative error between the
+    predicted and ground-truth numbers. Returns 0.0 when they match
+    exactly, 1.0 when they don't match even at 100% tolerance (e.g. a
+    non-numeric string mismatch).
     """
-    weighted_sum = 0.0
-    weight_total = 0.0
-    for tol in TOLERANCE_LEVELS:
-        weight = 1.0 / (1.0 + 20.0 * tol)
-        score = score_answer(predicted, ground_truth, tol)
-        weighted_sum += weight * score
-        weight_total += weight
-    return weighted_sum / weight_total
+    # Exact match first — avoids search when GT is a year/name/etc. that's right
+    if score_answer(predicted, ground_truth, 0.0) >= 1.0:
+        return 0.0
+    # If even a giant tolerance doesn't help, treat as string-mismatch → 100%
+    if score_answer(predicted, ground_truth, 1.0) < 1.0:
+        return 1.0
+    lo, hi = 0.0, 1.0
+    # 20 iters = precision ~1e-6 on the crossover point
+    for _ in range(20):
+        mid = (lo + hi) / 2
+        if score_answer(predicted, ground_truth, mid) >= 1.0:
+            hi = mid
+        else:
+            lo = mid
+    return hi
+
+
+def _score_multi_tolerance(question: str, predicted: str, ground_truth: str) -> float:
+    """Smooth-decay scorer. Continuous in relative error — no stair-step tiers.
+
+    Shape:
+      - rel_err ≤ 0.01  → 1.00    (full credit "soft zone")
+      - 0.01 → 0.10     → 1.0 → 0.0 via raised-cosine decay
+      - rel_err ≥ 0.10  → 0.00    (hard cutoff)
+
+    The cosine decay has zero slope at both ends, so score is smooth at
+    the zone boundaries (no derivative kink). Example scores:
+
+      rel_err | score
+      --------|------
+       0.010  | 1.000
+       0.020  | 0.970
+       0.025  | 0.930
+       0.040  | 0.793
+       0.055  | 0.500
+       0.070  | 0.207
+       0.085  | 0.030
+       0.100  | 0.000
+
+    Non-numeric answers fall through to exact string match (score = 1.0 or
+    0.0, since tolerance has no effect on string equality).
+    """
+    rel_err = _measure_rel_error(predicted, ground_truth)
+    soft, hard = 0.01, 0.10
+    if rel_err <= soft:
+        return 1.0
+    if rel_err >= hard:
+        return 0.0
+    t = (rel_err - soft) / (hard - soft)
+    return (1.0 + _math.cos(_math.pi * t)) / 2.0
 
 
 from src.evaluation import score_answer, evaluate_agent_parallel
@@ -77,14 +122,12 @@ from .helpers import (
 
 T = TypeVar("T")
 
-TOLERANCE_LEVELS = [0.05, 0.01, 0.1, 0.0, 0.025]
-
 
 @dataclass
 class LoopAgents:
     """Container for the agents used in the loop."""
 
-    base: Agent[AgentResponse]
+    solver: Agent[AgentResponse]
     skill_proposer: Agent[SkillProposerResponse]
     prompt_proposer: Agent[PromptProposerResponse]
     skill_generator: Agent[ToolGeneratorResponse]
@@ -125,6 +168,8 @@ class SelfImprovingLoop:
         scorer: Callable[[str, str, str], float] | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         task_constraints: str = "",
+        solver_prompt: str = "",
+        data_root: str | Path | None = None,
     ):
         """Initialize the self-improving loop.
 
@@ -145,6 +190,19 @@ class SelfImprovingLoop:
         self.scorer = scorer or _score_multi_tolerance
         self.on_event = on_event
         self.task_constraints = task_constraints
+        self.solver_prompt = solver_prompt
+        # Forwarded into the evolver prompt so it can interpret the
+        # data-root-relative tool paths in failure traces (e.g.
+        # `Read(treasury_bulletins_parsed/...)` is relative to this root).
+        self._data_root = str(data_root) if data_root else None
+
+        # Publish the scorer to the executor via contextvar so each agent.run
+        # span can stamp [OK 0.997] / [FAIL 0.000] onto its name when a
+        # ground_truth is in scope. Saves us from creating a separate
+        # per-sample eval span just to surface pass/fail in Phoenix's
+        # trace list.
+        from src.harness.utils import eval_score_callback as _esc
+        _esc.set(self.scorer)
 
         # Detect if validation data overlaps with training data (e.g., tiny datasets)
         train_questions = {q for pool in train_pools.values() for q, _ in pool}
@@ -157,20 +215,54 @@ class SelfImprovingLoop:
         self._category_offset = 0  # Which category to start with next iteration
         self._per_cat_offset: dict[str, int] = {cat: 0 for cat in train_pools.keys()}
 
-        # Paths
+        # Proportional sampling state (used when config.proportional_sampling is True).
+        # Builds a fixed schedule where each category appears `len(pool)` times,
+        # interleaved by Bresenham-style largest-deficit selection. Iteration N
+        # consumes `failure_sample_count` slots starting at _schedule_offset.
+        self._schedule: list[str] = self._build_proportional_schedule(train_pools)
+        self._schedule_offset = 0
+
+        # Paths.
+        # `_project_root` here is historically misnamed — it tracks the
+        # workspace (where loop state lives: feedback, checkpoint, traces.db),
+        # NOT the project source tree. Don't use it to resolve where skills
+        # or prompt.txt live; use `_project_skills_dir` for skills (sourced
+        # from the manager so it's correct under workspace/project split).
         self._project_root = Path(getattr(self.manager, "cwd", Path.cwd())).resolve()
         self._feedback_path = self._project_root / ".claude" / "feedback_history.md"
+        # The actual skills directory — where evolver agents WRITE skills
+        # and where the solver reads them via the symlink. Comes from the
+        # manager which got it from run_loop.py / cli.run_cmd. Falls back
+        # to the workspace's .claude/skills only when the caller didn't
+        # split workspace from project_root.
+        self._project_skills_dir = getattr(
+            self.manager, "_project_skills_dir",
+            self._project_root / ".claude" / "skills",
+        )
+        # Project source tree — for `prompt.txt` and similar repo-shipped
+        # files. Derived as the parent of the skills dir's `.claude` parent.
+        self._project_source_root = self._project_skills_dir.parent.parent
         self._prompt_path = (
-            self._project_root / "src" / "agent_profiles" / "base_agent" / "prompt.txt"
+            self._project_source_root / "src" / "agent_profiles" / "base_agent" / "prompt.txt"
         )
 
-        # Initialize cache
+        # Initialize cache. CRITICAL: pass `live_skills_dir` and
+        # `project_source_root` so the cache key reflects the LIVE skills
+        # the agent reads from (not the workspace's stub snapshot dir) and
+        # the actual prompt files (in EvoSkill source, not the workspace).
+        # Without these, the cache key stays stable across iterations even
+        # as the evolver writes new skills → returns stale cached responses
+        # generated under different skill conditions → masks the evolver's
+        # effect on the agent (e.g. mid-gate's "fixed=0, regressed=0,
+        # same=N" artifact when ALL responses came from the cache).
         if config.cache_enabled:
             cache_config = CacheConfig(
                 cache_dir=config.cache_dir,
                 enabled=True,
                 store_messages=config.cache_store_messages,
                 cwd=self._project_root,
+                live_skills_dir=self._project_skills_dir,
+                project_source_root=self._project_source_root,
             )
             self.cache: RunCache | None = RunCache(cache_config)
         else:
@@ -296,34 +388,118 @@ class SelfImprovingLoop:
             _log(f"ITER {iteration_count}/{self.config.max_iterations}", f"Parent: {parent}")
             self._emit("iter_start", iteration=actual_iteration, total=self.config.max_iterations, parent=parent)
 
-            # Round-robin sampling: pick samples_per_category from each of N categories (cycling)
-            n_cats_this_iter = min(self.config.categories_per_batch, n_cats)
+            # Set the per-iter prefix that the executor will prepend to all
+            # span names produced during this iteration. Phoenix shows
+            # "iter 3 | agent.run:base [train 2/5]" instead of just
+            # "agent.run:base [train 2/5]" — keeps thousands of spans
+            # scannable across iterations.
+            from src.harness.utils import eval_iter_label as _eval_iter_label
+            _iter_label_token = _eval_iter_label.set(f"iter {actual_iteration}")
 
             test_samples: list[tuple[str, str, str]] = []
             sampled_cats: list[str] = []
-            for j in range(n_cats_this_iter):
-                cat_idx = (self._category_offset + j) % n_cats
-                cat = categories[cat_idx]
-                pool = self.train_pools[cat]
-
-                # Take min(samples_per_category, pool_size) to handle small categories
-                samples_to_take = min(self.config.samples_per_category, len(pool))
-
-                for _ in range(samples_to_take):
+            if getattr(self.config, "proportional_sampling", False) and self._schedule:
+                # Proportional sampling: pull `failure_sample_count` items from
+                # the precomputed schedule (cycling). Each category appears in
+                # the schedule proportional to its pool size, so over N iters
+                # each category is sampled in proportion. Within a category,
+                # cycle through samples via _per_cat_offset.
+                n_to_take = self.config.failure_sample_count
+                for k in range(n_to_take):
+                    cat = self._schedule[(self._schedule_offset + k) % len(self._schedule)]
+                    pool = self.train_pools[cat]
                     sample_idx = self._per_cat_offset[cat] % len(pool)
                     question, answer = pool[sample_idx]
                     test_samples.append((question, answer, cat))
                     sampled_cats.append(cat)
                     self._per_cat_offset[cat] += 1
-
-            self._category_offset += n_cats_this_iter
+                self._schedule_offset += n_to_take
+            else:
+                # Round-robin sampling: pick samples_per_category from each of N categories (cycling)
+                n_cats_this_iter = min(self.config.categories_per_batch, n_cats)
+                for j in range(n_cats_this_iter):
+                    cat_idx = (self._category_offset + j) % n_cats
+                    cat = categories[cat_idx]
+                    pool = self.train_pools[cat]
+                    # Take min(samples_per_category, pool_size) to handle small categories
+                    samples_to_take = min(self.config.samples_per_category, len(pool))
+                    for _ in range(samples_to_take):
+                        sample_idx = self._per_cat_offset[cat] % len(pool)
+                        question, answer = pool[sample_idx]
+                        test_samples.append((question, answer, cat))
+                        sampled_cats.append(cat)
+                        self._per_cat_offset[cat] += 1
+                self._category_offset += n_cats_this_iter
 
             _log("", f"  Testing {len(test_samples)} samples from categories: {', '.join(sampled_cats)}...")
 
-            # Run all samples concurrently
-            traces = await asyncio.gather(*[
-                self.agents.base.run(question) for question, _, _ in test_samples
-            ])
+            # Run all samples concurrently. Tag each run with a human-readable
+            # "train i/N" label so interleaved stdout is scannable.
+            # Use return_exceptions=True so a single sample's TimeoutError after
+            # exhausted retries doesn't kill the whole iteration. Failed samples
+            # become placeholder traces (no output → counted as [FAIL]).
+            # Set the per-sample ground_truth contextvar so the executor can
+            # surface `eval.ground_truth` on the agent.run span (matches
+            # eval_full.py behavior).
+            _n_samples = len(test_samples)
+
+            from src.harness.utils import eval_run_ground_truth as _gt_var
+            from src.harness.sdk_config import get_sdk
+            from src.evaluation.evaluate import _extract_model
+
+            # Cache wrapper around agent.run, mirroring the pattern in
+            # src/evaluation/evaluate.py:evaluate_agent_parallel. Without
+            # this, training samples re-run full-price on every restart even
+            # when the (program, question) pair is unchanged — wasteful for
+            # iterative experiments where the same train UID gets sampled
+            # against the same parent program multiple times across launches.
+            _train_cache = self.cache  # may be None when --cache false
+            _train_sdk = get_sdk()
+            _train_model = _extract_model(self.agents.solver._get_options())
+
+            async def _run_one_train(i: int, question: str, gt: str):
+                tok = _gt_var.set(str(gt))
+                try:
+                    trace = None
+                    if _train_cache is not None:
+                        trace = _train_cache.get(
+                            question,
+                            self.agents.solver.response_model,
+                            sdk=_train_sdk,
+                            model=_train_model,
+                        )
+                    if trace is None:
+                        trace = await self.agents.solver.run(
+                            question, tag=f"train {i + 1}/{_n_samples}"
+                        )
+                        if _train_cache is not None:
+                            _train_cache.set(
+                                question, trace,
+                                sdk=_train_sdk, model=_train_model,
+                            )
+                    return trace
+                finally:
+                    _gt_var.reset(tok)
+
+            raw_results = await asyncio.gather(*[
+                _run_one_train(i, question, str(answer))
+                for i, (question, answer, _) in enumerate(test_samples)
+            ], return_exceptions=True)
+            traces = []
+            for i, res in enumerate(raw_results):
+                if isinstance(res, BaseException):
+                    _log("", f"  [WARN] train {i + 1}/{_n_samples} crashed: {type(res).__name__}: {res}")
+                    traces.append(
+                        AgentTrace(
+                            duration_ms=0, total_cost_usd=0.0, num_turns=0,
+                            usage={}, result=f"{type(res).__name__}: {res}",
+                            is_error=True, output=None,
+                            parse_error=f"{type(res).__name__}: {res}",
+                            messages=[],
+                        )
+                    )
+                else:
+                    traces.append(res)
             self._iter_cost += sum(t.total_cost_usd for t in traces)
 
             # Backfill base score from first iteration's training traces when deferred
@@ -343,6 +519,12 @@ class SelfImprovingLoop:
             active_skill_contents = self._snapshot_active_skills(active_skills_now)
             review_tasks: list[dict] = []
             failures: list[tuple[AgentTrace, str, str, str, str]] = []  # (trace, agent_answer, ground_truth, category, question)
+            # Per-sample (question, answer, category, prior_score) — captured here
+            # so the mid-gate (post-mutation, pre-val) can re-run the same
+            # samples on the new program and compare scores. The Y=0
+            # threshold (no regressions on previously-passing samples)
+            # requires knowing which samples were originally OK.
+            train_sample_scores: list[tuple[str, str, str, float]] = []
             for trace, (question, answer, category) in zip(traces, test_samples):
                 agent_answer = (
                     str(trace.output.final_answer) if trace.output else "[PARSE FAILED]"
@@ -353,13 +535,21 @@ class SelfImprovingLoop:
                     str(answer).strip().lower(),
                 )
                 status = "[OK]" if avg_score >= 0.8 else "[FAIL]"
-                _log("", f"    {status} [{category}] {question[:40]}...")
+                _log("", f"    {status} score={avg_score:.3f} [{category}] {question[:40]}...")
                 self._emit("sample", question=question, category=category, score=avg_score, passed=avg_score >= 0.8)
+                train_sample_scores.append((question, str(answer), category, float(avg_score)))
+
+                # Per-sample eval span removed — the score is now stamped onto
+                # the agent.run span's name + status by the executor (via the
+                # eval_score_callback contextvar set in __init__), so a
+                # separate span here would just duplicate the noise we just
+                # un-cluttered. Per-sample reasoning + answer remain on the
+                # agent.run span's output.value, accessible by clicking in.
 
                 # Persist trace to DB (and individual .md file) for progressive disclosure
                 trace_summary = trace.summarize()
                 self.trace_db.insert(
-                    iteration=f"iter-{actual_iteration}",
+                    iteration=f"iter-test-{actual_iteration}",
                     question=question,
                     ground_truth=str(answer),
                     agent_answer=agent_answer,
@@ -374,7 +564,7 @@ class SelfImprovingLoop:
                 # Queue trace for async review (successful traces only — see below)
                 if self.reviewer is not None:
                     review_tasks.append({
-                        "iteration": f"iter-{actual_iteration}",
+                        "iteration": f"iter-test-{actual_iteration}",
                         "question": question,
                         "ground_truth": str(answer),
                         "agent_answer": agent_answer,
@@ -405,17 +595,40 @@ class SelfImprovingLoop:
             )
 
             if in_phase2:
-                # Treat all successful traces as "expensive successes" for efficiency evolution
-                expensive_traces: list[tuple[AgentTrace, str, str, str, str]] = [
+                # All training samples passed. Hand the evolver the successful
+                # traces so it can look for redundant steps and propose an
+                # efficiency-focused skill edit — with accuracy still the hard
+                # constraint.
+                successful_traces: list[tuple[AgentTrace, str, str, str, str]] = [
                     (t, str(t.output.final_answer) if t.output else "", a, cat, q)
                     for t, (q, a, cat) in zip(traces, test_samples)
                     if t.output is not None
                 ]
-                avg_turns = sum(t.num_turns for t, _, _, _, _ in expensive_traces) / max(len(expensive_traces), 1)
-                _log("", f"  -> Phase 2: accuracy {best_score:.2f} >= {threshold:.2f}, optimizing efficiency (avg turns: {avg_turns:.0f})")
-                mutation_result = await self._mutate_with_fallback(parent, expensive_traces, actual_iteration)
+                avg_turns = sum(t.num_turns for t, _, _, _, _ in successful_traces) / max(len(successful_traces), 1)
+                avg_cost = sum(
+                    (t.total_cost_usd or 0) for t, _, _, _, _ in successful_traces
+                ) / max(len(successful_traces), 1)
+                _log("", f"  -> Phase 2: accuracy {best_score:.2f} >= {threshold:.2f}, optimizing efficiency (avg turns: {avg_turns:.0f}, avg cost: ${avg_cost:.3f})")
+                mutation_result = await self._mutate_with_fallback(
+                    parent, successful_traces, actual_iteration,
+                    phase="efficiency",
+                    phase_metrics={
+                        "accuracy": best_score,
+                        "accuracy_threshold": threshold,
+                        "avg_turns": avg_turns,
+                        "avg_cost_usd": avg_cost,
+                        "n_samples": len(successful_traces),
+                    },
+                )
             elif len(failures) == 0:
                 _log("", f"  -> All samples passed, no proposal needed")
+                # No mutation, but train evaluation did spend $$$ — accumulate
+                # and log so the final report reflects actual API spend
+                # (without this, the bottom-of-loop accumulation is skipped by
+                # the `continue` and Total cost ends up at $0).
+                self._total_cost += self._iter_cost
+                _log("COST", f"Iter {iteration_count} cost: ${self._iter_cost:.4f} | Running total: ${self._total_cost:.4f}")
+                self._save_checkpoint(actual_iteration)
                 continue
             else:
                 _log("", f"  -> {len(failures)} failure(s), proposing improvement...")
@@ -432,21 +645,58 @@ class SelfImprovingLoop:
             else:
                 child_name, proposal, justification = mutation_result
 
+                # Mid-gate: cheap sanity check on the iter's own train
+                # samples before paying for the full val GATE. If the
+                # proposed skill doesn't fix at least `mid_gate_min_fixed`
+                # previously-failing samples, OR causes more than
+                # `mid_gate_max_regressions` previously-passing samples to
+                # regress, discard the mutation early and skip val eval.
+                # Catches the common "mutation looks plausible but breaks
+                # the cases it was designed to fix / breaks unrelated cases"
+                # failure mode at a fraction of the val-eval cost.
+                if self.config.mid_gate_enabled and train_sample_scores:
+                    mid_gate_passed = await self._mid_gate_check(
+                        child_name, train_sample_scores,
+                    )
+                    if not mid_gate_passed:
+                        _log("", f"  [SKIP] Mid-gate failed — discarding {child_name} without running val eval")
+                        self.manager.discard(child_name)
+                        no_improvement_count += 1
+                        # Switch back to parent so the next iter starts from
+                        # the right tree state (mirrors the post-discard
+                        # path in the val-gate branch below).
+                        self.manager.switch_to(parent)
+                        # Still accumulate the mid-gate cost into iter cost.
+                        self._total_cost += self._iter_cost
+                        _log("COST", f"Iter {iteration_count} cost: ${self._iter_cost:.4f} | Running total: ${self._total_cost:.4f}")
+                        self._save_checkpoint(actual_iteration)
+                        continue
+
                 # Evaluate child
                 _log("", f"  -> Evaluating {child_name}...")
-                child_score = await self._evaluate(self.val_data)  # accumulates to self._iter_cost
+                child_score, child_cost = await self._evaluate(self.val_data)  # accumulates to self._iter_cost
 
-                # Update frontier or discard
+                # Update frontier or discard. Pass cost so the frontier can
+                # tie-break on efficiency when accuracy is equal, and
+                # parent_score/parent_cost so it can REJECT regressions
+                # (a child scoring lower than its parent shouldn't be admitted
+                # even when there's room — that pollutes the frontier with
+                # bad mutations the proposer then has to "remember not to
+                # propose again").
+                parent_cost = self.manager._get_program_cost(parent) if parent else None
                 added = self.manager.update_frontier(
-                    child_name, child_score, max_size=self.config.frontier_size
+                    child_name, child_score, max_size=self.config.frontier_size,
+                    cost=child_cost,
+                    parent_score=parent_score,
+                    parent_cost=parent_cost,
                 )
 
                 if added:
-                    _log("", f"  [OK] Added to frontier (score: {child_score:.4f})")
+                    _log("", f"  [OK] Added to frontier (score: {child_score:.4f}, cost: ${child_cost:.4f})")
                     outcome = "improved" if child_score > parent_score else "kept"
                     no_improvement_count = 0
                 else:
-                    _log("", f"  [SKIP] Discarded (score: {child_score:.4f})")
+                    _log("", f"  [SKIP] Discarded (score: {child_score:.4f}, cost: ${child_cost:.4f})")
                     outcome = "discarded"
                     self.manager.discard(child_name)
                     no_improvement_count += 1
@@ -510,7 +760,7 @@ class SelfImprovingLoop:
     async def _ensure_base_program(self) -> None:
         """Create and evaluate base program if it doesn't exist."""
         if "base" not in self.manager.list_programs():
-            current_options = self.agents.base._get_options()
+            current_options = self.agents.solver._get_options()
             base_config = options_to_config(current_options, "base")
             self.manager.create_program("base", base_config)
             _log("INIT", "Created base program")
@@ -527,43 +777,163 @@ class SelfImprovingLoop:
             return
         _log("", f"  -> Evaluating on {len(self.val_data)} samples...")
         self._iter_cost = 0.0
-        base_score = await self._evaluate(self.val_data)
+        base_score, base_cost = await self._evaluate(self.val_data)
         self._total_cost += self._iter_cost
         self.manager.update_frontier(
-            "base", base_score, max_size=self.config.frontier_size
+            "base", base_score, max_size=self.config.frontier_size,
+            cost=base_cost,
         )
-        _log("", f"  -> Base score: {base_score:.4f}")
+        _log("", f"  -> Base score: {base_score:.4f} (avg cost: ${base_cost:.4f})")
         _log("", f"  -> Frontier: {self.manager.get_frontier()}")
         _log("COST", f"Base eval cost: ${self._iter_cost:.4f} | Total: ${self._total_cost:.4f}")
         self._emit("baseline", score=base_score)
 
-    async def _evaluate(self, data: list[tuple[str, str, str]]) -> float:
+    async def _mid_gate_check(
+        self,
+        child_name: str,
+        train_sample_scores: list[tuple[str, str, str, float]],
+    ) -> bool:
+        """Cheap pre-val sanity check on the iter's training samples.
+
+        Re-runs the same train samples on the new child program and compares
+        per-sample scores against the prior (parent) scores. Pass criteria:
+            - At least `mid_gate_min_fixed` previously-failing samples now pass
+            - At most `mid_gate_max_regressions` previously-passing samples now fail
+
+        A pass means "the proposed skill demonstrably moves the needle on the
+        cases it was designed to fix without obvious collateral damage."
+        Returns True if mid-gate passes (proceed to full val GATE), False if
+        it fails (discard mutation, save val budget).
+
+        Args:
+            child_name: branch / program name for logging
+            train_sample_scores: list of (question, answer, category, prior_score)
+                captured during this iter's train eval
+
+        Cost: ~1 inference per train sample (typically 3-5 samples × ~$1).
+        """
+        n = len(train_sample_scores)
+        _log("", f"  -> Mid-gate: re-running {n} train sample(s) on {child_name}...")
+
+        # Use the same cache+run wrapper as _run_one_train so writes flow
+        # to the shared run-cache and future re-runs benefit.
+        from src.harness.utils import eval_run_ground_truth as _gt_var
+        from src.harness.sdk_config import get_sdk
+        from src.evaluation.evaluate import _extract_model
+
+        cache = self.cache
+        sdk = get_sdk()
+        model = _extract_model(self.agents.solver._get_options())
+
+        async def _run_one(i: int, q: str, gt: str) -> AgentTrace:
+            tok = _gt_var.set(gt)
+            try:
+                trace = None
+                if cache is not None:
+                    trace = cache.get(q, self.agents.solver.response_model, sdk=sdk, model=model)
+                if trace is None:
+                    trace = await self.agents.solver.run(q, tag=f"midgate {i + 1}/{n}")
+                    if cache is not None:
+                        cache.set(q, trace, sdk=sdk, model=model)
+                return trace
+            finally:
+                _gt_var.reset(tok)
+
+        raw = await asyncio.gather(*[
+            _run_one(i, q, a) for i, (q, a, _c, _s) in enumerate(train_sample_scores)
+        ], return_exceptions=True)
+
+        fixed = 0
+        regressed = 0
+        same = 0
+        sample_lines: list[str] = []
+        midgate_cost = 0.0
+        for (q, a, c, prior_score), res in zip(train_sample_scores, raw):
+            if isinstance(res, BaseException) or res is None or getattr(res, "output", None) is None:
+                new_score = 0.0
+            else:
+                new_score = float(self.scorer(q, str(res.output.final_answer), str(a)))
+                midgate_cost += float(getattr(res, "total_cost_usd", 0) or 0)
+
+            prior_passed = prior_score >= 0.8
+            now_passed = new_score >= 0.8
+            if not prior_passed and now_passed:
+                fixed += 1
+                marker = "✓ fixed"
+            elif prior_passed and not now_passed:
+                regressed += 1
+                marker = "✗ regressed"
+            else:
+                same += 1
+                marker = "= same"
+            sample_lines.append(
+                f"      {marker:13s} {prior_score:.2f} → {new_score:.2f}  {q[:50]}..."
+            )
+
+        for line in sample_lines:
+            _log("", line)
+
+        self._iter_cost += midgate_cost
+        _log("", f"  -> Mid-gate result: fixed={fixed}, regressed={regressed}, same={same}, cost=${midgate_cost:.4f}")
+
+        passed = (
+            fixed >= self.config.mid_gate_min_fixed
+            and regressed <= self.config.mid_gate_max_regressions
+        )
+        if not passed:
+            reasons = []
+            if fixed < self.config.mid_gate_min_fixed:
+                reasons.append(f"fixed {fixed} < min {self.config.mid_gate_min_fixed}")
+            if regressed > self.config.mid_gate_max_regressions:
+                reasons.append(f"regressed {regressed} > max {self.config.mid_gate_max_regressions}")
+            _log("", f"  -> Mid-gate FAILED ({'; '.join(reasons)})")
+        else:
+            _log("", f"  -> Mid-gate PASSED — proceeding to full val GATE")
+        return passed
+
+    async def _evaluate(self, data: list[tuple[str, str, str]]) -> tuple[float, float]:
         """Evaluate base agent on data.
 
         Args:
             data: List of (question, answer, category) tuples.
 
         Returns:
-            Accuracy score (0.0 to 1.0).
+            (accuracy_score, avg_cost_usd) — accuracy in [0.0, 1.0], avg cost
+            averaged across the provided samples. avg_cost is 0.0 when no
+            samples produced a trace with a non-null cost.
         """
         # Convert to (question, answer) format for evaluate_agent_parallel
         qa_data = [(q, a) for q, a, _ in data]
         results = await evaluate_agent_parallel(
-            self.agents.base, qa_data, max_concurrent=self.config.concurrency, cache=self.cache
+            self.agents.solver, qa_data, max_concurrent=self.config.concurrency, cache=self.cache
         )
 
         score = 0.0
+        total_cost = 0.0
+        cost_samples = 0
         for result in results:
             if result.trace is not None:
-                self._iter_cost += result.trace.total_cost_usd
+                c = result.trace.total_cost_usd or 0.0
+                self._iter_cost += c
+                total_cost += c
+                cost_samples += 1
+            # Per-question score logging — without it the operator only sees
+            # an aggregate `Base score: X.XXXX` after every val run, which
+            # hides which specific questions the agent missed and by how
+            # much (cosine decay can produce fractional scores too).
             if result.trace is None or result.trace.output is None:
-                continue  # Timeout/error/parse failed = 0 score
-            score += self.scorer(
+                _log("", f"    score=0.000 [val] {result.question[:60]}... (no output)")
+                continue
+            q_score = self.scorer(
                 result.question,
                 str(result.trace.output.final_answer),
                 str(result.ground_truth),
             )
-        return score / len(results)
+            score += q_score
+            _log("", f"    score={q_score:.3f} [val] {result.question[:60]}...")
+        avg_score = score / len(results) if results else 0.0
+        avg_cost = (total_cost / cost_samples) if cost_samples else 0.0
+        return avg_score, avg_cost
 
     async def _mutate(
         self,
@@ -571,6 +941,9 @@ class SelfImprovingLoop:
         failures: list[tuple[AgentTrace[AgentResponse], str, str, str, str]],
         iteration: int,
         truncation_level: int = 0,
+        *,
+        phase: str = "accuracy",
+        phase_metrics: dict | None = None,
     ) -> tuple[str, str, str] | None:
         """Run proposer and generator to create a mutation based on multiple failures.
 
@@ -596,17 +969,34 @@ class SelfImprovingLoop:
         failed_questions = [q for (_, _, _, _, q) in failures]
         past_traces_index = self.trace_db.generate_index(failed_questions=failed_questions)
 
-        # Unconsumed proposals from the background reviewer
+        # Unconsumed proposals from the background reviewer. The reviewer
+        # writes to the same SQLite DB as TraceDB from a separate context;
+        # under WAL with multiple connections we occasionally see
+        # `disk I/O error`. Treat it as non-fatal — the evolver can still run
+        # without runtime proposals, so just log and continue.
         runtime_proposals = ""
         if self.reviewer is not None:
-            runtime_proposals = self.reviewer.format_proposals_for_reflector(max_chars=10_000)
+            try:
+                runtime_proposals = self.reviewer.format_proposals_for_reflector(max_chars=10_000)
+            except Exception as e:
+                _log("", f"  [WARN] Background reviewer unavailable ({type(e).__name__}: {e}) — evolver will run without runtime proposals")
+                runtime_proposals = ""
 
         proposer_query = build_proposer_query(
             failures, feedback_history, evolution_mode, truncation_level,
             self.task_constraints,
+            # `project_root` is the workspace (kept for backward compat with
+            # other internal lookups). `project_skills_dir` is the load-bearing
+            # path for skill enumeration (correct under workspace/project split).
             project_root=self._project_root,
+            project_skills_dir=self._project_skills_dir,
+            iter_traces_dir=self._project_root / ".cache" / "current_iter_traces",
             past_traces_index=past_traces_index,
             runtime_proposals=runtime_proposals,
+            phase=phase,
+            phase_metrics=phase_metrics,
+            solver_prompt=self.solver_prompt,
+            data_root=self._data_root,
         )
 
         if evolution_mode == "skill_unified":
@@ -620,7 +1010,20 @@ class SelfImprovingLoop:
             parent_config = self.manager.get_current()
             child_name = f"iter-skill-{actual_iteration}"
 
-            evolver_trace = await self.agents.skill_evolver.run(proposer_query)
+            # The evolver agent itself can hit its 12-min wall-clock budget
+                # (seen with deep failure-analysis runs that walk many trace
+                # files). agent.py raises TimeoutError on budget exhaustion
+                # and intentionally does NOT retry — but the evolver call site
+                # used to crash the whole loop on that exception. Treat it
+                # the same as any other evolver failure: log and skip this
+                # iteration's mutation. The next iter will start fresh from
+                # the current frontier, so we lose one mutation cycle, not
+                # the whole experiment.
+            try:
+                evolver_trace = await self.agents.skill_evolver.run(proposer_query)
+            except TimeoutError as e:
+                _log("", f"  [WARN] Skill evolver timed out: {e}")
+                return None
             self._iter_cost += evolver_trace.total_cost_usd
 
             if evolver_trace.output is None:
@@ -742,7 +1145,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
         # Constraint gate: validate generated/edited skills BEFORE committing
         # (saves expensive evaluation cost on degenerate mutations)
         if evolution_mode in ("skill_only", "skill_unified"):
-            skills_dir = self._project_root / ".claude" / "skills"
+            skills_dir = self._project_skills_dir
             gate_failed = False
             if skills_dir.exists():
                 for skill_dir in skills_dir.iterdir():
@@ -775,6 +1178,9 @@ and modify it to add these capabilities. Preserve all existing content that is s
         parent: str,
         failures: list[tuple[AgentTrace[AgentResponse], str, str, str, str]],
         iteration: int,
+        *,
+        phase: str = "accuracy",
+        phase_metrics: dict | None = None,
     ) -> tuple[str, str, str] | None:
         """Try progressive truncation levels, then single-failure fallback.
 
@@ -782,6 +1188,11 @@ and modify it to add these capabilities. Preserve all existing content that is s
             parent: Name of the parent program.
             failures: List of (trace, agent_answer, ground_truth, category) tuples.
             iteration: Current iteration number.
+            phase: "accuracy" (default) or "efficiency". Controls the framing
+                   of the query sent to the evolver.
+            phase_metrics: Optional aggregate metrics (avg_turns, avg_cost_usd,
+                           accuracy, accuracy_threshold, n_samples) used to
+                           ground the efficiency-phase prompt in real numbers.
 
         Returns:
             Tuple of (child_name, proposal, justification) if created, None otherwise.
@@ -792,7 +1203,10 @@ and modify it to add these capabilities. Preserve all existing content that is s
             if truncation_level > 0:
                 _log("", f"  -> Retrying with truncation level {truncation_level}...")
 
-            result = await self._mutate(parent, failures, iteration, truncation_level)
+            result = await self._mutate(
+                parent, failures, iteration, truncation_level,
+                phase=phase, phase_metrics=phase_metrics,
+            )
             if result is not None:
                 return result
 
@@ -831,6 +1245,39 @@ and modify it to add these capabilities. Preserve all existing content that is s
 
         return shortest
 
+    @staticmethod
+    def _build_proportional_schedule(
+        train_pools: dict[str, list],
+    ) -> list[str]:
+        """Build a category schedule weighted by pool size.
+
+        Each category `c` appears exactly `len(train_pools[c])` times in the
+        returned list, interleaved using Bresenham/largest-deficit selection
+        so big categories aren't bunched together. The list is then cycled
+        across iterations to drive proportional per-category sampling.
+        """
+        cats = list(train_pools.keys())
+        sizes = {c: len(train_pools[c]) for c in cats}
+        total = sum(sizes.values())
+        if total == 0:
+            return []
+        targets = {c: 0.0 for c in cats}
+        actuals = {c: 0 for c in cats}
+        rate = {c: sizes[c] / total for c in cats}
+        schedule: list[str] = []
+        for _ in range(total):
+            for c in cats:
+                targets[c] += rate[c]
+            # Pick the category with the largest deficit (target - actual).
+            # Tiebreak: larger pool first, then insertion order.
+            best = max(
+                cats,
+                key=lambda c: (targets[c] - actuals[c], sizes[c], -cats.index(c)),
+            )
+            schedule.append(best)
+            actuals[best] += 1
+        return schedule
+
     def _select_parent(self, iteration: int = 0) -> str:
         """Select a parent program from the frontier using the configured strategy.
 
@@ -851,7 +1298,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
         Returns:
             List of skill names that have SKILL.md files.
         """
-        skills_dir = self._project_root / ".claude" / "skills"
+        skills_dir = self._project_skills_dir
         active_skills = []
         if skills_dir.exists():
             for skill_dir in skills_dir.iterdir():
@@ -866,7 +1313,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
         preserve the exact guidance the solver had at that moment, even
         after the skill has been edited in subsequent iterations.
         """
-        skills_dir = self._project_root / ".claude" / "skills"
+        skills_dir = self._project_skills_dir
         snapshots: dict[str, str] = {}
         for name in skill_names:
             skill_file = skills_dir / name / "SKILL.md"

@@ -1,12 +1,18 @@
 import asyncio
 import pickle
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Generic, TypeVar
 
 from tqdm.asyncio import tqdm_asyncio
 
 from src.harness import Agent, AgentTrace
+from src.harness.utils import (
+    eval_run_label as _eval_run_label,
+    eval_run_uid as _eval_run_uid,
+    eval_run_index as _eval_run_index,
+    eval_run_ground_truth as _eval_run_ground_truth,
+)
 
 T = TypeVar("T")
 
@@ -20,6 +26,7 @@ class IndexedEvalResult(Generic[T]):
     ground_truth: str
     trace: AgentTrace[T] | None
     error: str | None  # Error message if failed
+    uid: str | None = None  # Optional dataset UID (e.g. "UID0042"); used as span label for Phoenix.
 
 
 def load_results(path: Path) -> list[IndexedEvalResult]:
@@ -39,9 +46,23 @@ def get_successful_indices(path: Path) -> set[int]:
     }
 
 
+def _normalize_items(items):
+    """Accept either (index, question, gt) 3-tuples or (index, uid, question, gt)
+    4-tuples and return a uniform list of (index, uid_or_None, question, gt)."""
+    out = []
+    for it in items:
+        if len(it) == 4:
+            i, uid, q, gt = it
+            out.append((i, uid, q, gt))
+        else:
+            i, q, gt = it
+            out.append((i, None, q, gt))
+    return out
+
+
 async def evaluate_full(
     agent: Agent[T],
-    items: list[tuple[int, str, str]],  # (index, question, ground_truth)
+    items: list[tuple[int, str, str]] | list[tuple[int, str, str, str]],
     output_path: Path,
     max_concurrent: int = 5,
     resume: bool = True,
@@ -51,7 +72,11 @@ async def evaluate_full(
 
     Args:
         agent: The agent to evaluate
-        items: List of (index, question, ground_truth) tuples
+        items: Either (index, question, ground_truth) 3-tuples or
+            (index, uid, question, ground_truth) 4-tuples. When uid is
+            provided, the agent.run root span is named `eval:{uid}` so
+            traces are findable per-question in Phoenix; otherwise the
+            executor's stock `agent.run:<agent>` name is used.
         output_path: Path to save pkl results
         max_concurrent: Max concurrent agent runs (default 5)
         resume: If True, skip already-processed indices
@@ -61,13 +86,15 @@ async def evaluate_full(
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    items = _normalize_items(items)
+
     # Filter out already successful indices if resuming (re-run failed ones)
     if resume:
         successful = get_successful_indices(output_path)
-        items_to_run = [(i, q, gt) for i, q, gt in items if i not in successful]
+        items_to_run = [t for t in items if t[0] not in successful]
 
         # Remove failed results from file so they can be replaced
-        failed_indices = {i for i, _, _ in items_to_run}
+        failed_indices = {t[0] for t in items_to_run}
         existing = load_results(output_path)
         kept_results = [r for r in existing if r.index not in failed_indices]
         if len(kept_results) < len(existing):
@@ -88,20 +115,34 @@ async def evaluate_full(
     lock = asyncio.Lock()
 
     async def run_one(
-        index: int, question: str, ground_truth: str
+        index: int, uid: str | None, question: str, ground_truth: str
     ) -> IndexedEvalResult[T]:
         async with semaphore:
             error = None
             trace = None
+            # Stash uid + index in contextvars so the SDK executor can name
+            # the agent.run root span `eval:{uid}` and tag it with the index.
+            # No-op when uid is None.
+            label_token = _eval_run_label.set(f"eval:{uid}" if uid else None)
+            uid_token = _eval_run_uid.set(uid)
+            idx_token = _eval_run_index.set(index)
+            gt_token = _eval_run_ground_truth.set(ground_truth)
             try:
-                async with asyncio.timeout(1020):  # 17-minute hard limit per eval
+                async with asyncio.timeout(840):  # 14-min hard limit (matches Agent.TIMEOUT_SECONDS)
                     trace = await agent.run(question)
             except asyncio.TimeoutError:
-                error = "TimeoutError: Eval timed out after 17 minutes"
-                print(f"[TIMEOUT] Index {index}: {question[:50]}...")
+                error = "TimeoutError: Eval timed out after 14 minutes"
+                tag = uid or f"index {index}"
+                print(f"[TIMEOUT] {tag}: {question[:50]}...")
             except Exception as e:
                 error = f"{type(e).__name__}: {str(e)}"
-                print(f"[ERROR] Index {index}: {question[:50]}... -> {error}")
+                tag = uid or f"index {index}"
+                print(f"[ERROR] {tag}: {question[:50]}... -> {error}")
+            finally:
+                _eval_run_label.reset(label_token)
+                _eval_run_uid.reset(uid_token)
+                _eval_run_index.reset(idx_token)
+                _eval_run_ground_truth.reset(gt_token)
 
             result = IndexedEvalResult(
                 index=index,
@@ -109,6 +150,7 @@ async def evaluate_full(
                 ground_truth=ground_truth,
                 trace=trace,
                 error=error,
+                uid=uid,
             )
 
             # Append to file immediately (thread-safe)
@@ -120,6 +162,6 @@ async def evaluate_full(
 
             return result
 
-    tasks = [run_one(idx, q, gt) for idx, q, gt in items]
+    tasks = [run_one(idx, uid, q, gt) for idx, uid, q, gt in items]
     results = await tqdm_asyncio.gather(*tasks, desc="Evaluating")
     return results

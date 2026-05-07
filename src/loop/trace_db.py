@@ -93,6 +93,10 @@ class TraceDB:
         safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in skill_name)
         snapshot_file = self._snapshots_dir / f"{safe_name}_{content_hash}.md"
         if not snapshot_file.exists():
+            # Re-ensure dir at write-time: the evolver's branch checkouts can wipe
+            # `.cache/` between init and now. We've crashed an iter-3 smoke test
+            # this way before.
+            self._snapshots_dir.mkdir(parents=True, exist_ok=True)
             snapshot_file.write_text(content)
         return snapshot_file, content_hash
 
@@ -181,6 +185,9 @@ class TraceDB:
             f"## Full Execution Trace\n\n"
             f"{trace_summary}\n"
         )
+        # Defensive: ensure the traces dir exists even if something wiped it
+        # between __init__ and here (e.g., a stale fresh-reset path).
+        trace_file.parent.mkdir(parents=True, exist_ok=True)
         trace_file.write_text(file_content)
 
         # Persist to SQLite
@@ -262,27 +269,56 @@ class TraceDB:
         for q in by_question:
             by_question[q].sort(key=lambda r: _iter_num(r["iteration"]))
 
+        # Header phrasing depends on how many distinct iterations are
+        # represented. With only 1 iteration the "ALL iterations" framing is
+        # misleading — there's nothing to compare across; the section is
+        # really just a snapshot of this iter's per-question trajectories.
+        distinct_iters = {row["iteration"] for row in rows}
+        if len(distinct_iters) <= 1:
+            header_title = "## Past Traces Index"
+            preamble = (
+                "One trace per question from the current iteration. "
+                "Each trace file contains the full turn-by-turn transcript "
+                "AND references to the exact skill snapshots active at that "
+                "iteration (Read the trace file, then follow the snapshot "
+                "paths to see skill content as of that moment).\n"
+            )
+        else:
+            header_title = "## Past Traces Index — ALL iterations, ALL questions"
+            preamble = (
+                "Each question shows its score trajectory plus a few "
+                "representative iterations. Each trace file contains the "
+                "full turn-by-turn transcript AND references to the exact "
+                "skill snapshots active at that iteration (Read the trace "
+                "file, then follow the snapshot paths to see skill content "
+                "as of that moment).\n"
+            )
+
         lines = [
-            "## Past Traces Index — ALL iterations, ALL questions\n",
-            "Each question shows its score trajectory plus a few representative iterations.",
-            "Each trace file contains the full turn-by-turn transcript AND references to",
-            "the exact skill snapshots active at that iteration (Read the trace file, then",
-            "follow the snapshot paths to see skill content as of that moment).\n",
+            f"{header_title}\n",
+            preamble,
             f"Total traces recorded: **{len(rows)}** across {len(by_question)} questions.",
             f"Per-question row cap: {per_question_cap} (trajectory line shows all iterations).\n",
         ]
 
         for question, q_rows in by_question.items():
-            q_short = question[:80]
-            lines.append(f"### Question: {q_short}...")
+            # Show the full question text — earlier we truncated to 80 chars
+            # to keep the index "scannable", but the evolver legitimately
+            # needs to know the full task to diagnose root causes (e.g.
+            # whether the agent missed a constraint embedded late in the
+            # prompt). The full body of each iteration's trace is still
+            # in the linked .md file, so this is just the header.
+            lines.append(f"### Question: {question}")
 
-            # B. Trajectory line — one-line summary of ALL iterations for this question
-            traj_parts = [f"{r['iteration']}:{r['score']:.2f}" for r in q_rows]
+            # B. Trajectory line — one-line summary of ALL iterations for this question.
+            # 4-decimal precision so 0.9979 vs 0.9899 vs 1.0000 are
+            # distinguishable; rounding to 2 decimals masked real diffs.
+            traj_parts = [f"{r['iteration']}:{r['score']:.4f}" for r in q_rows]
             best_row = max(q_rows, key=lambda r: r["score"])
             lines.append(
                 f"**Trajectory** ({len(q_rows)} iter{'s' if len(q_rows) != 1 else ''}): "
                 + " → ".join(traj_parts)
-                + f"  — best: {best_row['iteration']} @ {best_row['score']:.2f}"
+                + f"  — best: {best_row['iteration']} @ {best_row['score']:.4f}"
             )
             lines.append("")
 
@@ -301,13 +337,13 @@ class TraceDB:
                 i = idx_in_full.get(r["iteration"], 0)
                 if i > 0:
                     d = r["score"] - q_rows[i - 1]["score"]
-                    delta = f"{d:+.2f}"
+                    delta = f"{d:+.4f}"
                 else:
                     delta = "—"
                 skills = json.loads(r["active_skills"])
                 skills_str = ", ".join(skills) if skills else "—"
                 lines.append(
-                    f"| {r['iteration']} | {r['score']:.2f} | {delta} | {r['num_turns']} "
+                    f"| {r['iteration']} | {r['score']:.4f} | {delta} | {r['num_turns']} "
                     f"| {skills_str} | `{r['trace_file']}` |"
                 )
             if len(q_rows) > per_question_cap:

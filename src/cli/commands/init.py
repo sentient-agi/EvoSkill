@@ -17,12 +17,14 @@ DEFAULT_CONFIG = {
         'max_retries': 3,
     },
     'evolution': {
-        'mode': 'skill_only',
+        'mode': 'skill_unified',
         'iterations': 20,
         'frontier_size': 3,
         'concurrency': 4,
         'no_improvement_limit': 5,
         'failure_samples': 3,
+        'accuracy_threshold': None,
+        'evolver_model': None,
     },
     'dataset': {
         'path': './data/questions.csv',
@@ -69,7 +71,12 @@ def _format_toml_value(value: object) -> str:
 
 def _append_toml_field(lines: list[str], comment: str, key: str, value: object) -> None:
     lines.append(f'# {comment}')
-    lines.append(f'{key} = {_format_toml_value(value)}')
+    if value is None:
+        # TOML has no null. Render the field commented out so users see the
+        # key (and can uncomment to enable) without it being interpreted.
+        lines.append(f'# {key} =')
+    else:
+        lines.append(f'{key} = {_format_toml_value(value)}')
 
 
 def _append_toml_list_field(lines: list[str], comment: str, key: str, values: list[str]) -> None:
@@ -115,6 +122,10 @@ def _render_config(config: dict) -> str:
     _append_toml_field(lines, 'Stop after this many iterations with no improvement.', 'no_improvement_limit', config['evolution']['no_improvement_limit'])
     lines.append('')
     _append_toml_field(lines, 'How many failing examples to sample when proposing changes.', 'failure_samples', config['evolution']['failure_samples'])
+    lines.append('')
+    _append_toml_field(lines, 'Switch to efficiency optimization once frontier accuracy reaches this value (e.g. 0.8). Leave unset to disable Phase 2.', 'accuracy_threshold', config['evolution']['accuracy_threshold'])
+    lines.append('')
+    _append_toml_field(lines, "Override the model used by evolver agents. Leave unset to inherit harness.model.", 'evolver_model', config['evolution']['evolver_model'])
     lines.extend([
         '',
         '[dataset]',
@@ -149,6 +160,8 @@ def _write_config(path: Path, answers: dict) -> None:
     config['harness']['model'] = default_model_for_harness(answers['harness'])
     config['harness']['data_dirs'] = answers['data_dirs']
     config['evolution']['mode'] = answers.get('mode', DEFAULT_CONFIG['evolution']['mode'])
+    config['evolution']['accuracy_threshold'] = answers.get('accuracy_threshold')
+    config['evolution']['evolver_model'] = answers.get('evolver_model')
     config['dataset']['path'] = answers['dataset_path']
     config['dataset']['question_column'] = answers['question_col']
     config['dataset']['ground_truth_column'] = answers['gt_col']
@@ -165,6 +178,9 @@ def _load_prompt_defaults(config_path: Path) -> dict[str, str]:
         'gt_col': DEFAULT_CONFIG['dataset']['ground_truth_column'],
         'category_col': 'category',
         'data_dirs_raw': '',
+        'mode': DEFAULT_CONFIG['evolution']['mode'],
+        'accuracy_threshold_raw': '',
+        'evolver_model_raw': '',
     }
     if not config_path.exists():
         return defaults
@@ -174,9 +190,15 @@ def _load_prompt_defaults(config_path: Path) -> dict[str, str]:
 
     harness = raw.get('harness', {})
     dataset = raw.get('dataset', {})
+    evolution = raw.get('evolution', {})
 
     defaults['harness'] = harness.get('name', defaults['harness'])
     defaults['dataset_path'] = dataset.get('path', defaults['dataset_path'])
+    defaults['mode'] = evolution.get('mode', defaults['mode'])
+    if evolution.get('accuracy_threshold') is not None:
+        defaults['accuracy_threshold_raw'] = str(evolution['accuracy_threshold'])
+    if evolution.get('evolver_model'):
+        defaults['evolver_model_raw'] = str(evolution['evolver_model'])
     defaults['question_col'] = dataset.get('question_column', defaults['question_col'])
     defaults['gt_col'] = dataset.get('ground_truth_column', defaults['gt_col'])
     defaults['category_col'] = dataset.get('category_column', defaults['category_col']) or defaults['category_col']
@@ -236,9 +258,48 @@ def init_cmd():
         default=prompt_defaults['data_dirs_raw'],
     ).ask()
 
-    if any(v is None for v in [harness, dataset_path, question_col, gt_col, category_col, data_dirs_raw]):
+    mode = questionary.select(
+        'Evolution mode?',
+        choices=[
+            questionary.Choice(
+                'skill_unified — single evolver agent proposes + writes the skill in one pass (recommended)',
+                value='skill_unified',
+            ),
+            questionary.Choice(
+                'skill_only — split proposer/generator, evolves skills only (legacy)',
+                value='skill_only',
+            ),
+            questionary.Choice(
+                'prompt_only — evolves the base prompt instead of skills',
+                value='prompt_only',
+            ),
+        ],
+        default=prompt_defaults['mode'],
+    ).ask()
+
+    accuracy_threshold_raw = questionary.text(
+        'Accuracy threshold to enable Phase 2 efficiency optimization (e.g. 0.8). Leave blank to disable.',
+        default=prompt_defaults['accuracy_threshold_raw'],
+    ).ask()
+
+    evolver_model_raw = questionary.text(
+        'Override model for evolver agents? Leave blank to inherit harness.model.',
+        default=prompt_defaults['evolver_model_raw'],
+    ).ask()
+
+    required = [harness, dataset_path, question_col, gt_col, category_col, data_dirs_raw, mode]
+    if any(v is None for v in required) or any(v is None for v in [accuracy_threshold_raw, evolver_model_raw]):
         click.echo('\n  Aborted.')
         raise SystemExit(1)
+
+    # Parse optional inputs. Empty / "none" → unset (None), so config.toml renders the field commented out.
+    accuracy_threshold: float | None = None
+    if accuracy_threshold_raw.strip():
+        try:
+            accuracy_threshold = float(accuracy_threshold_raw)
+        except ValueError:
+            click.echo(f'  ⚠️  Could not parse "{accuracy_threshold_raw}" as a number — Phase 2 left disabled.')
+    evolver_model: str | None = evolver_model_raw.strip() or None
 
     data_dirs = [v.strip() for v in data_dirs_raw.split(',') if v.strip()]
 
@@ -255,6 +316,9 @@ def init_cmd():
             'gt_col': gt_col,
             'category_col': category_col,
             'data_dirs': data_dirs,
+            'mode': mode,
+            'accuracy_threshold': accuracy_threshold,
+            'evolver_model': evolver_model,
         },
     )
     (evoskill_dir / 'task.md').write_text(TASK_MD_TEMPLATE)

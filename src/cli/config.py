@@ -27,12 +27,22 @@ class HarnessConfig:
 
 @dataclass
 class EvolutionConfig:
-    mode: Literal['skill_only', 'prompt_only'] = 'skill_only'
+    # 'skill_unified' uses a single evolver agent that both proposes the
+    # mutation and writes the skill. It's the empirically-better default
+    # (see PR #23 A/B); 'skill_only' / 'prompt_only' keep the legacy
+    # split-agent paths.
+    mode: Literal['skill_only', 'prompt_only', 'skill_unified'] = 'skill_unified'
     iterations: int = 20
     frontier_size: int = 3
     concurrency: int = 4
     no_improvement_limit: int = 5
     failure_samples: int = 3
+    # Once frontier accuracy reaches this threshold, switch from optimizing
+    # for accuracy to optimizing for cost (Phase 2). None disables Phase 2.
+    accuracy_threshold: float | None = None
+    # Override the model used by evolver agents (proposer/generator in split
+    # modes, unified evolver in skill_unified). None inherits harness.model.
+    evolver_model: str | None = None
 
 
 @dataclass

@@ -22,39 +22,34 @@ def init_tracing(project_name: str = "evoskill") -> None:
     os.environ.setdefault("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "http/protobuf")
     # Raise the per-attribute size limit so full tool inputs / assistant text
     # are preserved (default ~12KB truncates long Bash scripts and Read results).
-    os.environ.setdefault("OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT", "1048576")  # 1MB
-    os.environ.setdefault("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "1048576")
+    # Use direct assignment rather than setdefault so we override any pre-existing
+    # smaller limit from the environment.
+    os.environ["OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT"] = "16777216"  # 16MB
+    os.environ["OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT"] = "16777216"
 
+    # auto_instrument=False on purpose: openinference-instrumentation-anthropic
+    # auto-creates one `messages.create` span per LLM round-trip, which
+    # clutters the Phoenix trace list with hundreds of low-information rows
+    # per agent run. The same per-turn information is preserved on our
+    # manual `{agent_name}/turn.N` spans (input.value = query, output.value
+    # = parsed response, model, cost, token counts), so the auto spans are
+    # redundant noise. To re-enable for low-level Anthropic SDK debugging,
+    # flip the flag.
     try:
         from phoenix.otel import register as phoenix_register
         phoenix_register(
             project_name=project_name,
-            auto_instrument=True,
+            auto_instrument=False,
             protocol="http/protobuf",
         )
         _initialized = True
     except Exception as e:
-        # Try again with auto_instrument disabled — still gives us manual spans
         print(
-            f"[tracing] Phoenix auto-instrumentation failed ({type(e).__name__}: {e}). "
-            f"Falling back to manual-span-only mode.",
+            f"[tracing] Phoenix tracing fully disabled ({type(e).__name__}: {e}). "
+            f"The loop will run without observability.",
             file=sys.stderr,
         )
-        try:
-            from phoenix.otel import register as phoenix_register
-            phoenix_register(
-                project_name=project_name,
-                auto_instrument=False,
-                protocol="http/protobuf",
-            )
-            _initialized = True
-        except Exception as e2:
-            print(
-                f"[tracing] Phoenix tracing fully disabled ({type(e2).__name__}: {e2}). "
-                f"The loop will run without observability.",
-                file=sys.stderr,
-            )
-            _initialized = True  # mark done so we don't retry
+        _initialized = True  # mark done so we don't retry
 
 
 def get_tracer(name: str = "evoskill"):

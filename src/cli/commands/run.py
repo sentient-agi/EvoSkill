@@ -196,7 +196,7 @@ class LoopDisplay:
 def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
     """Run the self-improvement loop."""
     from src.harness import Agent, set_sdk
-    from src.agent_profiles.base_agent.base_agent import make_base_agent_options_from_task
+    from src.agent_profiles.solver.solver import make_solver_options_from_task
     from src.agent_profiles.prompt_generator.prompt_generator import (
         make_prompt_generator_options,
     )
@@ -209,6 +209,9 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
     from src.agent_profiles.skill_proposer.skill_proposer import (
         make_skill_proposer_options,
     )
+    from src.agent_profiles.skill_evolver.skill_evolver import (
+        make_skill_evolver_options,
+    )
     from src.cli.config import load_config
     from src.cli.shared import load_and_split, make_scorer
     from src.loop import LoopAgents, LoopConfig, SelfImprovingLoop
@@ -217,6 +220,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
         AgentResponse,
         PromptGeneratorResponse,
         PromptProposerResponse,
+        SkillEvolverResponse,
         SkillProposerResponse,
         ToolGeneratorResponse,
     )
@@ -244,16 +248,19 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
 
     console.print(f"  Dataset: {cfg.dataset_path}  ({len(val_data)} val samples)\n")
 
-    # Build agents — use task.md description as the base agent prompt
-    base_factory = make_base_agent_options_from_task(
+    # Build agents — use task.md description as the solver prompt
+    solver_factory = make_solver_options_from_task(
         cfg.task_description,
         model=cfg.harness.model,
         data_dirs=cfg.harness.data_dirs,
         project_root=cfg.project_root,
     )
+    # Evolver agents use evolver_model when set, else fall back to harness model.
+    evolver_model = cfg.evolution.evolver_model or cfg.harness.model
+
     agents = LoopAgents(
-        base=Agent(
-            base_factory,
+        solver=Agent(
+            solver_factory,
             AgentResponse,
             timeout_seconds=cfg.harness.timeout_seconds,
             max_retries=cfg.harness.max_retries,
@@ -261,7 +268,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
         skill_proposer=Agent(
             make_skill_proposer_options(
                 project_root=cfg.project_root,
-                model=cfg.harness.model,
+                model=evolver_model,
             ),
             SkillProposerResponse,
             timeout_seconds=cfg.harness.timeout_seconds,
@@ -270,7 +277,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
         prompt_proposer=Agent(
             make_prompt_proposer_options(
                 project_root=cfg.project_root,
-                model=cfg.harness.model,
+                model=evolver_model,
             ),
             PromptProposerResponse,
             timeout_seconds=cfg.harness.timeout_seconds,
@@ -279,7 +286,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
         skill_generator=Agent(
             make_skill_generator_options(
                 project_root=cfg.project_root,
-                model=cfg.harness.model,
+                model=evolver_model,
             ),
             ToolGeneratorResponse,
             timeout_seconds=cfg.harness.timeout_seconds,
@@ -288,12 +295,25 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
         prompt_generator=Agent(
             make_prompt_generator_options(
                 project_root=cfg.project_root,
-                model=cfg.harness.model,
+                model=evolver_model,
             ),
             PromptGeneratorResponse,
             timeout_seconds=cfg.harness.timeout_seconds,
             max_retries=cfg.harness.max_retries,
         ),
+        # Unified evolver — only constructed for skill_unified mode (the
+        # runner skips it otherwise). Building it unconditionally is cheap
+        # since options factories are lazy, but only wiring it for the mode
+        # that uses it makes the dependency obvious.
+        skill_evolver=Agent(
+            make_skill_evolver_options(
+                project_root=str(cfg.project_root),
+                model=evolver_model,
+            ),
+            SkillEvolverResponse,
+            timeout_seconds=cfg.harness.timeout_seconds,
+            max_retries=cfg.harness.max_retries,
+        ) if cfg.evolution.mode == "skill_unified" else None,
     )
     manager = ProgramManager(cwd=cfg.project_root)
 
@@ -306,6 +326,11 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool):
         failure_sample_count=cfg.evolution.failure_samples,
         categories_per_batch=cfg.evolution.failure_samples,
         continue_mode=continue_loop,
+        # Phase 2 efficiency optimization. cost_metric is auto-enabled when
+        # accuracy_threshold is set so the loop tracks cost per iter; both
+        # default to None / disabled when the user leaves the field unset.
+        accuracy_threshold=cfg.evolution.accuracy_threshold,
+        cost_metric="total_cost_usd" if cfg.evolution.accuracy_threshold is not None else None,
     )
 
     display = LoopDisplay(verbose=verbose, quiet=quiet)

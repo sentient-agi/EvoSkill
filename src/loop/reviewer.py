@@ -216,21 +216,40 @@ class BackgroundReviewer:
         return all_proposals
 
     def get_unconsumed_proposals(self, limit: int = 20) -> list[dict]:
-        """Get proposals not yet shown to the reflector."""
-        conn = sqlite3.connect(str(self._db_path))
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            """SELECT * FROM runtime_proposals
-               WHERE consumed = 0
-               ORDER BY
-                   CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
-                   created_at DESC
-               LIMIT ?""",
-            (limit,),
-        ).fetchall()
-        result = [dict(r) for r in rows]
-        conn.close()
-        return result
+        """Get proposals not yet shown to the reflector.
+
+        The DB is shared with TraceDB under WAL mode. Multiple connections
+        can hit transient disk I/O errors. Retry a few times with a short
+        backoff; give up with an empty list rather than raising so callers
+        don't have to defensively wrap every call.
+        """
+        import time
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                conn = sqlite3.connect(str(self._db_path), timeout=10.0)
+                try:
+                    conn.execute("PRAGMA busy_timeout=5000")
+                    conn.row_factory = sqlite3.Row
+                    rows = conn.execute(
+                        """SELECT * FROM runtime_proposals
+                           WHERE consumed = 0
+                           ORDER BY
+                               CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+                               created_at DESC
+                           LIMIT ?""",
+                        (limit,),
+                    ).fetchall()
+                    return [dict(r) for r in rows]
+                finally:
+                    conn.close()
+            except sqlite3.OperationalError as e:
+                last_err = e
+                time.sleep(0.2 * (attempt + 1))
+        logger.warning(
+            f"get_unconsumed_proposals gave up after 3 retries: {last_err}"
+        )
+        return []
 
     def mark_consumed(self, proposal_ids: list[int]) -> None:
         """Mark proposals as consumed after the reflector has seen them."""
