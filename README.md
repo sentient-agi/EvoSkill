@@ -122,6 +122,9 @@ Install into <b>any coding agent</b> in seconds, and supercharge it with <b>AI-c
 - [Quickstart](#quickstart)
 - [CLI Reference](#cli-reference)
 - [Configuration Reference](#configuration-reference)
+- [Running Experiments Directly with `scripts/run_loop.py`](#running-experiments-directly-with-scriptsrun_looppy)
+- [Phoenix Observability](#phoenix-observability)
+- [Dataset Utilities](#dataset-utilities)
 - [How It Works](#how-it-works)
 - [Git Branches](#git-branches)
 - [When the Loop Gets Stuck](#when-the-loop-gets-stuck)
@@ -338,6 +341,163 @@ provider = "anthropic"        # "anthropic", "openai", or "google"
 type = "script"
 command = "python score.py --predicted {predicted} --expected {expected}"
 ```
+
+## Running Experiments Directly with `scripts/run_loop.py`
+
+`evoskill run` is a friendly wrapper, but for benchmark experiments you'll typically launch the loop directly. `scripts/run_loop.py` exposes every knob and is what the EvoSkill team uses internally.
+
+### Minimal launch
+
+```bash
+PYTHONPATH=. python scripts/run_loop.py \
+  --train_dataset path/to/train.csv \
+  --val_dataset path/to/val.csv \
+  --max_iterations 4 \
+  --concurrency 8 \
+  --model sonnet
+```
+
+CSVs require the columns `uid, question, ground_truth, category` (the `category` field can be a single constant like `"all"` if you don't need stratified sampling).
+
+### Full launch — production setup we use for OfficeQA
+
+```bash
+LOG=logs/evo-$(date +%Y%m%d-%H%M%S).log
+
+set -a && source /path/to/.env && set +a && \
+cd /path/to/EvoSkill && \
+env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_EXECPATH \
+  PYTHONPATH=. \
+  PYTHONUNBUFFERED=1 \
+  ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+  nohup .venv/bin/python -u scripts/run_loop.py \
+    --model sonnet \
+    --evolver_model opus \
+    --base_thinking adaptive \
+    --base_effort medium \
+    --evolver_thinking adaptive \
+    --evolver_effort high \
+    --max_iterations 4 \
+    --failure_samples 1 \
+    --samples_per_category 3 \
+    --concurrency 15 \
+    --reviewer_enabled false \
+    --train_dataset .dataset/baby_train.csv \
+    --val_dataset .dataset/baby_val.csv \
+    --data_root /path/to/dataset/root \
+    --workspace /path/to/separate-workspace-repo \
+    --fresh true \
+    >"$LOG" 2>&1 &
+
+echo "PID: $!  |  Log: $LOG"
+```
+
+A few notes on this incantation:
+
+- **`env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_EXECPATH`** — strips Claude Code env vars when you launch from inside another Claude Code session. Without this, the nested Claude Agent SDK refuses to spawn.
+- **`set -a && source .env && set +a`** then explicitly re-pass `ANTHROPIC_API_KEY` — the `env -u` wipe drops the inherited key; the judge LLM uses the raw Anthropic SDK and needs it back.
+- **`nohup … &`** — detach so the run survives terminal hangups. Tail the log file in a second terminal.
+- **`PYTHONUNBUFFERED=1` + `python -u`** — without these, the loop's stdout buffers and the log shows nothing for minutes.
+
+### Key flags
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--model` | None | Base agent model (alias `sonnet` / `opus` / `haiku`, or full ID `claude-sonnet-4-6`) |
+| `--evolver_model` | `opus` | Model for the evolver / proposer / generator agents |
+| `--base_thinking` | None | Thinking config for base agent: `adaptive` / `enabled` / `disabled` |
+| `--base_effort` | None | Effort tier for base: `low` / `medium` / `high` / `max` |
+| `--evolver_thinking` | None | Same options for the evolver |
+| `--evolver_effort` | None | Same options for the evolver |
+| `--max_iterations` | 20 | Number of improvement iterations |
+| `--frontier_size` | 3 | Top-N programs to keep |
+| `--no_improvement_limit` | 5 | Early-stop after N iterations without improvement |
+| `--concurrency` | 4 | Parallel agent runs during evaluation |
+| `--failure_samples` | 3 | Categories sampled per iter |
+| `--samples_per_category` | 2 | Train samples per category per iter (total per-iter train = `failure_samples × samples_per_category`) |
+| `--reviewer_enabled` | true | Background Haiku reviewer that extracts insights from successful iterations. Disable to keep budget tight. |
+| `--train_dataset` | (auto-split) | Pre-split train CSV. Must be paired with `--val_dataset`. |
+| `--val_dataset` | (auto-split) | Pre-split val CSV. |
+| `--dataset` | `.dataset/new_runs_base/solved_dataset.csv` | Single-file dataset for auto-split (used only when `--train_dataset` / `--val_dataset` are not set) |
+| `--data_root` | None | Extra data directory mounted into the agent's `add_dirs` (e.g., `/path/to/pdf/corpus`) |
+| `--workspace` | `~/dev/evoskill-workspace` | Separate git repo for `program/*` branches and frontier state. Set to empty string to fall back to project root. |
+| `--fresh` | false | Wipe all program branches, frontier tags, feedback, checkpoint, and workspace traces before running. **Does NOT wipe `<project>/.cache/runs/`** (the inference cache). |
+| `--continue_loop` | false | Resume from existing frontier instead of starting fresh. Mutually exclusive with `--fresh`. |
+| `--cache` | true | Enable run-cache reuse across launches. |
+| `--accuracy_threshold` | None | Switch from accuracy → efficiency optimization once val accuracy crosses this (e.g., 0.8). |
+
+### Inference cache reuse across `--fresh` runs
+
+Inference traces are cached at `<project_root>/.cache/runs/<tree_hash>/`. The cache key includes:
+
+- The workspace's git tree SHA (root + `.claude/skills/` tree)
+- File-content hash of `.claude/skills/`
+- Hash of the agent prompt files
+
+Two runs with **identical content** will hit the cache and skip the inference. `--fresh true` deliberately preserves this cache so re-running on the same dataset doesn't re-pay base-eval cost. To force a full miss, use `--cache false` or `rm -rf .cache/runs/`.
+
+### Workspace separation
+
+For experiments on the EvoSkill repo itself (vs experiments downstream of it), pass `--workspace /path/to/separate/repo`. The workspace holds all evolutionary artifacts (`program/*` branches, `frontier/*` tags, feedback history, checkpoint, traces.db) so the EvoSkill source tree stays clean. The first launch into an empty workspace path auto-initializes a git repo there.
+
+---
+
+## Phoenix Observability
+
+EvoSkill emits OpenTelemetry traces for every agent run, LLM call, and evolution decision. Pipe them into a local [Arize Phoenix](https://github.com/Arize-ai/phoenix) UI to inspect spans, costs, and tool-call timelines.
+
+### Setup
+
+```bash
+pip install \
+  arize-phoenix \
+  arize-phoenix-otel \
+  openinference-instrumentation-anthropic
+```
+
+Run the Phoenix server in a dedicated terminal:
+
+```bash
+phoenix serve   # binds http://localhost:6006
+```
+
+Or in the background:
+
+```bash
+nohup phoenix serve > ~/.phoenix.log 2>&1 &
+```
+
+Open `http://localhost:6006` in a browser. Phoenix auto-picks up traces from any EvoSkill script — `src/tracing.py:init_tracing()` registers the OTel pipeline before any LLM SDK imports.
+
+### What you'll see
+
+| Project name | Source |
+|---|---|
+| `evoskill-loop` | `scripts/run_loop.py` runs |
+| `evoskill-eval` | `scripts/run_eval.py` runs |
+| `evoskill-oneshot-eval` | `scripts/eval_oneshot_unseen.py` runs |
+
+Each run shows the agent's full thought-action loop: every `messages.create` call, every tool call (Read / Edit / Bash / Glob / Grep / WebFetch / etc.), and the evolver's reasoning when proposing skills. The judge LLM's grading calls also show up.
+
+If Phoenix isn't installed or `phoenix serve` isn't running, the EvoSkill scripts continue to work — `init_tracing` is fail-soft and the loop runs unobserved.
+
+---
+
+## Dataset Utilities
+
+For complex benchmarks (especially OfficeQA) you'll want curated train/val splits rather than raw `train_ratio` / `val_ratio` auto-splits. The `.dataset/` directory has reusable helpers:
+
+| Script | Purpose |
+|--------|---------|
+| `.dataset/_compile_full_audit.py` | Generate `officeqa_pro_audited.csv` from the source benchmark, applying `corrected_gt`, `gt_status`, `recommended_action`, `internet_required`, and `verification_level` columns derived from the image-verified audit. |
+| `.dataset/_sample_correct_104.py` | Sample N train + M val UIDs from the 85 image-verified-correct OfficeQA Pro pool (random_state=42). |
+| `.dataset/_build_hard_pool.py` | Build a 10-train + 15-val "hard" pool from base-agent failures across the 85-correct UIDs, stratified by `internet_required`. Useful when random sampling produces saturated pools. |
+| `.dataset/_build_baby_pool.py` | Build a 4-train + 6-val "test" pool — same stratification, smaller, for fast end-to-end validation of the loop before committing to a full run. |
+| `scripts/eval_oneshot_unseen.py` | One-shot base-agent evaluation over unseen UIDs. Writes per-question scores to `oneshot_scores.csv` and failures to `oneshot_failures.csv`. Populates the run cache so a subsequent evolution launch hits cache for these UIDs. |
+
+The hard / baby pool builders demonstrate the recommended workflow for evolution: **find the failures first, then evolve against them**. Random-sampled pools with high baseline accuracy lead to "no proposal needed" iterations that waste budget; targeted hard pools give the evolver a real signal to attack.
+
+---
 
 ## How It Works
 
