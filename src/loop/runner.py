@@ -214,6 +214,20 @@ class SelfImprovingLoop:
         # Round-robin sampling state
         self._category_offset = 0  # Which category to start with next iteration
         self._per_cat_offset: dict[str, int] = {cat: 0 for cat in train_pools.keys()}
+        # Per-cycle shuffle of pool indices. Without this, a pool of size P
+        # sampled k-at-a-time produces the SAME k samples every (P/k)-th iter
+        # — iters 1+3 (or 2+4) would land on identical UIDs in linear order,
+        # which we observed in practice. We shuffle once per cycle (each time
+        # _per_cat_offset wraps modulo pool size). Seed includes the cycle
+        # number so order is deterministic for replays but different across
+        # cycles. See _next_train_sample() for the consumption side.
+        import random as _rnd
+        self._pool_order: dict[str, list[int]] = {}
+        self._pool_cycle: dict[str, int] = {cat: 0 for cat in train_pools.keys()}
+        for cat, pool in train_pools.items():
+            order = list(range(len(pool)))
+            _rnd.Random(f"{cat}:0").shuffle(order)
+            self._pool_order[cat] = order
 
         # Proportional sampling state (used when config.proportional_sampling is True).
         # Builds a fixed schedule where each category appears `len(pool)` times,
@@ -293,6 +307,28 @@ class SelfImprovingLoop:
         """Fire an event to the display callback if one is registered."""
         if self.on_event is not None:
             self.on_event(event, data)
+
+    def _next_train_sample(self, cat: str) -> tuple[str, str]:
+        """Pull the next training sample from `cat`'s pool, with per-cycle shuffling.
+
+        Maintains a shuffled order over pool indices for the current cycle.
+        When _per_cat_offset wraps modulo pool size we've consumed one full
+        cycle; reshuffle so the next cycle visits samples in a different
+        order. Without this, iters at the same offset within consecutive
+        cycles would draw identical samples.
+        """
+        pool = self.train_pools[cat]
+        idx_in_cycle = self._per_cat_offset[cat] % len(pool)
+        sample_idx = self._pool_order[cat][idx_in_cycle]
+        self._per_cat_offset[cat] += 1
+        # Crossing the boundary into a new cycle? Reshuffle.
+        if self._per_cat_offset[cat] % len(pool) == 0:
+            import random as _rnd
+            self._pool_cycle[cat] += 1
+            order = list(range(len(pool)))
+            _rnd.Random(f"{cat}:{self._pool_cycle[cat]}").shuffle(order)
+            self._pool_order[cat] = order
+        return pool[sample_idx]
 
     def _save_checkpoint(self, iteration: int) -> None:
         """Save sampling state for exact resume.
@@ -403,16 +439,14 @@ class SelfImprovingLoop:
                 # the precomputed schedule (cycling). Each category appears in
                 # the schedule proportional to its pool size, so over N iters
                 # each category is sampled in proportion. Within a category,
-                # cycle through samples via _per_cat_offset.
+                # _next_train_sample picks the next index from the shuffled
+                # per-cycle order.
                 n_to_take = self.config.failure_sample_count
                 for k in range(n_to_take):
                     cat = self._schedule[(self._schedule_offset + k) % len(self._schedule)]
-                    pool = self.train_pools[cat]
-                    sample_idx = self._per_cat_offset[cat] % len(pool)
-                    question, answer = pool[sample_idx]
+                    question, answer = self._next_train_sample(cat)
                     test_samples.append((question, answer, cat))
                     sampled_cats.append(cat)
-                    self._per_cat_offset[cat] += 1
                 self._schedule_offset += n_to_take
             else:
                 # Round-robin sampling: pick samples_per_category from each of N categories (cycling)
@@ -424,11 +458,9 @@ class SelfImprovingLoop:
                     # Take min(samples_per_category, pool_size) to handle small categories
                     samples_to_take = min(self.config.samples_per_category, len(pool))
                     for _ in range(samples_to_take):
-                        sample_idx = self._per_cat_offset[cat] % len(pool)
-                        question, answer = pool[sample_idx]
+                        question, answer = self._next_train_sample(cat)
                         test_samples.append((question, answer, cat))
                         sampled_cats.append(cat)
-                        self._per_cat_offset[cat] += 1
                 self._category_offset += n_cats_this_iter
 
             _log("", f"  Testing {len(test_samples)} samples from categories: {', '.join(sampled_cats)}...")
