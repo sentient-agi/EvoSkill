@@ -28,18 +28,73 @@ class ProgramManager:
     PROGRAM_FILE = ".claude/program.yaml"
     BRANCH_PREFIX = "program/"
     FRONTIER_PREFIX = "frontier/"
+    # Workspace-relative location for per-program skill snapshots. Persists
+    # the project's `.claude/skills/` tree at every create_program() call so
+    # switch_to() can restore the *exact* skill state that produced a given
+    # program's score. Without this, evolved skills get clobbered by later
+    # iterations and historical scores become unreproducible.
+    SKILL_SNAPSHOT_DIR = ".cache/skill_snapshots"
 
-    def __init__(self, cwd: str | Path | None = None):
+    def __init__(
+        self,
+        cwd: str | Path | None = None,
+        project_skills_dir: str | Path | None = None,
+    ):
         """
         Initialize ProgramManager.
 
         Args:
-            cwd: Working directory for git operations. Defaults to git repo root.
+            cwd: Working directory for git operations (the workspace).
+                Defaults to git repo root.
+            project_skills_dir: Absolute path to the project's `.claude/skills/`
+                directory — the *real* place evolver agents write skill files.
+                When None, defaults to `<cwd>/.claude/skills/` (legacy single-
+                root mode where workspace == project_root). When the workspace
+                and project root are split (typical with --workspace flag),
+                callers MUST pass the project's path so snapshots track the
+                live skill tree, not an empty workspace stub.
         """
         if cwd:
             self.cwd = Path(cwd)
         else:
             self.cwd = self._find_repo_root()
+        self._project_skills_dir = (
+            Path(project_skills_dir).resolve()
+            if project_skills_dir is not None
+            else self.cwd / ".claude" / "skills"
+        )
+        # Ensure the workspace's .gitignore covers loop-managed cache dirs.
+        # Without this, our defensive `_git_checkout` (which calls
+        # `git clean -fd` as a fallback when checkout fails on untracked
+        # files) would wipe `.cache/skill_snapshots/`, destroying the
+        # reproducibility snapshots created at every program. The seed
+        # entries here are minimal — append-safe for users who later
+        # add their own ignores.
+        self._ensure_workspace_gitignore()
+
+    def _ensure_workspace_gitignore(self) -> None:
+        """Idempotently add `.cache/` to the workspace's .gitignore.
+
+        Safe to call repeatedly — appends only entries that aren't already
+        present. Only operates inside a real git repo (cwd has .git/).
+        """
+        if not (self.cwd / ".git").exists():
+            return
+        gitignore = self.cwd / ".gitignore"
+        required = [".cache/", "logs/"]
+        existing_lines = (
+            gitignore.read_text().splitlines() if gitignore.exists() else []
+        )
+        existing_set = {line.strip() for line in existing_lines}
+        to_add = [entry for entry in required if entry not in existing_set]
+        if not to_add:
+            return
+        with open(gitignore, "a") as f:
+            if existing_lines and existing_lines[-1].strip():
+                f.write("\n")  # ensure newline before appending
+            f.write("# evoskill: loop-managed state — do not commit, do not clean\n")
+            for entry in to_add:
+                f.write(f"{entry}\n")
 
     @staticmethod
     def _find_repo_root() -> Path:
@@ -88,16 +143,76 @@ class ProgramManager:
             self._git_add(".claude/skills/")
         self._git_commit(f"Create program: {name}")
 
+        # Snapshot the live project skills tree so this program can be exactly
+        # reproduced later, even after subsequent iterations mutate the same
+        # files. Snapshot AFTER the commit so it captures the post-evolver
+        # state when create_program is called from inside _mutate.
+        self._snapshot_skills(name)
+
         return branch_name
 
     def switch_to(self, name: str) -> None:
         """
-        Switch to a program (git checkout).
+        Switch to a program and restore its skill state.
+
+        First does git checkout (which restores program.yaml + anything
+        committed under .claude/skills/ in the workspace). Then restores the
+        project-level skills tree from the snapshot taken at create time —
+        this is the actually-load-bearing step, since evolver agents write
+        skills outside the workspace and git can't track them there.
 
         Args:
             name: Program name (without 'program/' prefix)
         """
         self._git_checkout(f"{self.BRANCH_PREFIX}{name}")
+        self._restore_skills(name)
+
+    # ---------------------------------------------------------------------
+    # Skill snapshot helpers
+    # ---------------------------------------------------------------------
+
+    def _snapshot_dir_for(self, name: str) -> Path:
+        return self.cwd / self.SKILL_SNAPSHOT_DIR / name
+
+    def _snapshot_skills(self, name: str) -> None:
+        """Capture the live project skills tree under workspace snapshot store.
+
+        No-op if the project skills directory doesn't exist (e.g., on a
+        fresh-cold-start before any skill has been written).
+        """
+        import shutil
+        src = self._project_skills_dir
+        if not src.exists():
+            return
+        dest = self._snapshot_dir_for(name)
+        # Wipe any prior snapshot for this program (e.g., from an aborted run)
+        # so the fresh copy is authoritative.
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+        dest.mkdir(parents=True, exist_ok=True)
+        # copytree requires an empty target on macOS without dirs_exist_ok.
+        shutil.copytree(src, dest, dirs_exist_ok=True)
+
+    def _restore_skills(self, name: str) -> None:
+        """Restore the project skills tree from the snapshot taken at create.
+
+        No-op if no snapshot exists for this program (e.g., a program created
+        before snapshotting was wired up). In that case the live skill tree
+        is left untouched.
+        """
+        import shutil
+        snap = self._snapshot_dir_for(name)
+        if not snap.exists():
+            return
+        dest = self._project_skills_dir
+        # Replace the live tree wholesale: remove anything not in snapshot,
+        # then copy snapshot in. This matters when later iterations created
+        # NEW skill directories that didn't exist when this program was made
+        # — those need to disappear when we switch back.
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(snap, dest, dirs_exist_ok=True)
 
     def get_current(self) -> ProgramConfig:
         """
@@ -358,24 +473,45 @@ class ProgramManager:
         return None
 
     def update_frontier(
-        self, name: str, score: float, max_size: int = 5
+        self, name: str, score: float, max_size: int = 5,
+        *, cost: float | None = None,
+        parent_score: float | None = None,
+        parent_cost: float | None = None,
     ) -> bool:
         """
         Add program to frontier if it qualifies, pruning worst if over max_size.
 
-        A program qualifies if:
-        - Frontier has fewer than max_size members, OR
-        - Score is higher than the lowest score in frontier
+        A program qualifies if (in priority order):
+        1. (Regression guard, if parent_score is provided) score is NOT
+           materially worse than parent's score. In Phase 2 (efficiency)
+           a regression is rejected outright — the score MUST be at least
+           as good as the parent's.
+        2. Frontier has fewer than max_size members, OR
+        3. Score is strictly higher than the lowest score in frontier, OR
+        4. Score ties the worst AND cost is lower (efficiency tie-break).
 
         Args:
             name: Program name to potentially add
             score: Score for this program
             max_size: Maximum frontier size
+            cost: Average evaluation cost in USD for this program. When
+                  present, used to break ties on equal score — the lower
+                  cost wins. Stored on the program's config metadata for
+                  future comparisons.
+            parent_score: Optional parent program's score. When provided,
+                  any mutation with score < parent_score is REJECTED before
+                  being considered for frontier admission. This prevents
+                  Phase 2 efficiency mutations from polluting the frontier
+                  with accuracy regressions.
+            parent_cost: Optional parent program's cost. When score ties
+                  parent_score AND cost is provided, requires the new cost
+                  to be strictly lower than parent_cost (otherwise the
+                  mutation isn't actually an improvement).
 
         Returns:
             True if program was added to frontier, False otherwise
         """
-        # First, update the program's config with the score
+        # First, update the program's config with the score (and cost, if provided)
         current_branch = self._git_current_branch()
         target_branch = f"{self.BRANCH_PREFIX}{name}"
 
@@ -385,31 +521,80 @@ class ProgramManager:
 
         config = self._read_config()
         updated_config = config.with_score(score)
+        if cost is not None:
+            updated_config = updated_config.with_metadata(cost=float(cost))
         self._write_config(updated_config)
         self._git_add(self.PROGRAM_FILE)
-        self._git_commit(f"Update score: {score:.4f}")
+        commit_msg = f"Update score: {score:.4f}"
+        if cost is not None:
+            commit_msg += f" cost: ${cost:.4f}"
+        self._git_commit(commit_msg)
 
         # Switch back
         if current_branch != target_branch:
             self._git_checkout(current_branch)
 
+        # Regression guard (rule 1). Apply BEFORE checking frontier room —
+        # a regression should never be admitted, even if there's space.
+        # Tolerance is exact (no floating-point slack) because the cosine
+        # scorer already smooths small differences.
+        if parent_score is not None and score < parent_score:
+            # Special case: in Phase 2, a tie on score with strictly lower
+            # cost is still acceptable (cost-improvement is the whole point).
+            cost_improves = (
+                parent_cost is not None
+                and cost is not None
+                and cost < parent_cost
+                and score == parent_score
+            )
+            if not cost_improves:
+                return False
+
         # Now check frontier membership
         scored = self.get_frontier_with_scores()
 
-        # If frontier has room, add unconditionally
+        # If frontier has room, add unconditionally (subject to the
+        # regression guard above which already filtered out bad mutations).
         if len(scored) < max_size:
             self.mark_frontier(name)
             return True
 
-        # Otherwise, check if we beat the worst
+        # Otherwise, compare against the worst member (last in sorted list)
         worst_name, worst_score = scored[-1]
         if score > worst_score:
-            # Remove worst, add new
             self.unmark_frontier(worst_name)
             self.mark_frontier(name)
             return True
 
+        # Tie-break on cost when scores are equal and cost is available on
+        # both sides. Lower cost wins — this is what lets phase-2 efficiency
+        # evolution actually replace incumbents when accuracy is already
+        # saturated.
+        if cost is not None and score == worst_score:
+            worst_cost = self._get_program_cost(worst_name)
+            if worst_cost is not None and cost < worst_cost:
+                self.unmark_frontier(worst_name)
+                self.mark_frontier(name)
+                return True
+
         return False
+
+    def _get_program_cost(self, name: str) -> float | None:
+        """Read the `cost` metadata from a program's config without switching branches."""
+        target_branch = f"{self.BRANCH_PREFIX}{name}"
+        try:
+            import subprocess
+            out = subprocess.check_output(
+                ["git", "show", f"{target_branch}:{self.PROGRAM_FILE}"],
+                cwd=self.cwd, text=True, stderr=subprocess.DEVNULL,
+            )
+            import yaml
+            data = yaml.safe_load(out) or {}
+            meta = (data.get("metadata") or {}) if isinstance(data, dict) else {}
+            cost = meta.get("cost")
+            return float(cost) if cost is not None else None
+        except Exception:
+            return None
 
     def commit(self, message: str | None = None) -> bool:
         """
@@ -482,24 +667,78 @@ class ProgramManager:
         )
 
     def _git_checkout(self, branch: str) -> None:
-        """Checkout a branch, auto-stashing any uncommitted changes."""
-        # Check for uncommitted changes
+        """Checkout a branch, auto-stashing any uncommitted changes.
+
+        Robust against leftover merge conflicts: if the working tree is in
+        an unresolved state (e.g. from a prior failed `stash pop`), git
+        refuses to stash again. We detect that and clear only the
+        regenerable state files (`.claude/feedback_history.md`,
+        `.claude/loop_checkpoint.json`) — these get rewritten on the next
+        iteration anyway. Evolver-produced skill edits are preserved.
+
+        Known race (mitigated, not eliminated): `feedback_history.md` is
+        committed on each branch, so when we stash → checkout target →
+        pop, git's 3-way merge can leave conflict markers in the file
+        when both branches diverged. We do NOT resolve here because
+        we don't know the merge intent. Instead, `read_feedback_history`
+        in src/loop/helpers.py strips markers on read and warns loudly.
+        Long-term fix: move feedback_history.md out of git-tracked space
+        (e.g., into .cache/) so it doesn't participate in checkout merges.
+        """
+        # 1. Clear any unresolved merge state on regenerable files.
+        #    Porcelain codes for conflicts: DD, AU, UD, UA, DU, AA, UU.
+        result = self._run_git(["status", "--porcelain"], check=False)
+        conflicted_paths = [
+            line[3:].strip()
+            for line in result.stdout.splitlines()
+            if line[:2] in ("DD", "AU", "UD", "UA", "DU", "AA", "UU")
+        ]
+        if conflicted_paths:
+            regenerable = {
+                ".claude/feedback_history.md",
+                ".claude/loop_checkpoint.json",
+            }
+            for p in conflicted_paths:
+                if p in regenerable:
+                    # Resolve by removing the file — it'll be rewritten next iter.
+                    self._run_git(["rm", "-f", p], check=False)
+                else:
+                    # Keep non-regenerable conflicts visible; surface loudly.
+                    logger.warning(
+                        f"Unresolved merge conflict on {p} — manual resolution required"
+                    )
+
+        # 2. Re-check for uncommitted changes after conflict cleanup.
         result = self._run_git(["status", "--porcelain"], check=False)
         has_changes = bool(result.stdout.strip())
 
-        # Stash if dirty (include untracked with -u so no files are lost)
+        # 3. Stash if dirty (include untracked with -u so no files are lost)
         if has_changes:
-            self._run_git(["stash", "push", "-u", "-m", "auto-stash before checkout"])
+            self._run_git(["stash", "push", "-u", "-m", "auto-stash before checkout"], check=False)
 
-        # Perform checkout
+        # 4. Perform checkout
         self._run_git(["checkout", branch])
 
-        # Pop stash if we stashed
+        # 5. Pop stash if we stashed (best-effort — conflicts leave stash for manual review)
         if has_changes:
             self._run_git(["stash", "pop"], check=False)
 
     def _git_checkout_new(self, branch: str) -> None:
-        """Create and checkout a new branch."""
+        """Create and checkout a new branch.
+
+        If the branch already exists (e.g., a prior mutation in this iteration
+        was created and then GATE-rejected, leaving a stale branch behind),
+        force-recreate it from the current HEAD. Without this, a retry of the
+        same iteration crashes with `git checkout -b` exit 128.
+        """
+        existing = set(self._git_list_branches())
+        if branch in existing:
+            current = self._git_current_branch()
+            if current == branch:
+                # Already on the stale branch (shouldn't normally happen, but
+                # be defensive). Step off it before deleting.
+                self._run_git(["checkout", "main"], check=False)
+            self._git_branch_delete(branch)
         self._run_git(["checkout", "-b", branch])
 
     def _git_current_branch(self) -> str:

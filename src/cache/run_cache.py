@@ -3,7 +3,8 @@ Program-aware run caching for agent evaluations.
 
 Cache invalidates automatically when behavior-affecting files change:
 - .claude/skills/** (skill definitions)
-- src/agent_profiles/base_agent/prompt.txt (prompt text)
+- src/agent_profiles/base_agent/prompt.txt (legacy fallback) and
+  src/agent_profiles/officeqa_agent/prompt.md (prompt text)
 
 Excludes metadata files like .claude/program.yaml to avoid unnecessary
 cache invalidation when only scores or timestamps change.
@@ -34,6 +35,22 @@ class CacheConfig(BaseModel):
     store_messages: bool = False  # Whether to cache the full messages list
     hash_length: int = 12  # Length of hash prefix for filenames
     cwd: Path = Path(".")  # Working directory for git commands
+    # Path to the LIVE `.claude/skills/` the agent reads from at run time.
+    # When workspace ≠ project source root (typical with `--workspace`),
+    # the workspace's `.claude/skills/` only contains stub snapshot files
+    # — the real skills evolve in the project's `.claude/skills/`. Hashing
+    # the workspace dir alone produces a stable cache key even as the
+    # actual loaded skills change between iterations, returning stale
+    # responses generated under different skill conditions. Pointing here
+    # at the live dir fixes that. Defaults to `<cwd>/.claude/skills` for
+    # backward compatibility (single-root setups where workspace == project).
+    live_skills_dir: Path | None = None
+    # Path to the project source root (parent of `src/agent_profiles/...`)
+    # so the cache hashes the agent's actual prompt files. Without this,
+    # `_get_tree_hash` looks for prompts at `<cwd>/src/agent_profiles/...`
+    # which DOES NOT EXIST in a workspace setup → prompt edits go undetected.
+    # Defaults to `cwd` for single-root backward compatibility.
+    project_source_root: Path | None = None
 
     class Config:
         arbitrary_types_allowed = True
@@ -86,34 +103,94 @@ class RunCache:
         """
         Get combined hash of files that affect agent behavior.
 
-        Only hashes files that actually affect agent behavior:
-        - .claude/skills/** - skill definitions
-        - src/agent_profiles/base_agent/prompt.txt - prompt text
+        Primary source of truth: the workspace's current git HEAD commit +
+        the tree-hash of `.claude/skills/` on that commit. Since every
+        program is a distinct branch with its own committed skill state,
+        git already knows when things actually changed — using git's hashes
+        sidesteps pathlib glob edge cases, stat-cache freshness, and
+        uncommitted-working-tree drift.
 
-        Excludes metadata files like .claude/program.yaml which contain
-        mutable fields (score, created_at) that don't affect behavior.
+        Falls back to the prior content-hashing logic only when git queries
+        fail (e.g. workspace isn't a git repo).
 
         Returns:
-            Combined hash of behavior-affecting files.
+            Combined hash of behavior-affecting state.
         """
-        # Define paths that affect agent behavior
-        # (directory, glob_pattern) tuples
-        behavior_paths = [
-            (".claude/skills", "**/*"),  # All skill files
-            ("src/agent_profiles/base_agent", "prompt.txt"),  # Prompt text
+        # Three ingredients go into the hash:
+        #   (a) git HEAD — captures branch switches (each program = new branch).
+        #   (b) live file content of .claude/skills/ — captures uncommitted
+        #       working-tree edits (evolver writes before branch is created).
+        #   (c) prompt.txt content — captures prompt edits.
+        # Mixing (a) and (b) means we detect BOTH "switched to a different
+        # program branch" AND "wrote uncommitted skill changes" — either
+        # forces a cache miss.
+        git_token = self._git_behavior_token() or "no-git"
+
+        # Hash the LIVE skills directory (where the agent actually reads
+        # skill files from). When the loop runs with --workspace, the
+        # live dir is on the project side (e.g. <EvoSkill>/.claude/skills),
+        # not the workspace side (which carries only stub snapshots). If
+        # we hash the workspace dir, the cache key stays constant across
+        # iterations even as skills change, masking the evolver's effect.
+        skills_dir = self.config.live_skills_dir or (
+            self.config.cwd / ".claude" / "skills"
+        )
+        skills_h = self._hash_files(skills_dir, "**/*") if skills_dir.exists() else ""
+
+        # Hash whichever agent prompts exist. Use the project source root
+        # (where the actual `src/agent_profiles/...` tree lives), not cwd
+        # — same workspace/project split issue as skills_dir above.
+        source_root = self.config.project_source_root or self.config.cwd
+        prompt_paths = [
+            source_root / "src" / "agent_profiles" / "base_agent" / "prompt.txt",
+            source_root / "src" / "agent_profiles" / "officeqa_agent" / "prompt.md",
         ]
+        hasher = hashlib.sha256()
+        for prompt_path in prompt_paths:
+            try:
+                if prompt_path.is_file():
+                    with open(prompt_path, "rb") as f:
+                        hasher.update(prompt_path.name.encode("utf-8"))
+                        hasher.update(f.read())
+            except (IOError, OSError):
+                pass
+        prompt_h = hasher.hexdigest()
 
-        content_hashes = []
-        for base_dir, pattern in behavior_paths:
-            dir_path = self.config.cwd / base_dir
-            if dir_path.exists():
-                content_hashes.append(self._hash_files(dir_path, pattern))
-            else:
-                content_hashes.append("")
-
-        # Combine hashes into a single hash
-        combined = ":".join(content_hashes)
+        combined = f"git:{git_token}|skills:{skills_h}|prompt:{prompt_h}"
         return hashlib.sha256(combined.encode("utf-8")).hexdigest()
+
+    def _git_behavior_token(self) -> str | None:
+        """Return a git-derived token for the workspace's current skill state.
+
+        Uses the **root tree SHA** (`git rev-parse HEAD^{tree}`) plus the
+        skills tree SHA. Tree SHAs are content-addressed: identical content
+        produces the same SHA regardless of when the commit was made. Using
+        the commit SHA (HEAD) instead would break cache reuse across
+        `--fresh` runs because each run creates a new "Create program: base"
+        commit with a fresh timestamp → different commit SHA, identical
+        content. Tree SHAs sidestep this by hashing the snapshot, not the
+        commit metadata.
+
+        Returns None when git isn't available, the cwd isn't a repo, or
+        `.claude/skills` isn't tracked.
+        """
+        try:
+            import subprocess
+            root_tree = subprocess.check_output(
+                ["git", "rev-parse", "HEAD^{tree}"],
+                cwd=self.config.cwd, text=True, stderr=subprocess.DEVNULL,
+            ).strip()
+            try:
+                skills_tree = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD:.claude/skills"],
+                    cwd=self.config.cwd, text=True, stderr=subprocess.DEVNULL,
+                ).strip()
+            except subprocess.CalledProcessError:
+                # Skills dir not tracked on this commit → use empty-tree SHA
+                skills_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+            return f"{root_tree}:{skills_tree}"
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            return None
 
     def _hash_files(self, dir_path: Path, pattern: str = "**/*") -> str:
         """
