@@ -20,6 +20,9 @@ SKILL_EVOLVER_TOOLS = [
 def get_skill_evolver_options(
     model: str | None = None,
     project_root: str | None = None,
+    data_dirs: list[str] | None = None,
+    thinking: dict | None = None,
+    effort: str | None = None,
 ) -> Any:
     """Factory for the unified skill evolver (proposer + generator in one pass)."""
     return build_options(
@@ -28,8 +31,11 @@ def get_skill_evolver_options(
         tools=SKILL_EVOLVER_TOOLS,
         project_root=project_root,
         model=model,
+        data_dirs=data_dirs,
         setting_sources=["user", "project"],
         permission_mode="acceptEdits",
+        thinking=thinking,
+        effort=effort,
     )
 
 
@@ -37,8 +43,14 @@ def make_skill_evolver_options(
     *,
     project_root: str | None = None,
     model: str | None = None,
+    data_dirs: list[str] | None = None,
+    thinking: dict | None = None,
+    effort: str | None = None,
 ):
-    return get_skill_evolver_options(model=model, project_root=project_root)
+    return get_skill_evolver_options(
+        model=model, project_root=project_root, data_dirs=data_dirs,
+        thinking=thinking, effort=effort,
+    )
 
 
 skill_evolver_options = get_skill_evolver_options()
