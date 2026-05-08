@@ -205,13 +205,18 @@ class DaytonaBackend(RemoteBackend):
                         chunk = tar_bytes[i:i + MAX_CHUNK]
                         sandbox.fs.upload_file(chunk, f"/tmp/chunks/part_{i:010d}")
                         log(f"  chunk {idx + 1}/{n_chunks}")
-                    log(f"extracting {mapping.host_path.name}...")
+                    log(f"reassembling chunks...")
                     sandbox.process.exec(
                         f"cat /tmp/chunks/part_* > /tmp/combined.tar.gz && "
+                        f"rm -rf /tmp/chunks",
+                        timeout=1200,
+                    )
+                    log(f"extracting {mapping.host_path.name}...")
+                    sandbox.process.exec(
                         f"mkdir -p {mapping.container_path} && "
                         f"tar xzf /tmp/combined.tar.gz -C /mnt/data/ && "
-                        f"rm -rf /tmp/chunks /tmp/combined.tar.gz",
-                        timeout=600,
+                        f"rm -f /tmp/combined.tar.gz",
+                        timeout=1200,
                     )
 
         if container_data_dirs:
