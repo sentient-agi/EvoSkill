@@ -413,14 +413,33 @@ class DaytonaBackend(RemoteBackend):
         paths = download_file_list(download_cfg)
         for remote_rel in paths:
             remote_path = f"/workspace/{remote_rel}"
-            local_path = project_root / remote_rel
-            try:
-                content = sandbox.fs.download_file(remote_path)
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                if isinstance(content, bytes):
-                    local_path.write_bytes(content)
-            except Exception:
-                pass
+            if remote_rel.endswith("/"):
+                # Directory: list contents and download each file
+                try:
+                    entries = sandbox.fs.list_files(remote_path)
+                except Exception:
+                    continue
+                for entry in entries:
+                    if entry.is_dir:
+                        continue
+                    file_remote = f"{remote_path}{entry.name}"
+                    file_local = project_root / remote_rel / entry.name
+                    try:
+                        content = sandbox.fs.download_file(file_remote)
+                        file_local.parent.mkdir(parents=True, exist_ok=True)
+                        if isinstance(content, bytes):
+                            file_local.write_bytes(content)
+                    except Exception:
+                        pass
+            else:
+                local_path = project_root / remote_rel
+                try:
+                    content = sandbox.fs.download_file(remote_path)
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    if isinstance(content, bytes):
+                        local_path.write_bytes(content)
+                except Exception:
+                    pass
 
     def stop(self, cfg: ProjectConfig, run_info: RunInfo) -> None:
         sandbox_id = run_info.extra.get("sandbox_id")
