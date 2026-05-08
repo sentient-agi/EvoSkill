@@ -40,7 +40,7 @@ class HarnessConfig:
 @dataclass
 class EvolutionConfig:
     mode: Literal['skill_only', 'prompt_only'] = 'skill_only'
-    iterations: int = 20
+    iterations: int = 7
     frontier_size: int = 3
     concurrency: int = 4
     no_improvement_limit: int = 5
