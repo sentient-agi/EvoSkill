@@ -19,7 +19,7 @@ DEFAULT_CONFIG = {
     },
     'evolution': {
         'mode': 'skill_only',
-        'iterations': 20,
+        'iterations': 7,
         'frontier_size': 3,
         'concurrency': 4,
         'no_improvement_limit': 5,
@@ -391,3 +391,6 @@ def init_cmd():
         click.echo(f'      {"3" if not remote_config or not remote_config["daytona"].get("image") else "2"}. Run: evoskill run --remote')
     else:
         click.echo('      2. Run: evoskill run')
+    click.echo('')
+    click.echo('    Note: Default iterations is set to 7. Increase iterations in')
+    click.echo('    .evoskill/config.toml for better skill discovery.')
