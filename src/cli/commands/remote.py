@@ -132,7 +132,7 @@ def remote_download():
     console.print(" [green]done[/green]")
 
     console.print(f"\n  [bold]Next:[/bold]")
-    console.print(f"    evoskill run              continue evolving locally")
+    console.print(f"    evoskill run --continue   continue evolving")
     console.print(f"    evoskill skills           see discovered skills\n")
 
 
