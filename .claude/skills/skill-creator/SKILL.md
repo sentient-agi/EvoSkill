@@ -354,3 +354,14 @@ After testing the skill, users may request improvements. Often this happens righ
 2. Notice struggles or inefficiencies
 3. Identify how SKILL.md or bundled resources should be updated
 4. Implement changes and test again
+
+### Upstream Contribution Workflow (for public skill repos)
+
+When the user asks to upstream a skill improvement to its original repository, use this workflow:
+
+1. Fork and clone the target repository first.
+2. Isolate one concern per branch and per PR.
+3. Keep changes scoped to the relevant skill files unless repository wiring updates are required.
+4. Follow the repository's established PR title/body style from recently merged PRs.
+5. Include concrete verification commands and outcomes in the PR body.
+6. Keep multi-repo upstreaming split into separate PRs, one repo per PR.
