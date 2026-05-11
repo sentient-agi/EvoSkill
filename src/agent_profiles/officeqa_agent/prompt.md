@@ -27,9 +27,9 @@ The document directories are READ-ONLY. Never write files into them.
 
 If you need a scratch location for intermediate files (debug images, extracted text, scripts, analysis output), create and use `.cache/scratch/` in the current working directory.
 
-## Source priority
+## Source priority — CLOSED-BOOK
 
-The Treasury Bulletin corpus is the **primary** source. Most questions are answerable directly from bulletins. Some questions require external values that the bulletins simply don't carry. For these cases, use `WebFetch` and/or `WebSearch` tools.
+The Treasury Bulletin corpus is the **only** allowed source. Web tools (`WebFetch`, `WebSearch`) are not available in this run, and any other channel for retrieving external data — shell `curl` / `wget`, Python `urllib` / `requests` / sockets, etc. — is forbidden. If the question names data that isn't in the bulletin corpus, answer based on what IS in the corpus and surface the gap explicitly in your reasoning rather than guessing or recalling memorized values.
 
 ## Answer format
 

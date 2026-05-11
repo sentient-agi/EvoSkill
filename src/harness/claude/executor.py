@@ -296,7 +296,7 @@ def _emit_blocks_as_messages(
         if joined:
             span.set_attribute(
                 f"{attr_prefix}.{idx}.message.content",
-                _truncate(joined, max_chars_per_msg),
+                joined,
             )
         for j, tc in enumerate(pending_tools):
             base = f"{attr_prefix}.{idx}.message.tool_calls.{j}.tool_call"
@@ -321,7 +321,7 @@ def _emit_blocks_as_messages(
                 span.set_attribute(f"{attr_prefix}.{idx}.message.role", "thinking")
                 span.set_attribute(
                     f"{attr_prefix}.{idx}.message.content",
-                    _truncate(th, max_chars_per_msg),
+                    th,
                 )
                 idx += 1
         elif isinstance(block, ToolUseBlock):
@@ -336,7 +336,7 @@ def _emit_blocks_as_messages(
             pending_tools.append({
                 "id": getattr(block, "id", "") or "",
                 "name": getattr(block, "name", "") or "",
-                "args": _truncate(args_str, max_chars_per_msg),
+                "args": args_str,
             })
 
     _flush_assistant()
@@ -356,35 +356,47 @@ def _emit_llm_messages_for_turn(
     ThinkingBlock: type | None,
     ToolUseBlock: type,
     ToolResultBlock: type,
-    max_chars_per_msg: int = 5000,
+    max_chars_per_msg: int = 50_000,
     max_chars_per_tool_result: int = 20_000,
 ) -> None:
     """Emit OpenInference `llm.input_messages.*` and `llm.output_messages.*`
     attrs reconstructing the conversation the model saw on this turn.
 
     `prior_messages` should be all SDK messages that arrived BEFORE
-    `current_msg` (in order). Per-message content is truncated to keep
-    Phoenix attribute size manageable even on hundred-turn runs. Tool
-    results get a larger budget than text/thinking because they're where
-    the actual evidence (Read output, Grep matches, Bash stdout) lives —
-    aggressive truncation there hurts trace readability the most.
+    `current_msg` (in order). Per-message content is bounded to keep
+    Phoenix attribute size manageable on long multi-turn runs (evolver
+    can take 100+ turns). The system prompt and initial user query are
+    logged in full (see above) since they carry the most diagnostic
+    weight; assistant thinking / tool args are bounded at 50K (raised
+    from 5K — the 5K limit cut off the failure list on the user-query
+    side, motivating this and the unconditional system_prompt fix).
+    Tool results still get their own larger budget because they're
+    where the actual evidence lives.
     """
     msg_idx = 0
 
     # 1) System
+    # System prompt is bounded (a few KB at most) and is the most important
+    # diagnostic context for reviewing a trace — log it in full. OTEL is
+    # already configured to allow up to 16MB per attribute (see src/tracing.py).
     if sys_prompt_text:
         span.set_attribute(f"llm.input_messages.{msg_idx}.message.role", "system")
         span.set_attribute(
             f"llm.input_messages.{msg_idx}.message.content",
-            _truncate(sys_prompt_text, max_chars_per_msg),
+            sys_prompt_text,
         )
         msg_idx += 1
 
     # 2) Original user query
+    # Log in full — the initial query carries the entire problem statement
+    # (for the solver: the question; for the evolver: the full failure-list
+    # block with 9 traces). Truncating it hides exactly the diagnostic
+    # context a reviewer needs. OTEL allows up to 16MB per attribute (see
+    # src/tracing.py) so even a 50KB evolver prompt fits comfortably.
     span.set_attribute(f"llm.input_messages.{msg_idx}.message.role", "user")
     span.set_attribute(
         f"llm.input_messages.{msg_idx}.message.content",
-        _truncate(query, max_chars_per_msg),
+        query,
     )
     msg_idx += 1
 
@@ -415,7 +427,7 @@ def _emit_llm_messages_for_turn(
                     if result_str:
                         span.set_attribute(
                             f"llm.input_messages.{msg_idx}.message.content",
-                            _truncate(result_str, max_chars_per_tool_result),
+                            result_str,
                         )
                     msg_idx += 1
 
@@ -601,6 +613,17 @@ async def execute_query(
 
             async for msg in client.receive_response():
                 messages.append(msg)
+                # Mirror into the partial-messages contextvar so a wall-clock
+                # timeout can recover the full transcript-so-far. Without
+                # this, a SIGTERM at 480s kills the subprocess mid-stream
+                # and `messages=[]` is what reaches the failure-trace file
+                # — the evolver then sees zero diagnostic signal for that
+                # failure and hallucinates skills from nothing.
+                try:
+                    from src.harness.agent import _push_partial_message
+                    _push_partial_message(msg)
+                except Exception:
+                    pass
 
                 # Only AssistantMessages contain turn-worthy content
                 if isinstance(msg, AssistantMessage):
@@ -632,8 +655,16 @@ async def execute_query(
                         canonical_model = msg_model
                     # Nest the turn span under the run span explicitly so it's a
                     # direct child (not a sibling of later tool spans).
+                    # Mirror the run-span's labeling so in-flight turn
+                    # spans in Phoenix carry the question # (e.g. `[val
+                    # 13/16]`) instead of just `agent_name/turn.N`. The
+                    # parent run-span already uses this pattern (line
+                    # ~580); applying it to turn spans lets a reviewer
+                    # match unfinished turn rows to their question
+                    # without expanding the parent.
+                    _turn_label = _eval_label or f"{agent_name} [{run_tag}]"
                     turn_span = _tracer.start_span(
-                        f"{_iter_pfx_str}{agent_name}/turn.{turn_num}",
+                        f"{_iter_pfx_str}{_turn_label}/turn.{turn_num}",
                         context=set_span_in_context(run_span),
                     )
                     turn_span.set_attribute("turn", turn_num)
@@ -669,9 +700,9 @@ async def execute_query(
                     if sys_prompt_text:
                         # Plain attr name for the All-Attributes pane (Phoenix
                         # hides OpenInference semantic attrs from that view).
-                        turn_span.set_attribute(
-                            "system_prompt", _truncate(sys_prompt_text, 5000),
-                        )
+                        # Log in full — system prompt is bounded and is the
+                        # most important diagnostic context for trace review.
+                        turn_span.set_attribute("system_prompt", sys_prompt_text)
                     # Reconstruct prior messages = everything in `messages`
                     # before the current AssistantMessage. Filter to the
                     # message types the helper knows how to render.

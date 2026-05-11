@@ -30,6 +30,47 @@ def _extract_model(options) -> str:
     return str(getattr(options, "model", "") or "")
 
 
+def _extract_effort(options) -> str:
+    """Extract the thinking-effort knob ("low"|"medium"|"high"|"max") from
+    options for cache keying. EvoSkill experiments run with adaptive thinking,
+    so `effort` is the only discriminating signal across runs.
+
+    Returns "" when not set, which causes RunCache to leave the path key
+    unchanged (preserving legacy callers' cache reachability).
+    """
+    if isinstance(options, dict):
+        return str(options.get("effort", "") or "")
+    return str(getattr(options, "effort", "") or "")
+
+
+def _extract_system_prompt(options) -> str:
+    """Best-effort system-prompt extraction for the cache key.
+
+    Claude SDK packs the user-provided system text inside a preset dict:
+    `system_prompt = {"type": "preset", "preset": "claude_code", "append": "<user text>"}`.
+    Other SDKs (opencode, openhands, codex, goose) typically use a flat
+    `system` string. We check both patterns and return the user-authored
+    string — that's what the cache key should reflect, since the preset
+    base is constant across runs and only the appended user text varies.
+
+    Returns "" when nothing is detectable, which causes RunCache to fall
+    back to its on-disk prompt-file hash.
+    """
+    if isinstance(options, dict):
+        sp = options.get("system_prompt")
+        if isinstance(sp, dict):
+            return str(sp.get("append", "") or "")
+        if isinstance(sp, str):
+            return sp
+        return str(options.get("system", "") or "")
+    sp = getattr(options, "system_prompt", None)
+    if isinstance(sp, dict):
+        return str(sp.get("append", "") or "")
+    if isinstance(sp, str):
+        return sp
+    return str(getattr(options, "system", "") or "")
+
+
 def _build_default_cache():
     """Lazily construct a default RunCache pointing at `<cwd>/.cache/runs/`.
 
@@ -101,17 +142,32 @@ async def evaluate_agent_parallel(
         tag = f"{tag_prefix} {idx + 1}/{total}"
         async with semaphore:
             try:
-                async with asyncio.timeout(840):  # 14-min hard limit (matches Agent.TIMEOUT_SECONDS)
-                    # Check cache first
+                # Outer hard limit derived from Agent.TIMEOUT_SECONDS + 120s
+                # buffer (one API_TIMEOUT_MS worth). Existing callers using
+                # the default 720s budget see 840s here; runners that override
+                # Agent.TIMEOUT_SECONDS (e.g. for short-experiment evals) get
+                # a proportional outer ceiling without a separate flag.
+                from src.harness.agent import Agent as _Agent
+                async with asyncio.timeout(_Agent.TIMEOUT_SECONDS + 120):
+                    # Check cache first. We pull the system prompt from the
+                    # agent's resolved options and pass it to the cache so
+                    # the key reflects what the LLM actually receives —
+                    # critical for callers (oneshot scripts, run_loop) that
+                    # construct prompts dynamically rather than from disk.
                     trace = None
                     sdk = get_sdk()
-                    model = _extract_model(agent._get_options())
+                    opts = agent._get_options()
+                    model = _extract_model(opts)
+                    sys_prompt = _extract_system_prompt(opts)
+                    effort = _extract_effort(opts)
                     if cache is not None:
                         trace = cache.get(
                             question,
                             agent.response_model,
                             sdk=sdk,
                             model=model,
+                            system_prompt=sys_prompt,
+                            effort=effort,
                         )
 
                     # Cache miss - run agent
@@ -126,7 +182,10 @@ async def evaluate_agent_parallel(
                             _gt_var.reset(gt_token)
                         # Store in cache
                         if cache is not None:
-                            cache.set(question, trace, sdk=sdk, model=model)
+                            cache.set(
+                                question, trace, sdk=sdk, model=model,
+                                system_prompt=sys_prompt, effort=effort,
+                            )
 
             except asyncio.TimeoutError:
                 print(f"Eval timed out (12min) for: {question[:50]}...")
@@ -150,7 +209,7 @@ async def evaluate_agent_parallel(
     score_sum = 0.0
     score_n = 0
     pass_n = 0
-    pbar = tqdm(total=total, desc="Evaluating")
+    pbar = tqdm(total=total, desc="Evaluating", mininterval=10)
     try:
         for fut in asyncio.as_completed(tasks):
             idx, res = await fut

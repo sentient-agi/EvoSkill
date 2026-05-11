@@ -63,13 +63,20 @@ class LoopConfig:
 
     # Mid-gate: cheap sanity check between evolver proposal and full val
     # GATE eval. Re-runs the iter's training samples on the new program and
-    # requires "fixes ≥ mid_gate_min_fixed AND regressions ≤ mid_gate_max_regressions"
-    # before proceeding. Catches obvious bad mutations (no failures fixed,
-    # or new regressions on previously-passing train samples) before
-    # spending the much more expensive val budget.
+    # gates by one of two policies (see `mid_gate_policy`) before proceeding
+    # to the much more expensive val GATE eval.
     mid_gate_enabled: bool = True
-    mid_gate_min_fixed: int = 1     # X — at least N previously-failing samples must now pass
-    mid_gate_max_regressions: int = 0  # Y — at most M previously-passing samples may now fail
+    # Policy:
+    #   "counts" (default, back-compat): "fixes ≥ mid_gate_min_fixed AND
+    #     regressions ≤ mid_gate_max_regressions". Strict per-sample binary
+    #     gate; sensitive to LLM nondeterminism on borderline samples.
+    #   "mean":   "mean(post_score) ≥ mean(pre_score) across re-evaluated
+    #     samples". Tolerates a single noise-driven regression as long as
+    #     net average score doesn't drop. Better when sample-level scores
+    #     are noisy (chart reads, multi-component answers).
+    mid_gate_policy: str = "counts"
+    mid_gate_min_fixed: int = 1     # counts-policy: at least N previously-failing samples must now pass
+    mid_gate_max_regressions: int = 0  # counts-policy: at most M previously-passing samples may now fail
 
     # Proposer resilience: adaptive truncation on context limit/timeout
     proposer_max_truncation_level: int = 2  # Max truncation level (0=full, 1=moderate, 2=aggressive)

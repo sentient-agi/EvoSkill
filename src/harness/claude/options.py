@@ -28,6 +28,7 @@ def build_claudecode_options(
     disallowed_tools: Iterable[str] | None = None,
     thinking: dict | None = None,
     effort: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> Any:
     """Build ClaudeAgentOptions for the Claude SDK.
 
@@ -35,6 +36,11 @@ def build_claudecode_options(
     `{"type": "enabled", "budget_tokens": N}`, or `{"type": "disabled"}`.
     `effort` accepts "low" | "medium" | "high" | "max" (a coarser knob).
     Both can be set together; effort layers on top of thinking.
+
+    `env` is forwarded to the Claude Code subprocess as additional environment
+    variables visible to the agent's Bash tool. Useful for injecting
+    indirection (e.g. `$SCRATCH_DIR`) without exposing literal paths in the
+    system prompt.
     """
     from claude_agent_sdk import ClaudeAgentOptions
 
@@ -66,6 +72,8 @@ def build_claudecode_options(
         kwargs["thinking"] = thinking
     if effort is not None:
         kwargs["effort"] = effort
+    if env is not None:
+        kwargs["env"] = dict(env)
 
     options = ClaudeAgentOptions(**kwargs)
     normalized_model = strip_model_provider(

@@ -96,13 +96,14 @@ def build_options(
     disallowed_tools: Iterable[str] | None = None,
     thinking: dict | None = None,
     effort: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> Any:
     """Route to the correct builder for the active SDK.
 
     Claude-specific parameters (setting_sources, permission_mode,
-    max_buffer_size, thinking, effort) are forwarded only when the Claude
-    SDK is active. They are silently ignored on other harnesses because
-    those runtimes have no equivalent concept.
+    max_buffer_size, thinking, effort, env) are forwarded only when the
+    Claude SDK is active. They are silently ignored on other harnesses
+    because those runtimes have no equivalent concept.
     """
     from .sdk_config import get_sdk
 
@@ -123,6 +124,7 @@ def build_options(
             disallowed_tools=disallowed_tools,
             thinking=thinking,
             effort=effort,
+            env=env,
         )
     
     if sdk == "opencode":

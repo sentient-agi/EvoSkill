@@ -99,31 +99,35 @@ class RunCache:
         if self.config.enabled:
             self.config.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def _get_tree_hash(self) -> str:
+    def _get_tree_hash(self, system_prompt: str | None = None) -> str:
         """
-        Get combined hash of files that affect agent behavior.
+        Get combined hash of state that affects agent behavior.
 
-        Primary source of truth: the workspace's current git HEAD commit +
-        the tree-hash of `.claude/skills/` on that commit. Since every
-        program is a distinct branch with its own committed skill state,
-        git already knows when things actually changed — using git's hashes
-        sidesteps pathlib glob edge cases, stat-cache freshness, and
-        uncommitted-working-tree drift.
+        Three ingredients:
+          (a) workspace git tree token — captures program branch / committed
+              skill state changes
+          (b) live `.claude/skills/` content — captures uncommitted skill
+              edits the evolver writes before committing
+          (c) the *effective* system prompt the agent will run with
 
-        Falls back to the prior content-hashing logic only when git queries
-        fail (e.g. workspace isn't a git repo).
+        For (c), callers SHOULD pass `system_prompt` extracted from the
+        agent's options — that is the string the LLM actually receives, so
+        it is the only thing whose change should bust cache. When the
+        caller doesn't pass one, we fall back to hashing the on-disk
+        `agent_profiles/.../prompt.{txt,md}` files. The fallback is
+        load-bearing for ad-hoc callers that don't have an agent in scope
+        (e.g., pure file-keyed lookups), but it is a *weaker* key: a
+        caller that constructs an inline prompt while leaving the on-disk
+        files unchanged will silently share cache state with runs that
+        used the on-disk prompt — that was the bug that motivated the
+        `system_prompt` parameter. Always pass it when you have an agent.
+
+        Args:
+            system_prompt: The exact system prompt the agent will receive.
 
         Returns:
             Combined hash of behavior-affecting state.
         """
-        # Three ingredients go into the hash:
-        #   (a) git HEAD — captures branch switches (each program = new branch).
-        #   (b) live file content of .claude/skills/ — captures uncommitted
-        #       working-tree edits (evolver writes before branch is created).
-        #   (c) prompt.txt content — captures prompt edits.
-        # Mixing (a) and (b) means we detect BOTH "switched to a different
-        # program branch" AND "wrote uncommitted skill changes" — either
-        # forces a cache miss.
         git_token = self._git_behavior_token() or "no-git"
 
         # Hash the LIVE skills directory (where the agent actually reads
@@ -135,26 +139,44 @@ class RunCache:
         skills_dir = self.config.live_skills_dir or (
             self.config.cwd / ".claude" / "skills"
         )
-        skills_h = self._hash_files(skills_dir, "**/*") if skills_dir.exists() else ""
+        # Always compute via _hash_files. Path.glob() returns empty on a
+        # nonexistent path, so the result is sha256(no_files) — the same
+        # value an existing-but-empty directory produces. Without this
+        # normalization, a workspace where `.claude/skills/` was created
+        # (e.g. by build_pdf_only_workspace) and one where it hasn't been
+        # created yet would produce different tree_hashes for the same
+        # logical "no live skill content" state, causing spurious cache
+        # misses between consecutive runs with identical agent config.
+        skills_h = self._hash_files(skills_dir, "**/*")
 
-        # Hash whichever agent prompts exist. Use the project source root
-        # (where the actual `src/agent_profiles/...` tree lives), not cwd
-        # — same workspace/project split issue as skills_dir above.
-        source_root = self.config.project_source_root or self.config.cwd
-        prompt_paths = [
-            source_root / "src" / "agent_profiles" / "base_agent" / "prompt.txt",
-            source_root / "src" / "agent_profiles" / "officeqa_agent" / "prompt.md",
-        ]
-        hasher = hashlib.sha256()
-        for prompt_path in prompt_paths:
-            try:
-                if prompt_path.is_file():
-                    with open(prompt_path, "rb") as f:
-                        hasher.update(prompt_path.name.encode("utf-8"))
-                        hasher.update(f.read())
-            except (IOError, OSError):
-                pass
-        prompt_h = hasher.hexdigest()
+        # Prompt hash: prefer the actual system_prompt the agent will use.
+        # Fall back to file content when the caller didn't pass one.
+        if system_prompt is not None:
+            prompt_h = hashlib.sha256(
+                ("inline:" + system_prompt).encode("utf-8")
+            ).hexdigest()
+        else:
+            # Fallback: hash whichever known agent prompt files exist on disk.
+            # This is what we did before the system_prompt parameter was
+            # added. NOTE: `base_agent/prompt.txt` was renamed to
+            # `solver/prompt.txt` in commit 929e3f5; both paths are listed
+            # for compat with caches written before that rename, and the
+            # `is_file` check below silently skips paths that don't exist.
+            source_root = self.config.project_source_root or self.config.cwd
+            prompt_paths = [
+                source_root / "src" / "agent_profiles" / "solver" / "prompt.txt",
+                source_root / "src" / "agent_profiles" / "officeqa_agent" / "prompt.md",
+            ]
+            hasher = hashlib.sha256()
+            for prompt_path in prompt_paths:
+                try:
+                    if prompt_path.is_file():
+                        with open(prompt_path, "rb") as f:
+                            hasher.update(prompt_path.name.encode("utf-8"))
+                            hasher.update(f.read())
+                except (IOError, OSError):
+                    pass
+            prompt_h = hasher.hexdigest()
 
         combined = f"git:{git_token}|skills:{skills_h}|prompt:{prompt_h}"
         return hashlib.sha256(combined.encode("utf-8")).hexdigest()
@@ -162,24 +184,23 @@ class RunCache:
     def _git_behavior_token(self) -> str | None:
         """Return a git-derived token for the workspace's current skill state.
 
-        Uses the **root tree SHA** (`git rev-parse HEAD^{tree}`) plus the
-        skills tree SHA. Tree SHAs are content-addressed: identical content
-        produces the same SHA regardless of when the commit was made. Using
-        the commit SHA (HEAD) instead would break cache reuse across
-        `--fresh` runs because each run creates a new "Create program: base"
-        commit with a fresh timestamp → different commit SHA, identical
-        content. Tree SHAs sidestep this by hashing the snapshot, not the
-        commit metadata.
+        Uses ONLY the skills tree SHA (`git rev-parse HEAD:.claude/skills`).
+        Previously also incorporated the root tree SHA, but that captured
+        unrelated mutations (e.g., ProgramManager committing "Update score"
+        to `.claude/program.yaml`) which shifted the tree_hash without any
+        change to actual solver behavior. The result was cache MISSES
+        between consecutive runs with identical agent config — exactly
+        the bug we hit on the PDF-only evo iter-0 baseline (paid $7 to
+        re-execute predictions already in cache under a different hash).
+
+        Tree SHAs are content-addressed: identical content produces the
+        same SHA regardless of when the commit was made.
 
         Returns None when git isn't available, the cwd isn't a repo, or
         `.claude/skills` isn't tracked.
         """
         try:
             import subprocess
-            root_tree = subprocess.check_output(
-                ["git", "rev-parse", "HEAD^{tree}"],
-                cwd=self.config.cwd, text=True, stderr=subprocess.DEVNULL,
-            ).strip()
             try:
                 skills_tree = subprocess.check_output(
                     ["git", "rev-parse", "HEAD:.claude/skills"],
@@ -188,7 +209,7 @@ class RunCache:
             except subprocess.CalledProcessError:
                 # Skills dir not tracked on this commit → use empty-tree SHA
                 skills_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-            return f"{root_tree}:{skills_tree}"
+            return skills_tree
         except (subprocess.CalledProcessError, FileNotFoundError, OSError):
             return None
 
@@ -230,10 +251,16 @@ class RunCache:
         """Get the cache directory for a specific tree hash."""
         return self.config.cache_dir / tree_hash[: self.config.hash_length]
 
-    def _get_cache_path(self, tree_hash: str, question: str, sdk: str, model: str) -> Path:
-        """Get the cache file path for a tree hash + question + sdk + model."""
+    def _get_cache_path(self, tree_hash: str, question: str, sdk: str, model: str, effort: str | None = None) -> Path:
+        """Get the cache file path for a tree hash + question + sdk + model + effort.
+
+        `effort` is appended to the keyed string only when non-empty so legacy
+        callers that don't pass it keep the same cache paths as before.
+        """
         tree_dir = self._get_cache_dir_for_tree(tree_hash)
         keyed = f"{question.strip()}|sdk={sdk}|model={model}"
+        if effort:
+            keyed += f"|effort={effort}"
         question_hash = hashlib.sha256(keyed.encode("utf-8")).hexdigest()[: self.config.hash_length]
         return tree_dir / f"{question_hash}.json"
 
@@ -244,15 +271,26 @@ class RunCache:
         *,
         sdk: str,
         model: str,
+        system_prompt: str | None = None,
+        effort: str | None = None,
     ) -> AgentTrace[T] | None:
         """
-        Retrieve cached trace for current .claude/ content + question + sdk + model.
+        Retrieve cached trace for current state + question + sdk + model + effort.
 
         Args:
             question: The question/query string
             response_model: Optional Pydantic model for output validation
             sdk: Active harness SDK (e.g. "claude", "opencode") — part of cache key
             model: Model identifier — part of cache key
+            system_prompt: The exact system prompt the agent will receive.
+                When provided, the cache key reflects this string; when
+                omitted, the key falls back to hashing on-disk prompt
+                files (weaker — see _get_tree_hash docstring).
+            effort: Thinking-effort knob ("low"|"medium"|"high"|"max"). When
+                non-empty, appended to the cache path key so runs at
+                different effort levels don't collide. EvoSkill experiments
+                run with `thinking={"type":"adaptive"}` so the discriminating
+                signal is `effort` alone.
 
         Returns:
             AgentTrace if cache hit, None if miss or disabled
@@ -261,12 +299,12 @@ class RunCache:
             return None
 
         try:
-            tree_hash = self._get_tree_hash()
+            tree_hash = self._get_tree_hash(system_prompt=system_prompt)
         except RuntimeError as e:
             logger.debug(f"Cache get failed to compute tree hash: {e}")
             return None
 
-        cache_path = self._get_cache_path(tree_hash, question, sdk, model)
+        cache_path = self._get_cache_path(tree_hash, question, sdk, model, effort=effort)
 
         if not cache_path.exists():
             return None
@@ -280,10 +318,29 @@ class RunCache:
             # Reconstruct AgentTrace from cached data
             trace_data = entry.trace
 
+            # NOTE: we deliberately RETURN cached entries whose output is
+            # None (i.e. the original run timed out / crashed). The cache
+            # key already encodes (Q, sdk, model, effort, system_prompt,
+            # skill_state) — so an exact match means the same agent in
+            # the same configuration will produce the same outcome
+            # (modulo LLM stochasticity). Re-executing wastes API cost
+            # for an outcome that won't differ. When the skill set
+            # changes (e.g., the evolver writes a new skill), the
+            # tree_hash changes, the cache misses, and the agent pays
+            # for a fresh attempt — which is the right time to retry.
+            # An earlier guard here treated null-output entries as miss,
+            # but that conflated "stale entries from a different
+            # tree_hash" (the actual bug, now fixed by the skills-tree-
+            # only `_git_behavior_token`) with "legitimate failures
+            # under THIS exact config."
+
             # Reconstruct output if response_model provided
             if response_model and trace_data.get("output"):
                 trace_data["output"] = response_model.model_validate(trace_data["output"])
 
+            # Mark replayed traces so the runner's cost accountant can
+            # split paid (fresh inference) from replayed (cache) spend.
+            trace_data["from_cache"] = True
             return AgentTrace.model_validate(trace_data)
 
         except (json.JSONDecodeError, ValueError, KeyError):
@@ -298,21 +355,27 @@ class RunCache:
         *,
         sdk: str,
         model: str,
+        system_prompt: str | None = None,
+        effort: str | None = None,
     ) -> None:
         """
-        Cache a trace for current .claude/ content + question + sdk + model.
+        Cache a trace for current state + question + sdk + model + effort.
 
         Args:
             question: The question/query string
             trace: The AgentTrace to cache
             sdk: Active harness SDK (e.g. "claude", "opencode") — part of cache key
             model: Model identifier — part of cache key
+            system_prompt: Same as get(); MUST match what get() will pass
+                so a write here is reachable by a later read. When omitted,
+                falls back to on-disk prompt files (weaker key).
+            effort: Same as get(); appended to the cache path key when non-empty.
         """
         if not self.config.enabled:
             return
 
         try:
-            tree_hash = self._get_tree_hash()
+            tree_hash = self._get_tree_hash(system_prompt=system_prompt)
         except RuntimeError as e:
             logger.debug(f"Cache set failed to compute tree hash: {e}")
             return
@@ -320,10 +383,37 @@ class RunCache:
         tree_dir = self._get_cache_dir_for_tree(tree_hash)
         tree_dir.mkdir(parents=True, exist_ok=True)
 
-        cache_path = self._get_cache_path(tree_hash, question, sdk, model)
+        cache_path = self._get_cache_path(tree_hash, question, sdk, model, effort=effort)
 
         # Serialize trace
         trace_dict = trace.model_dump()
+
+        # Stored traces are always written from fresh inference. Force the
+        # flag false in the JSON so the next get() can authoritatively flip
+        # it true at read time.
+        trace_dict["from_cache"] = False
+
+        # Pre-render the turn-by-turn transcript before stripping messages.
+        # SDK message objects (AssistantMessage, ToolUseBlock, etc.) don't
+        # roundtrip through Pydantic JSON serialization, so the raw
+        # `messages` list is structurally useless after a cache read
+        # regardless of `store_messages`. We render here while the SDK
+        # objects are still in memory, then `AgentTrace.summarize()` uses
+        # the pre-rendered string on the read side — letting the loop's
+        # failure-trace files contain the actual solver tool-use history
+        # instead of just metadata + empty Full Result.
+        if trace_dict.get("cached_transcript") is None:
+            try:
+                from src.harness.agent import _render_turn_transcript
+                rendered = _render_turn_transcript(trace.messages, 20_000)
+                if rendered:
+                    # Cap at 200K chars so cache JSON files stay manageable
+                    # on deep multi-turn opus runs.
+                    if len(rendered) > 200_000:
+                        rendered = rendered[:200_000] + f"\n...[transcript truncated, {len(rendered) - 200_000:,} more chars]"
+                    trace_dict["cached_transcript"] = rendered
+            except Exception:
+                pass
 
         # Optionally strip messages to save space
         if not self.config.store_messages:
@@ -333,17 +423,21 @@ class RunCache:
         if trace.output is not None:
             trace_dict["output"] = trace.output.model_dump()
 
+        keyed_for_record = f"{question.strip()}|sdk={sdk}|model={model}"
+        if effort:
+            keyed_for_record += f"|effort={effort}"
         entry = CacheEntry(
             version="1.0",
             created_at=datetime.now().isoformat(),
             cache_key={
                 "tree_hash": tree_hash[: self.config.hash_length],
                 "question_hash": hashlib.sha256(
-                    f"{question.strip()}|sdk={sdk}|model={model}".encode("utf-8")
+                    keyed_for_record.encode("utf-8")
                 ).hexdigest()[: self.config.hash_length],
                 "question": question,
                 "sdk": sdk,
                 "model": model,
+                "effort": effort or "",
             },
             trace=trace_dict,
         )

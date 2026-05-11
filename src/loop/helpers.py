@@ -102,13 +102,16 @@ def build_proposer_query(
     # Phase-dependent labels for per-trace headers and section titles.
     is_efficiency = (phase == "efficiency")
     item_label = "Passing Sample" if is_efficiency else "Failure"
-    section_title = (
-        "Training Samples (all passed — analyze for efficiency)"
-        if is_efficiency
-        else f"Current Failures"
-    )
 
-    failure_sections = []
+    # Suppress per-failure category tag when all items share the same one.
+    all_cats = [c for _, _, _, c, _ in traces_with_answers]
+    show_category = len(set(all_cats)) > 1
+
+    # Collect compact table rows + counters for the summary line.
+    failure_rows: list[dict] = []
+    n_timeouts = 0
+    n_wrong = 0
+
     for i, (trace, agent_answer, ground_truth, category, question) in enumerate(traces_with_answers, 1):
         # Build compact skeleton: just tool names in turn order (no thinking, no tool results).
         skeleton_lines = []
@@ -225,100 +228,77 @@ def build_proposer_query(
         cost_val = getattr(trace, "total_cost_usd", 0) or 0
         cost_str = "n/a (run cut short)" if is_timeout else f"${cost_val:.4f}"
 
-        # Write the full transcript to a file the evolver can Read on demand
-        full_path_ref = "(full trace file not written — project_root not provided)"
+        turns = getattr(trace, "num_turns", "?")
+        trace_ref = "(trace file not written)"
+
+        duration_ms = getattr(trace, "duration_ms", 0) or 0
+        timeout_mins = duration_ms / 60_000
+
+        # Write the per-failure trace file (full detail for evolver to Read).
         if failure_dir is not None:
             q_hash = abs(hash(question)) % (10 ** 8)
             file_prefix = "sample" if is_efficiency else "failure"
             fail_file = failure_dir / f"{file_prefix}-{i}_{q_hash}.md"
             full = trace.summarize(head_chars=head_chars, tail_chars=tail_chars)
-            header = "Passing Sample" if is_efficiency else "Current Failure"
+
+            # Build trace file content — same field order regardless of timeout.
+            reasoning = ""
+            if not is_timeout and getattr(trace, "output", None) is not None:
+                reasoning = str(getattr(trace.output, "reasoning", "") or "").strip()
+            answer_line = (
+                f"_(timeout at {timeout_mins:.0f} min — no final answer produced)_"
+                if is_timeout
+                else agent_answer
+            )
+            reasoning_section = f"\n**Solver Reasoning**: {reasoning}\n" if reasoning else ""
             fail_file.write_text(
-                f"# {header} #{i}\n\n"
+                f"# {item_label} #{i}\n\n"
                 f"**Question**: {question}\n"
-                f"**Category**: {category}\n"
-                f"**Agent Answer**: {agent_answer}\n"
                 f"**Ground Truth**: {ground_truth}\n"
-                f"**Turns**: {getattr(trace, 'num_turns', '?')}, "
-                f"**Cost**: {cost_str}\n\n"
+                f"**Solver Answer**: {answer_line}\n"
+                f"{reasoning_section}\n"
                 f"## Full Transcript\n\n{full}\n"
             )
-            full_path_ref = str(fail_file)
+            trace_ref = str(fail_file)
+            if data_root and trace_ref.startswith(str(data_root)):
+                trace_ref = trace_ref[len(str(data_root)):].lstrip("/")
 
-        turns = getattr(trace, "num_turns", "?")
+        # Collect row for the compact inline table.
+        if is_timeout:
+            n_timeouts += 1
+            answer_cell = f"_(timeout at {timeout_mins:.0f} min)_"
+        else:
+            n_wrong += 1
+            answer_cell = str(agent_answer)[:60]
 
-        # Surface run-level failure mode (timeout / crash / parse error) to
-        # the evolver as a STATUS BANNER at the top of the section. When
-        # `trace.output` is None the agent produced no parseable answer —
-        # the failure cause is structural (out of time / crashed) rather
-        # than analytical (wrong answer), and the evolver should respond
-        # accordingly: "trim turns / shorten searches / cut work" for
-        # timeouts vs "improve reasoning skill" for wrong answers. Burying
-        # this fact mid-paragraph alongside the question text loses the
-        # signal — the banner makes it impossible to miss.
-        # `is_timeout` and `_reason_str` were computed up front (see above)
-        # so cost rendering in the file body could match this header.
-        # Compact one-liner status flag for non-output failures. The verbose
-        # explanation of WHY timeouts happen and what to do about them lives
-        # in the evolver's system prompt — repeating it on every timeout
-        # failure here just bloats the prompt and the evolver tunes it out.
-        status_banner = ""
-        if getattr(trace, "output", None) is None:
-            if is_timeout:
-                status_banner = f"\n> ⚠️ **TIMEOUT** — agent did not reach `final_answer` (focus on brevity / targeted lookups, not reasoning quality)\n"
-            else:
-                status_banner = f"\n> ⚠️ **CRASH** — `{(_reason_str or 'unknown')[:120]}`\n"
+        failure_rows.append({
+            "i": i,
+            "turns": turns,
+            "answer": answer_cell,
+            "gt": str(ground_truth)[:60],
+            "category": category,
+            "trace": trace_ref,
+        })
 
-        # Always show the full question — the evolver needs every constraint
-        # to diagnose root causes (units, rounding rules, scope, etc. are
-        # often buried late in the prompt). The 300-char truncation we used
-        # to apply for non-timeout failures was hiding load-bearing detail.
-        question_text = question
-        agent_answer_block = (
-            ""
-            if is_timeout
-            else f"**Agent Answer**: {agent_answer[:200]}\n"
-        )
-        # Surface the agent's `reasoning` field inline. This is the highest-
-        # leverage diagnostic signal: it shows WHY the agent landed where it
-        # did (wrong column, wrong formula, missing step) without forcing a
-        # Read of the full trace file. Cap at ~600 chars — long enough to
-        # carry the load-bearing chain-of-thought, short enough not to bloat
-        # the prompt when there are several failures.
-        reasoning_block = ""
-        if not is_timeout and getattr(trace, "output", None) is not None:
-            reasoning = str(getattr(trace.output, "reasoning", "") or "").strip()
-            if reasoning:
-                truncated = reasoning[:600]
-                if len(reasoning) > 600:
-                    truncated += "…"
-                reasoning_block = (
-                    f"**Agent Reasoning** (excerpt — full version in trace file):\n"
-                    f"> {truncated}\n\n"
-                )
-        skeleton_block = (
-            ""
-            if is_timeout
-            else (
-                f"**Tool call skeleton** (Read the full trace file for thinking, text, tool I/O):\n"
-                f"{skeleton}\n\n"
-            )
-        )
+    # Build the compact failure index table.
+    cat_col = " Category |" if show_category else ""
+    cat_sep = "----------|" if show_category else ""
+    header = f"| # | Turns | Solver Answer | GT |{cat_col} Trace |"
+    sep = f"|---|-------|---------------|----|{cat_sep}-------|"
+    rows = []
+    for r in failure_rows:
+        cat_cell = f" {r['category']} |" if show_category else ""
+        rows.append(f"| {r['i']} | {r['turns']} | {r['answer']} | {r['gt']} |{cat_cell} `{r['trace']}` |")
+    table = "\n".join([header, sep] + rows)
 
-        # cost_str was computed up front (timeouts → "n/a (run cut short)"
-        # to avoid the misleading $0.0000).
-        failure_sections.append(
-            f"### {item_label} {i} [Category: {category}]  (turns={turns}, cost={cost_str})\n"
-            f"{status_banner}"
-            f"**Question**: {question_text}\n"
-            f"**Ground Truth**: {str(ground_truth)[:200]}\n"
-            f"{agent_answer_block}"
-            f"{reasoning_block}"
-            f"\n{skeleton_block}"
-            f"**Full trace**: `{full_path_ref}`\n"
-        )
-
-    failures_text = "\n".join(failure_sections)
+    n_total = len(traces_with_answers)
+    n_failed = n_timeouts + n_wrong
+    failures_text = (
+        f"{table}\n\n"
+        f"Each trace file contains question, ground truth, solver reasoning, "
+        f"and full tool-call transcript. **Read the traces you need** to "
+        f"diagnose root causes before proposing a skill."
+    )
 
     constraints_section = f"\n## Task Constraints\n{task_constraints}\n" if task_constraints else ""
 
@@ -326,7 +306,7 @@ def build_proposer_query(
     # agent runs under (dataset description, file-system rules, answer format,
     # etc.) so evolved skills don't duplicate or contradict it.
     base_prompt_section = (
-        "\n## Base agent's system prompt (read this — the base agent already knows the following; do NOT duplicate it in your skill, build on top of it)\n\n"
+        "\n## Base agent's system prompt\n\n"
         f"```\n{solver_prompt.strip()}\n```\n"
         if solver_prompt else ""
     )
@@ -336,7 +316,7 @@ def build_proposer_query(
     # data_root (e.g. `Read(treasury_bulletins_parsed/foo.txt)`) so the
     # evolver can resolve them if it needs to read a file itself.
     runtime_context_section = (
-        f"\n## Runtime context\n- `data_root` = `{data_root}`  (relative paths in tool-call skeletons below resolve against this)\n"
+        f"\n## Runtime context\n- `data_root` = `{data_root}`\n"
         if data_root else ""
     )
 
@@ -395,20 +375,32 @@ This iteration's {len(traces_with_answers)} training sample(s) all passed. The c
 efficiency — see your system prompt's "Phase: efficiency" section for the full task description.
 """
 
-    return f"""{base_prompt_section}{runtime_context_section}## Existing Skills (check before proposing new ones)
-{skills_list}
-{constraints_section}
-## Previous Attempts Feedback
-{feedback_history}
-{runtime_section}
-## {section_title} ({len(traces_with_answers)} samples across categories: {category_summary})
+    # Conditional sections — suppress when empty to reduce noise.
+    existing_skills_section = ""
+    if existing_skills:
+        skills_content = "\n".join([f"- `{s}`" for s in existing_skills])
+        existing_skills_section = f"\n## Existing Skills\n{skills_content}\n"
+
+    feedback_section = ""
+    if feedback_history.strip() and feedback_history.strip() != "No previous attempts.":
+        feedback_section = f"\n## Previous Attempts Feedback\n{feedback_history}\n"
+
+    # Dynamic summary replacing the old "Phase: accuracy" label.
+    parts = []
+    if n_timeouts:
+        parts.append(f"{n_timeouts} timeout{'s' if n_timeouts != 1 else ''}")
+    if n_wrong:
+        parts.append(f"{n_wrong} wrong answer{'s' if n_wrong != 1 else ''}")
+    summary_detail = ", ".join(parts) if parts else "0 failures"
+    summary_line = f"{n_failed} of {n_total} samples failed: {summary_detail}."
+
+    return f"""{base_prompt_section}{runtime_context_section}{existing_skills_section}{constraints_section}{feedback_section}{runtime_section}
+## Current Failures
+
+{summary_line}
 
 {failures_text}
-{past_traces_section}
-## Phase
-
-accuracy — see your system prompt's "Phase: accuracy" section for the full task description.
-"""
+{past_traces_section}"""
 
 
 def build_skill_query(proposer_trace: "AgentTrace[ProposerResponse]") -> str:
@@ -496,6 +488,14 @@ def append_feedback(
 **Justification**: {justification}{outcome_section}{diagnostic_section}
 
 """
+    # Ensure the parent dir exists. The workspace's `.claude/` is not
+    # always git-tracked (it's recreated by the workspace builder, but
+    # uncommitted dirs disappear when the ProgramManager switches branches
+    # — e.g. after a discard, the loop checks out the parent program and
+    # the iter-skill-N branch's `.claude/skills/<name>/` evaporates along
+    # with `.claude/` itself if it has no tracked siblings). Without this
+    # mkdir, `append_feedback` raises FileNotFoundError mid-loop.
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
         f.write(entry)
 

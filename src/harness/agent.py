@@ -50,6 +50,13 @@ def _get_run_stderr_observer() -> Callable[[str], None] | None:
 # table to estimate as it goes.
 _partial_turn_count: ContextVar[int] = ContextVar("partial_turn_count", default=0)
 _partial_cost_usd: ContextVar[float] = ContextVar("partial_cost_usd", default=0.0)
+# Partial message accumulator. Each message that arrives from the SDK
+# stream is appended here. When a run times out, this list is the ONLY
+# record of what the agent actually did (the SDK's terminal ResultMessage
+# never arrives, so `messages=[]` would leave the failure-trace file
+# devoid of transcript — and the evolver hallucinates skills from
+# nothing). Reset to a fresh list at the start of each attempt.
+_partial_messages: ContextVar[list[Any]] = ContextVar("partial_messages", default=[])
 
 
 def _push_partial_state(turn_num: int, cost_usd: float = 0.0) -> None:
@@ -57,6 +64,19 @@ def _push_partial_state(turn_num: int, cost_usd: float = 0.0) -> None:
     _partial_turn_count.set(turn_num)
     if cost_usd > 0:
         _partial_cost_usd.set(cost_usd)
+
+
+def _push_partial_message(msg: Any) -> None:
+    """Append a streamed SDK message to the partial-messages buffer.
+
+    Called by the executor for every message yielded by the SDK's
+    `async for msg in client.receive_response()` loop. On a wall-clock
+    timeout the subprocess is killed mid-stream and no terminal
+    ResultMessage arrives; without this buffer the agent's failure
+    trace file would contain only metadata + the timeout error string,
+    starving the evolver of all diagnostic signal.
+    """
+    _partial_messages.get().append(msg)
 
 # Generic type variable — every Agent[T] produces AgentTrace[T] where T is a Pydantic model
 # (e.g., AgentResponse, SkillProposerResponse, etc.)
@@ -110,8 +130,29 @@ class AgentTrace(BaseModel, Generic[T]):
     parse_error: Optional[str] = None
     raw_structured_output: Optional[Any] = None
 
-    # Full response list for debugging
+    # Full response list for debugging. Note: SDK message objects
+    # (AssistantMessage, ToolUseBlock, etc.) don't roundtrip through
+    # Pydantic JSON serialization — `model_dump()` falls back to `str()`
+    # on the SDK dataclasses, so a cache-replayed trace has structurally
+    # useless string-ified content here regardless of `store_messages`.
+    # See `cached_transcript` for the diagnostic-grade alternative the
+    # cache populates at write time.
     messages: list[Any]
+
+    # Pre-rendered turn-by-turn transcript captured at cache.set() time
+    # via `_render_turn_transcript(trace.messages, ...)`. Populated only
+    # for cache replays; None for fresh traces. `summarize()` falls back
+    # to this when `messages` is empty, so failure-trace files written
+    # by the loop for the evolver contain the actual solver tool-use
+    # history instead of just metadata + an empty Full Result.
+    cached_transcript: Optional[str] = None
+
+    # True when this trace was replayed from RunCache rather than produced
+    # by a fresh agent.run. Lets cost accounting distinguish API spend
+    # actually paid on this run vs. re-shown numbers from a stored trace.
+    # The cache.get setter flips this to True; cache.set always serializes
+    # it as False (a freshly stored trace originated from real inference).
+    from_cache: bool = False
 
     class Config:
         arbitrary_types_allowed = True
@@ -145,6 +186,13 @@ class AgentTrace(BaseModel, Generic[T]):
             lines.append(f"Output: {self.output}")
 
         transcript = _render_turn_transcript(self.messages, tool_result_max_chars)
+
+        # Fall back to the cache-time pre-rendered transcript when the
+        # in-memory messages list won't produce content (cache replays
+        # arrive with structurally-empty messages because SDK objects
+        # don't roundtrip via Pydantic JSON).
+        if not transcript and self.cached_transcript:
+            transcript = self.cached_transcript
 
         if transcript:
             lines.append("\n## Turn-by-turn transcript\n")
@@ -499,6 +547,7 @@ class Agent(Generic[T]):
             # run's timeout report.
             _partial_turn_count.set(0)
             _partial_cost_usd.set(0.0)
+            _partial_messages.set([])  # fresh list per attempt
             try:
                 async with asyncio.timeout(self.timeout_seconds) as tm:
                     # Publish the active timeout to wait_if_paused so a
@@ -586,6 +635,7 @@ class Agent(Generic[T]):
             # are.
             n_turns = _partial_turn_count.get()
             spent = _partial_cost_usd.get()
+            partial_msgs = list(_partial_messages.get())  # snapshot
             err_msg = str(e)
             return AgentTrace(
                 duration_ms=int(self.timeout_seconds * 1000),
@@ -596,7 +646,7 @@ class Agent(Generic[T]):
                 is_error=True,
                 output=None,
                 parse_error=err_msg,
-                messages=[],
+                messages=partial_msgs,
             )
 
         sdk = get_sdk()

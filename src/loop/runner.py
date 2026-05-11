@@ -288,9 +288,19 @@ class SelfImprovingLoop:
         # Checkpoint file for exact resume
         self._checkpoint_path = self._project_root / ".claude" / "loop_checkpoint.json"
 
-        # Cost tracking
+        # Cost tracking. _iter_cost / _total_cost stay as the unified sum
+        # (paid + replayed) for callers that don't care about the split.
+        # The _paid / _replayed counters classify each charge by whether
+        # the underlying AgentTrace came from RunCache (replayed = no
+        # actual API spend on this run) or from a fresh agent.run (paid =
+        # real money). COST log lines surface all three numbers so demos
+        # make it obvious when a re-run was effectively free.
         self._total_cost: float = 0.0
         self._iter_cost: float = 0.0
+        self._total_paid: float = 0.0
+        self._total_replayed: float = 0.0
+        self._iter_paid: float = 0.0
+        self._iter_replayed: float = 0.0
 
         # Trace DB + background reviewer for cross-iteration learning
         db_path = self._project_root / ".cache" / "traces.db"
@@ -307,6 +317,67 @@ class SelfImprovingLoop:
         """Fire an event to the display callback if one is registered."""
         if self.on_event is not None:
             self.on_event(event, data)
+
+    def _charge(self, cost: float | None, *, from_cache: bool) -> None:
+        """Accumulate one trace's cost into the iter counters, classifying
+        it as paid (fresh API spend) or replayed (from RunCache)."""
+        c = float(cost or 0.0)
+        self._iter_cost += c
+        if from_cache:
+            self._iter_replayed += c
+        else:
+            self._iter_paid += c
+
+    def _charge_trace(self, trace: "AgentTrace[Any] | None") -> None:
+        """Convenience: accumulate by reading `trace.from_cache`."""
+        if trace is None:
+            return
+        self._charge(
+            getattr(trace, "total_cost_usd", 0.0),
+            from_cache=bool(getattr(trace, "from_cache", False)),
+        )
+
+    def _iter_reset(self) -> None:
+        """Zero out per-iter cost counters at the start of a new iter."""
+        self._iter_cost = 0.0
+        self._iter_paid = 0.0
+        self._iter_replayed = 0.0
+
+    def _flush_iter_to_total(self) -> None:
+        """Roll the iter counters into the totals (called once per iter)."""
+        self._total_cost += self._iter_cost
+        self._total_paid += self._iter_paid
+        self._total_replayed += self._iter_replayed
+
+    def _fmt_cost_line(self, label: str) -> str:
+        """Single-line cost summary used by COST log lines.
+
+        Renders as `{label}: $0.0123 paid + $0.4567 cached = $0.4690 (98% cached)`.
+        When all spend was paid, the cached half is omitted to keep typical
+        runs uncluttered.
+        """
+        sub = self._iter_cost
+        if sub <= 0:
+            return f"{label}: $0.0000"
+        if self._iter_replayed <= 0:
+            return f"{label}: ${self._iter_paid:.4f} paid"
+        cached_pct = 100.0 * self._iter_replayed / sub
+        return (
+            f"{label}: ${self._iter_paid:.4f} paid + "
+            f"${self._iter_replayed:.4f} cached "
+            f"= ${sub:.4f} ({cached_pct:.0f}% cached)"
+        )
+
+    def _fmt_total_cost_line(self) -> str:
+        if self._total_cost <= 0:
+            return "Total: $0.0000"
+        if self._total_replayed <= 0:
+            return f"Total: ${self._total_paid:.4f} paid"
+        return (
+            f"Total: ${self._total_paid:.4f} paid + "
+            f"${self._total_replayed:.4f} cached "
+            f"(saved {100.0 * self._total_replayed / self._total_cost:.0f}% via cache)"
+        )
 
     def _next_train_sample(self, cat: str) -> tuple[str, str]:
         """Pull the next training sample from `cat`'s pool, with per-cycle shuffling.
@@ -420,7 +491,7 @@ class SelfImprovingLoop:
             # Select parent from frontier using configured strategy
             parent = self._select_parent(iteration_count)
             self.manager.switch_to(parent)
-            self._iter_cost = 0.0  # Reset per-iteration cost
+            self._iter_reset()  # Reset per-iteration cost (paid + replayed)
             _log(f"ITER {iteration_count}/{self.config.max_iterations}", f"Parent: {parent}")
             self._emit("iter_start", iteration=actual_iteration, total=self.config.max_iterations, parent=parent)
 
@@ -477,7 +548,7 @@ class SelfImprovingLoop:
 
             from src.harness.utils import eval_run_ground_truth as _gt_var
             from src.harness.sdk_config import get_sdk
-            from src.evaluation.evaluate import _extract_model
+            from src.evaluation.evaluate import _extract_model, _extract_system_prompt
 
             # Cache wrapper around agent.run, mirroring the pattern in
             # src/evaluation/evaluate.py:evaluate_agent_parallel. Without
@@ -487,7 +558,9 @@ class SelfImprovingLoop:
             # against the same parent program multiple times across launches.
             _train_cache = self.cache  # may be None when --cache false
             _train_sdk = get_sdk()
-            _train_model = _extract_model(self.agents.solver._get_options())
+            _train_opts = self.agents.solver._get_options()
+            _train_model = _extract_model(_train_opts)
+            _train_sys_prompt = _extract_system_prompt(_train_opts)
 
             async def _run_one_train(i: int, question: str, gt: str):
                 tok = _gt_var.set(str(gt))
@@ -499,6 +572,7 @@ class SelfImprovingLoop:
                             self.agents.solver.response_model,
                             sdk=_train_sdk,
                             model=_train_model,
+                            system_prompt=_train_sys_prompt,
                         )
                     if trace is None:
                         trace = await self.agents.solver.run(
@@ -508,6 +582,7 @@ class SelfImprovingLoop:
                             _train_cache.set(
                                 question, trace,
                                 sdk=_train_sdk, model=_train_model,
+                                system_prompt=_train_sys_prompt,
                             )
                     return trace
                 finally:
@@ -532,7 +607,8 @@ class SelfImprovingLoop:
                     )
                 else:
                     traces.append(res)
-            self._iter_cost += sum(t.total_cost_usd for t in traces)
+            for _t in traces:
+                self._charge_trace(_t)
 
             # Backfill base score from first iteration's training traces when deferred
             if iteration_count == 1 and self._val_is_train_subset:
@@ -658,8 +734,8 @@ class SelfImprovingLoop:
                 # and log so the final report reflects actual API spend
                 # (without this, the bottom-of-loop accumulation is skipped by
                 # the `continue` and Total cost ends up at $0).
-                self._total_cost += self._iter_cost
-                _log("COST", f"Iter {iteration_count} cost: ${self._iter_cost:.4f} | Running total: ${self._total_cost:.4f}")
+                self._flush_iter_to_total()
+                _log("COST", self._fmt_cost_line(f"Iter {iteration_count}") + " | " + self._fmt_total_cost_line())
                 self._save_checkpoint(actual_iteration)
                 continue
             else:
@@ -699,8 +775,8 @@ class SelfImprovingLoop:
                         # path in the val-gate branch below).
                         self.manager.switch_to(parent)
                         # Still accumulate the mid-gate cost into iter cost.
-                        self._total_cost += self._iter_cost
-                        _log("COST", f"Iter {iteration_count} cost: ${self._iter_cost:.4f} | Running total: ${self._total_cost:.4f}")
+                        self._flush_iter_to_total()
+                        _log("COST", self._fmt_cost_line(f"Iter {iteration_count}") + " | " + self._fmt_total_cost_line())
                         self._save_checkpoint(actual_iteration)
                         continue
 
@@ -765,9 +841,9 @@ class SelfImprovingLoop:
             frontier_str = ", ".join(f"{n}:{s:.2f}" for n, s in self.manager.get_frontier_with_scores())
             _log("", f"  Frontier: [{frontier_str}]")
 
-            # Report per-iteration and cumulative cost
-            self._total_cost += self._iter_cost
-            _log("COST", f"Iter {iteration_count} cost: ${self._iter_cost:.4f} | Running total: ${self._total_cost:.4f}")
+            # Report per-iteration and cumulative cost (paid + replayed split)
+            self._flush_iter_to_total()
+            _log("COST", self._fmt_cost_line(f"Iter {iteration_count}") + " | " + self._fmt_total_cost_line())
 
             # Save checkpoint at end of each successful iteration
             self._save_checkpoint(actual_iteration)
@@ -778,7 +854,7 @@ class SelfImprovingLoop:
         best_score = frontier[0][1] if frontier else 0.0
 
         _log("DONE", f"{iteration_count} iterations, best: {best or 'base'} ({best_score:.4f})")
-        _log("COST", f"Total cost: ${self._total_cost:.4f}")
+        _log("COST", self._fmt_total_cost_line())
         self._emit("loop_done", best=best or "base", best_score=best_score, iterations=iteration_count)
 
         return LoopResult(
@@ -808,16 +884,16 @@ class SelfImprovingLoop:
             self._emit("baseline", score=0.0)
             return
         _log("", f"  -> Evaluating on {len(self.val_data)} samples...")
-        self._iter_cost = 0.0
+        self._iter_reset()
         base_score, base_cost = await self._evaluate(self.val_data)
-        self._total_cost += self._iter_cost
+        self._flush_iter_to_total()
         self.manager.update_frontier(
             "base", base_score, max_size=self.config.frontier_size,
             cost=base_cost,
         )
         _log("", f"  -> Base score: {base_score:.4f} (avg cost: ${base_cost:.4f})")
         _log("", f"  -> Frontier: {self.manager.get_frontier()}")
-        _log("COST", f"Base eval cost: ${self._iter_cost:.4f} | Total: ${self._total_cost:.4f}")
+        _log("COST", self._fmt_cost_line("Base eval") + " | " + self._fmt_total_cost_line())
         self._emit("baseline", score=base_score)
 
     async def _mid_gate_check(
@@ -851,22 +927,30 @@ class SelfImprovingLoop:
         # to the shared run-cache and future re-runs benefit.
         from src.harness.utils import eval_run_ground_truth as _gt_var
         from src.harness.sdk_config import get_sdk
-        from src.evaluation.evaluate import _extract_model
+        from src.evaluation.evaluate import _extract_model, _extract_system_prompt
 
         cache = self.cache
         sdk = get_sdk()
-        model = _extract_model(self.agents.solver._get_options())
+        opts = self.agents.solver._get_options()
+        model = _extract_model(opts)
+        sys_prompt = _extract_system_prompt(opts)
 
         async def _run_one(i: int, q: str, gt: str) -> AgentTrace:
             tok = _gt_var.set(gt)
             try:
                 trace = None
                 if cache is not None:
-                    trace = cache.get(q, self.agents.solver.response_model, sdk=sdk, model=model)
+                    trace = cache.get(
+                        q, self.agents.solver.response_model,
+                        sdk=sdk, model=model, system_prompt=sys_prompt,
+                    )
                 if trace is None:
                     trace = await self.agents.solver.run(q, tag=f"midgate {i + 1}/{n}")
                     if cache is not None:
-                        cache.set(q, trace, sdk=sdk, model=model)
+                        cache.set(
+                            q, trace, sdk=sdk, model=model,
+                            system_prompt=sys_prompt,
+                        )
                 return trace
             finally:
                 _gt_var.reset(tok)
@@ -878,14 +962,24 @@ class SelfImprovingLoop:
         fixed = 0
         regressed = 0
         same = 0
+        prior_scores: list[float] = []
+        new_scores: list[float] = []
         sample_lines: list[str] = []
         midgate_cost = 0.0
+        midgate_paid = 0.0
         for (q, a, c, prior_score), res in zip(train_sample_scores, raw):
             if isinstance(res, BaseException) or res is None or getattr(res, "output", None) is None:
                 new_score = 0.0
             else:
                 new_score = float(self.scorer(q, str(res.output.final_answer), str(a)))
-                midgate_cost += float(getattr(res, "total_cost_usd", 0) or 0)
+                _c = float(getattr(res, "total_cost_usd", 0) or 0)
+                midgate_cost += _c
+                if not bool(getattr(res, "from_cache", False)):
+                    midgate_paid += _c
+                self._charge_trace(res)
+
+            prior_scores.append(prior_score)
+            new_scores.append(new_score)
 
             prior_passed = prior_score >= 0.8
             now_passed = new_score >= 0.8
@@ -905,22 +999,43 @@ class SelfImprovingLoop:
         for line in sample_lines:
             _log("", line)
 
-        self._iter_cost += midgate_cost
-        _log("", f"  -> Mid-gate result: fixed={fixed}, regressed={regressed}, same={same}, cost=${midgate_cost:.4f}")
+        # Note: per-trace charges already accumulated above via _charge_trace.
+        # Just report the visible mid-gate sub-total here (paid + cached).
+        _midgate_cached = midgate_cost - midgate_paid
+        _midgate_str = f"${midgate_cost:.4f}"
+        if _midgate_cached > 0:
+            _midgate_str = f"${midgate_paid:.4f} paid + ${_midgate_cached:.4f} cached = ${midgate_cost:.4f}"
+        prior_mean = sum(prior_scores) / max(1, len(prior_scores))
+        new_mean = sum(new_scores) / max(1, len(new_scores))
+        _log("", f"  -> Mid-gate result: fixed={fixed}, regressed={regressed}, same={same}, "
+                  f"mean {prior_mean:.3f} → {new_mean:.3f}, cost={_midgate_str}")
 
-        passed = (
-            fixed >= self.config.mid_gate_min_fixed
-            and regressed <= self.config.mid_gate_max_regressions
-        )
-        if not passed:
-            reasons = []
-            if fixed < self.config.mid_gate_min_fixed:
-                reasons.append(f"fixed {fixed} < min {self.config.mid_gate_min_fixed}")
-            if regressed > self.config.mid_gate_max_regressions:
-                reasons.append(f"regressed {regressed} > max {self.config.mid_gate_max_regressions}")
-            _log("", f"  -> Mid-gate FAILED ({'; '.join(reasons)})")
+        policy = getattr(self.config, "mid_gate_policy", "counts")
+        if policy == "mean":
+            # Lenient: pass iff post-skill mean ≥ pre-skill mean. Tolerates a
+            # single noise-driven regression as long as net average doesn't
+            # drop. Better signal than per-sample counts when LLM scoring is
+            # noisy on borderline answers.
+            passed = new_mean >= prior_mean
+            if passed:
+                _log("", f"  -> Mid-gate PASSED [policy=mean] (post-mean {new_mean:.3f} ≥ pre-mean {prior_mean:.3f}) — proceeding to full val GATE")
+            else:
+                _log("", f"  -> Mid-gate FAILED [policy=mean] (post-mean {new_mean:.3f} < pre-mean {prior_mean:.3f})")
         else:
-            _log("", f"  -> Mid-gate PASSED — proceeding to full val GATE")
+            # Strict counts policy (back-compat default).
+            passed = (
+                fixed >= self.config.mid_gate_min_fixed
+                and regressed <= self.config.mid_gate_max_regressions
+            )
+            if not passed:
+                reasons = []
+                if fixed < self.config.mid_gate_min_fixed:
+                    reasons.append(f"fixed {fixed} < min {self.config.mid_gate_min_fixed}")
+                if regressed > self.config.mid_gate_max_regressions:
+                    reasons.append(f"regressed {regressed} > max {self.config.mid_gate_max_regressions}")
+                _log("", f"  -> Mid-gate FAILED [policy=counts] ({'; '.join(reasons)})")
+            else:
+                _log("", f"  -> Mid-gate PASSED [policy=counts] — proceeding to full val GATE")
         return passed
 
     async def _evaluate(self, data: list[tuple[str, str, str]]) -> tuple[float, float]:
@@ -946,7 +1061,7 @@ class SelfImprovingLoop:
         for result in results:
             if result.trace is not None:
                 c = result.trace.total_cost_usd or 0.0
-                self._iter_cost += c
+                self._charge_trace(result.trace)
                 total_cost += c
                 cost_samples += 1
             # Per-question score logging — without it the operator only sees
@@ -1056,7 +1171,7 @@ class SelfImprovingLoop:
             except TimeoutError as e:
                 _log("", f"  [WARN] Skill evolver timed out: {e}")
                 return None
-            self._iter_cost += evolver_trace.total_cost_usd
+            self._charge_trace(evolver_trace)
 
             if evolver_trace.output is None:
                 _log("", f"  [WARN] Skill evolver failed: {evolver_trace.parse_error}")
@@ -1080,7 +1195,7 @@ class SelfImprovingLoop:
 
         elif evolution_mode == "skill_only":
             proposer_trace = await self.agents.skill_proposer.run(proposer_query)
-            self._iter_cost += proposer_trace.total_cost_usd
+            self._charge_trace(proposer_trace)
 
             if proposer_trace.output is None:
                 _log("", f"  [WARN] Skill proposer failed: {proposer_trace.parse_error}")
@@ -1120,7 +1235,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
 
             skills_before = set(self._get_active_skills())
             skill_trace = await self.agents.skill_generator.run(skill_query)
-            self._iter_cost += skill_trace.total_cost_usd
+            self._charge_trace(skill_trace)
             skills_after = set(self._get_active_skills())
             new_skills = skills_after - skills_before
             created_skill = next(iter(new_skills)) if new_skills else None
@@ -1145,7 +1260,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
 
         else:  # prompt_only
             proposer_trace = await self.agents.prompt_proposer.run(proposer_query)
-            self._iter_cost += proposer_trace.total_cost_usd
+            self._charge_trace(proposer_trace)
 
             if proposer_trace.output is None:
                 _log("", f"  [WARN] Prompt proposer failed: {proposer_trace.parse_error}")
@@ -1168,7 +1283,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
                 proposer_trace, original_prompt
             )
             prompt_trace = await self.agents.prompt_generator.run(prompt_query)
-            self._iter_cost += prompt_trace.total_cost_usd
+            self._charge_trace(prompt_trace)
             if prompt_trace.output:
                 update_prompt_file(
                     self._prompt_path, prompt_trace.output.optimized_prompt

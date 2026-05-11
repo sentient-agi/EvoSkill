@@ -6,6 +6,7 @@ Each program is stored as a git branch with:
 - .claude/skills/: Generated skills for this program
 """
 
+import logging
 import random
 import subprocess
 from pathlib import Path
@@ -14,6 +15,8 @@ from typing import Any
 import yaml
 
 from .models import ProgramConfig
+
+logger = logging.getLogger(__name__)
 
 
 class ProgramManager:
