@@ -6,7 +6,7 @@ import os
 
 
 PROVIDER_ENV_KEYS: dict[str, tuple[str, ...]] = {
-    "anthropic": ("ANTHROPIC_API_KEY",),
+    "anthropic": ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"),
     "openai": ("OPENAI_API_KEY",),
     "google": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
     "openrouter": ("OPENROUTER_API_KEY", "LLM_API_KEY"),
@@ -49,9 +49,7 @@ def ensure_provider_api_key(provider: str | None) -> str:
 
     expected = " or ".join(env_names)
     display_provider = "OpenRouter" if normalized == "openrouter" else normalized
-    raise RuntimeError(
-        f"{display_provider} API key not configured. Set {expected}."
-    )
+    raise RuntimeError(f"{display_provider} API key not configured. Set {expected}.")
 
 
 def apply_provider_auth_env(provider: str | None, env: dict[str, str]) -> None:
