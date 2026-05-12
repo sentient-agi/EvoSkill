@@ -106,15 +106,24 @@ def load_harbor_tasks(cfg) -> pd.DataFrame:
     Side effect: populates the module-level TASK_PATH_INDEX so HarborAgent can
     resolve a task id back to its on-disk digest directory.
     """
-    root_str = cfg.dataset.harbor_tasks_root
-    if not root_str:
+    # Use the property which handles docker/daytona path overrides.
+    try:
+        root = cfg.harbor_tasks_root_path
+    except AttributeError:
+        # Fallback for tests or plain config dicts without the property.
+        root_str = cfg.dataset.harbor_tasks_root
+        if not root_str:
+            raise HarborLoadError(
+                "dataset.harbor_tasks_root must be set when dataset.source = 'harbor'"
+            )
+        root = Path(root_str).expanduser()
+        if not root.is_absolute():
+            root = (cfg.project_root / root).resolve()
+
+    if not str(root) or str(root) == '.':
         raise HarborLoadError(
             "dataset.harbor_tasks_root must be set when dataset.source = 'harbor'"
         )
-
-    root = Path(root_str).expanduser()
-    if not root.is_absolute():
-        root = (cfg.project_root / root).resolve()
 
     tasks = _iter_task_dirs(root)
     if not tasks:

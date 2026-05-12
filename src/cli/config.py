@@ -146,6 +146,15 @@ class ProjectConfig:
         path = Path(self.dataset.path)
         return path if path.is_absolute() else self.project_root / path
 
+    @property
+    def harbor_tasks_root_path(self) -> Path:
+        """Return the harbor tasks root, with container override and relative path support."""
+        override = _docker_path_overrides().get("harbor_tasks_root")
+        if override:
+            return Path(override)
+        path = Path(self.dataset.harbor_tasks_root)
+        return path if path.is_absolute() else self.project_root / path
+
 
 def _find_project_root(start: Path | None = None) -> Path | None:
     """Walk up from start looking for a .evoskill/ directory."""

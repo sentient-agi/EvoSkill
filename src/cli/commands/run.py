@@ -20,6 +20,15 @@ from src.cli.report import RunReport, SkillEntry
 console = Console()
 
 
+def _is_under_project(path: Path, project_root: Path) -> bool:
+    """Check if path is inside the project root."""
+    try:
+        path.relative_to(project_root)
+        return True
+    except ValueError:
+        return False
+
+
 # ── display helpers ──────────────────────────────────────────────────────────
 
 def _build_table(rows: list[dict], baseline_score: float | None) -> Table:
@@ -241,11 +250,15 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
             backend.setup(cfg)
             console.print(f" [green]done[/green]")
 
-            dataset_path = cfg.dataset_path.resolve()
             project_root = cfg.project_root.resolve()
-            external_dataset = not dataset_path.is_relative_to(project_root)
             external_dirs = [d for d in cfg.harness.data_dirs
                              if not Path(d).resolve().is_relative_to(project_root)]
+
+            if cfg.dataset.source == "harbor":
+                harbor_root = cfg.harbor_tasks_root_path.resolve()
+                external_harbor = not _is_under_project(harbor_root, project_root)
+            else:
+                external_harbor = False
 
             console.print("  [2/4] Uploading...")
             def _upload_log(msg):
@@ -253,8 +266,12 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
             backend.upload(cfg, log=_upload_log)
             console.print(f"         [green]done[/green]")
             console.print(f"         project files → /workspace/")
-            if external_dataset:
-                console.print(f"         dataset ({dataset_path.name}) → /mnt/dataset/")
+            if cfg.dataset.source == "harbor" and external_harbor:
+                console.print(f"         harbor tasks ({harbor_root.name}) → /mnt/harbor_tasks/")
+            elif cfg.dataset.source != "harbor":
+                dataset_path = cfg.dataset_path.resolve()
+                if not _is_under_project(dataset_path, project_root):
+                    console.print(f"         dataset ({dataset_path.name}) → /mnt/dataset/")
             if external_dirs:
                 for d in external_dirs:
                     name = Path(d).name
@@ -376,7 +393,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
 
     if cfg.dataset.source == "harbor":
         console.print(
-            f"  Harbor dataset: {cfg.dataset.harbor_tasks_root}  ({len(val_data)} val tasks)\n"
+            f"  Harbor dataset: {cfg.harbor_tasks_root_path}  ({len(val_data)} val tasks)\n"
         )
     else:
         console.print(f"  Dataset: {cfg.dataset_path}  ({len(val_data)} val samples)\n")

@@ -148,14 +148,37 @@ class DaytonaBackend(RemoteBackend):
             sandbox.fs.create_folder(parent, mode="755")
             sandbox.fs.upload_file(file_path.read_bytes(), remote_path)
 
-        # 3. Upload dataset if external
-        dataset_path = cfg.dataset_path.resolve()
-        if not _is_under(dataset_path, project_root.resolve()):
-            log(f"dataset ({dataset_path.name})...")
-            container_dataset = f"/mnt/dataset/{dataset_path.name}"
-            sandbox.fs.create_folder("/mnt/dataset", mode="755")
-            sandbox.fs.upload_file(dataset_path.read_bytes(), container_dataset)
-            self._path_overrides["dataset_path"] = container_dataset
+        # 3. Upload dataset or harbor tasks if external
+        if cfg.dataset.source == "harbor":
+            harbor_root = cfg.harbor_tasks_root_path.resolve()
+            if not _is_under(harbor_root, project_root.resolve()):
+                log(f"harbor tasks ({harbor_root.name})...")
+                container_harbor = "/mnt/harbor_tasks"
+                # Tar and upload the harbor tasks directory
+                with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
+                    tar_path = f.name
+                subprocess.run(
+                    ["tar", "czf", tar_path, "-C", str(harbor_root.parent), harbor_root.name],
+                    check=True,
+                )
+                tar_bytes = Path(tar_path).read_bytes()
+                Path(tar_path).unlink(missing_ok=True)
+                remote_tar = "/tmp/harbor_tasks.tar.gz"
+                sandbox.fs.upload_file(tar_bytes, remote_tar)
+                sandbox.process.exec(
+                    f"mkdir -p {container_harbor} && "
+                    f"tar xzf {remote_tar} -C {container_harbor} --strip-components=1 && "
+                    f"rm {remote_tar}",
+                )
+                self._path_overrides["harbor_tasks_root"] = container_harbor
+        else:
+            dataset_path = cfg.dataset_path.resolve()
+            if not _is_under(dataset_path, project_root.resolve()):
+                log(f"dataset ({dataset_path.name})...")
+                container_dataset = f"/mnt/dataset/{dataset_path.name}"
+                sandbox.fs.create_folder("/mnt/dataset", mode="755")
+                sandbox.fs.upload_file(dataset_path.read_bytes(), container_dataset)
+                self._path_overrides["dataset_path"] = container_dataset
 
         # 4. Upload external data dirs via tar (chunked if > 50MB)
         MAX_CHUNK = 50 * 1024 * 1024
