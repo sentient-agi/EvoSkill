@@ -368,6 +368,15 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
         )
         raise SystemExit(1)
 
+    # Auto-fix harbor.env when running on Daytona — Docker is not available in sandboxes
+    if cfg.harbor.enabled and cfg.execution == "daytona" and cfg.harbor.env == "docker":
+        cfg.harbor.env = "daytona"
+        if not quiet:
+            console.print(
+                "[yellow]Note:[/yellow] Overriding harbor.env to 'daytona' — "
+                "Docker is not available inside Daytona sandboxes."
+            )
+
     console.print(f"\n  [bold]EvoSkill[/bold] — {cfg.evolution.mode}  |  {cfg.harness.name}  |  {cfg.evolution.iterations} iterations\n")
 
     if cfg.harness.name == "openhands":

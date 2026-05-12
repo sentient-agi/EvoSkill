@@ -89,12 +89,14 @@ def _is_under(path: Path, parent: Path) -> bool:
 
 
 def _collect_api_keys() -> dict[str, str]:
-    """Collect LLM API keys from environment."""
+    """Collect LLM and infrastructure API keys from environment."""
     keys = [
         "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY",
         "LLM_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
         "GROQ_API_KEY", "MISTRAL_API_KEY", "TOGETHER_API_KEY",
         "DEEPSEEK_API_KEY", "XAI_API_KEY",
+        # Infrastructure keys — needed by Harbor when env=daytona
+        "DAYTONA_API_KEY",
     ]
     return {k: os.environ[k] for k in keys if k in os.environ}
 
