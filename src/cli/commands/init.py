@@ -42,7 +42,7 @@ DEFAULT_CONFIG = {
         'category_column': '',
         'train_ratio': 0.18,
         'val_ratio': 0.12,
-        'harbor_tasks_root': '.evoskill/harbor/datasets',
+        'harbor_tasks_root': '',
         'harbor_limit': None,
         'harbor_include': [],
         'harbor_exclude': [],
@@ -413,7 +413,7 @@ def _load_prompt_defaults(config_path: Path) -> dict[str, str]:
         'gt_col': DEFAULT_CONFIG['dataset']['ground_truth_column'],
         'category_col': 'category',
         'data_dirs_raw': '',
-        'harbor_tasks_root': '.evoskill/harbor/datasets',
+        'harbor_tasks_root': '',
     }
     if not config_path.exists():
         return defaults
@@ -502,9 +502,12 @@ def init_cmd():
                 validate=_require_non_empty,
             ).ask()
 
+        # Build dataset-specific subfolder: "swe-bench/swe-bench-verified" → "swe-bench-verified"
+        dataset_slug = harbor_dataset_name.split('/')[-1] if '/' in harbor_dataset_name else harbor_dataset_name
+        default_root = f'.evoskill/harbor/datasets/{dataset_slug}'
         harbor_tasks_root = questionary.text(
-            'Where to store Harbor tasks?',
-            default=prompt_defaults['harbor_tasks_root'],
+            'Where to store this dataset?',
+            default=default_root,
             validate=_require_non_empty,
         ).ask()
     else:
