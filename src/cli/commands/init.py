@@ -352,7 +352,7 @@ def init_cmd():
             'remote': remote_config,
         },
     )
-    (evoskill_dir / 'task.md').write_text(TASK_MD_TEMPLATE)
+    (evoskill_dir / 'task.md').write_text(TASK_MD_TEMPLATE, encoding='utf-8')
 
     # Save init-time state (original branch for reset landing)
     original_branch = 'main'
@@ -365,7 +365,7 @@ def init_cmd():
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
     state = {'original_branch': original_branch}
-    (evoskill_dir / 'state.json').write_text(json.dumps(state, indent=2) + '\n')
+    (evoskill_dir / 'state.json').write_text(json.dumps(state, indent=2) + '\n', encoding='utf-8')
 
     click.echo(f'\n  ✓ Created {cwd}/{EVOSKILL_DIR}')
     click.echo(f'    Runtime:   {harness}')

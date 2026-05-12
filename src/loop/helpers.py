@@ -224,7 +224,7 @@ def update_prompt_file(file_path: Path, new_prompt: str) -> None:
         file_path: Path to the prompt file.
         new_prompt: The new prompt content.
     """
-    file_path.write_text(new_prompt.strip())
+    file_path.write_text(new_prompt.strip(), encoding='utf-8')
 
 
 def build_skill_query_from_skill_proposer(

@@ -104,7 +104,7 @@ def ensure_opencode_project_permissions(
 
     permission["external_directory"] = external_directory
     config["permission"] = permission
-    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    config_path.write_text(json.dumps(config, indent=2) + "\n", encoding='utf-8')
 
 
 def build_opencode_options(

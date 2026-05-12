@@ -193,7 +193,7 @@ class SelfImprovingLoop:
             "per_cat_offset": self._per_cat_offset,
         }
         self._checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        self._checkpoint_path.write_text(json.dumps(checkpoint, indent=2))
+        self._checkpoint_path.write_text(json.dumps(checkpoint, indent=2), encoding='utf-8')
 
     def _load_checkpoint(self) -> int | None:
         """Load checkpoint if exists.
