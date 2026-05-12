@@ -545,6 +545,9 @@ def init_cmd():
 
     remote_config = None
     if exec_mode == 'daytona':
+        click.echo('\n  Note: Daytona uploads all data to a remote sandbox. Large datasets')
+        click.echo('  or data directories (>1GB compressed) may fail to upload.')
+        click.echo('  If uploads fail, try Docker or local mode instead.\n')
         import os
         env_key = os.environ.get('DAYTONA_API_KEY', '')
         api_key_input = questionary.text(

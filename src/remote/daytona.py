@@ -242,8 +242,8 @@ class DaytonaBackend(RemoteBackend):
                     raise RuntimeError(
                         f"Data directory '{mapping.host_path.name}' is too large "
                         f"({tar_size / 1024 / 1024:.0f}MB compressed) for Daytona upload. "
-                        f"Max is 1GB. Host the data externally and download it in the "
-                        f"remote command, or remove it from data_dirs."
+                        f"Max is 1GB. Try running with Docker (evoskill run --docker) "
+                        f"or locally (evoskill run) instead."
                     )
 
                 tar_bytes = Path(tar_path).read_bytes()
