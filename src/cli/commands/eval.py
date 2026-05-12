@@ -26,6 +26,21 @@ def eval_cmd(verbose: bool, config_path: Path | None):
     from src.registry import ProgramManager
     from src.schemas import AgentResponse
     cfg = load_config(config_path=config_path)
+
+    # Validate harbor + dataset coherence
+    if cfg.harbor.enabled and cfg.dataset.source != "harbor":
+        console.print(
+            "[red]Error:[/red] harbor.enabled is true but dataset.source is "
+            f"'{cfg.dataset.source}'. Set dataset.source = \"harbor\" in config.toml."
+        )
+        raise SystemExit(1)
+    if cfg.dataset.source == "harbor" and not cfg.harbor.enabled:
+        console.print(
+            "[red]Error:[/red] dataset.source is 'harbor' but harbor.enabled is false. "
+            "Set harbor.enabled = true in config.toml."
+        )
+        raise SystemExit(1)
+
     sdk = cfg.harness.name
     set_sdk(sdk)
 

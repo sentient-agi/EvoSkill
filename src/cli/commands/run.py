@@ -337,6 +337,20 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
     if not cfg.task_constraints and not quiet:
         console.print("[yellow]Warning:[/yellow] No constraints defined in task.md — skills may be unconstrained.")
 
+    # Validate harbor + dataset coherence
+    if cfg.harbor.enabled and cfg.dataset.source != "harbor":
+        console.print(
+            "[red]Error:[/red] harbor.enabled is true but dataset.source is "
+            f"'{cfg.dataset.source}'. Set dataset.source = \"harbor\" in config.toml."
+        )
+        raise SystemExit(1)
+    if cfg.dataset.source == "harbor" and not cfg.harbor.enabled:
+        console.print(
+            "[red]Error:[/red] dataset.source is 'harbor' but harbor.enabled is false. "
+            "Set harbor.enabled = true in config.toml."
+        )
+        raise SystemExit(1)
+
     console.print(f"\n  [bold]EvoSkill[/bold] — {cfg.evolution.mode}  |  {cfg.harness.name}  |  {cfg.evolution.iterations} iterations\n")
 
     if cfg.harness.name == "openhands":
