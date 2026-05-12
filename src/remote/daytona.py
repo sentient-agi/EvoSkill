@@ -307,14 +307,23 @@ class DaytonaBackend(RemoteBackend):
             cwd="/workspace",
         )
 
+        # Ensure harbor CLI is available when harbor mode is enabled
+        if cfg.harbor.enabled:
+            sandbox.process.exec(
+                "which harbor > /dev/null 2>&1 || pip install harbor 2>&1",
+            )
+
         # Preflight checks
-        preflight = sandbox.process.exec(
+        preflight_cmd = (
             "echo '=== evoskill ===' && which evoskill && "
             "echo '=== ANTHROPIC_API_KEY ===' && "
             "([ -n \"$ANTHROPIC_API_KEY\" ] && echo 'set' || echo 'NOT SET') && "
             "echo '=== python ===' && python --version && "
-            "echo '=== git ===' && git --version",
+            "echo '=== git ===' && git --version"
         )
+        if cfg.harbor.enabled:
+            preflight_cmd += " && echo '=== harbor ===' && which harbor && harbor --version"
+        preflight = sandbox.process.exec(preflight_cmd)
         if "NOT SET" in preflight.result and cfg.harness.name == "claude":
             raise RuntimeError(
                 f"Preflight failed: ANTHROPIC_API_KEY not set in sandbox.\n"
