@@ -203,7 +203,9 @@ class DaytonaBackend(RemoteBackend):
                 Path(tar_path).unlink(missing_ok=True)
                 remote_tar = "/tmp/harbor_tasks.tar.gz"
                 sandbox.fs.upload_file(tar_bytes, remote_tar)
-                sandbox.process.exec(
+                _exec_async(
+                    sandbox,
+                    UPLOAD_SESSION_ID,
                     f"mkdir -p {container_harbor} && "
                     f"tar xzf {remote_tar} -C {container_harbor} --strip-components=1 && "
                     f"rm {remote_tar}",
