@@ -21,6 +21,38 @@ from src.remote.sync import (
 )
 
 SESSION_ID = "evoskill-run"
+UPLOAD_SESSION_ID = "evoskill-upload"
+
+
+def _exec_async(sandbox, session_id: str, command: str, *,
+                poll_interval: float = 3.0, max_wait_seconds: int = 1800) -> None:
+    """Run a long-running command on the sandbox without blocking on HTTP.
+
+    Uses Daytona's session API with run_async=True so the SDK call returns
+    immediately. Polls get_session_command() until exit_code is set. This
+    avoids ConnectionResetError that occurs when a single exec() call blocks
+    long enough for the server/proxy to drop the connection.
+    """
+    from daytona import SessionExecuteRequest
+
+    req = SessionExecuteRequest(command=command, run_async=True)
+    response = sandbox.process.execute_session_command(session_id, req)
+    cmd_id = response.cmd_id
+
+    deadline = time.monotonic() + max_wait_seconds
+    while time.monotonic() < deadline:
+        info = sandbox.process.get_session_command(session_id, cmd_id)
+        if info.exit_code is not None:
+            if info.exit_code != 0:
+                logs = sandbox.process.get_session_command_logs(session_id, cmd_id)
+                tail = (logs.output or logs.stdout or logs.stderr or "")[-4000:]
+                raise RuntimeError(
+                    f"Sandbox command failed (exit={info.exit_code}):\n{command}\n--- logs ---\n{tail}"
+                )
+            return
+        time.sleep(poll_interval)
+
+    raise RuntimeError(f"Sandbox command timed out after {max_wait_seconds}s:\n{command}")
 
 
 def _make_client(api_key: str):
@@ -120,6 +152,11 @@ class DaytonaBackend(RemoteBackend):
         if log is None:
             log = lambda msg: None  # noqa: E731
 
+        # Create a session for long-running upload-side commands. Heavy work
+        # is dispatched via _exec_async (run_async + polling) so the SDK never
+        # holds a single HTTP connection long enough for the server to drop it.
+        sandbox.process.create_session(UPLOAD_SESSION_ID)
+
         # 1. Create and upload git bundle
         log("git bundle...")
         with tempfile.NamedTemporaryFile(suffix=".bundle", delete=False) as f:
@@ -130,9 +167,10 @@ class DaytonaBackend(RemoteBackend):
 
         bundle_bytes = Path(bundle_path).read_bytes()
         sandbox.fs.upload_file(bundle_bytes, "/workspace/repo.bundle")
-        sandbox.process.exec(
+        _exec_async(
+            sandbox,
+            UPLOAD_SESSION_ID,
             "cd /workspace && git init && git bundle unbundle repo.bundle && rm repo.bundle",
-            cwd="/workspace",
         )
 
         # 2. Upload project files (skip .git — handled by bundle)
@@ -215,7 +253,9 @@ class DaytonaBackend(RemoteBackend):
                     remote_tar = f"/tmp/{mapping.host_path.name}.tar.gz"
                     sandbox.fs.upload_file(tar_bytes, remote_tar)
                     log(f"extracting {mapping.host_path.name}...")
-                    sandbox.process.exec(
+                    _exec_async(
+                        sandbox,
+                        UPLOAD_SESSION_ID,
                         f"mkdir -p {mapping.container_path} && "
                         f"tar xzf {remote_tar} -C /mnt/data/ && "
                         f"rm {remote_tar}",
@@ -228,17 +268,31 @@ class DaytonaBackend(RemoteBackend):
                         chunk = tar_bytes[i:i + MAX_CHUNK]
                         sandbox.fs.upload_file(chunk, f"/tmp/chunks/part_{i:010d}")
                         log(f"  chunk {idx + 1}/{n_chunks}")
+                    log(f"reassembling chunks...")
+                    _exec_async(
+                        sandbox,
+                        UPLOAD_SESSION_ID,
+                        "cat /tmp/chunks/part_* > /tmp/combined.tar.gz && "
+                        "rm -rf /tmp/chunks",
+                    )
                     log(f"extracting {mapping.host_path.name}...")
-                    sandbox.process.exec(
-                        f"cat /tmp/chunks/part_* > /tmp/combined.tar.gz && "
+                    _exec_async(
+                        sandbox,
+                        UPLOAD_SESSION_ID,
                         f"mkdir -p {mapping.container_path} && "
                         f"tar xzf /tmp/combined.tar.gz -C /mnt/data/ && "
-                        f"rm -rf /tmp/chunks /tmp/combined.tar.gz",
-                        timeout=600,
+                        f"rm -f /tmp/combined.tar.gz",
                     )
 
         if container_data_dirs:
             self._path_overrides["data_dirs"] = ",".join(container_data_dirs)
+
+        # Best-effort cleanup of upload session — sandbox tear-down handles it
+        # too, but explicit deletion releases server-side state immediately.
+        try:
+            sandbox.process.delete_session(UPLOAD_SESSION_ID)
+        except Exception:
+            pass
 
     def run(self, cfg: ProjectConfig, extra_args: list[str] | None = None) -> RunInfo:
         from daytona import SessionExecuteRequest
