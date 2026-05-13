@@ -356,7 +356,6 @@ harbor_limit = 50                    # max number of tasks
 | Docker | `harbor run -e docker` | Harbor tasks dir mounted as volume |
 | Daytona | `harbor run -e daytona` | Harbor uses Daytona API to create task sandboxes. `DAYTONA_API_KEY` is forwarded automatically. |
 
-> **Note:** When running on Daytona, EvoSkill automatically overrides `harbor.env` to `"daytona"` since Docker is not available inside Daytona sandboxes.
 
 ## CLI Reference
 
