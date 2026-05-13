@@ -89,12 +89,14 @@ def _is_under(path: Path, parent: Path) -> bool:
 
 
 def _collect_api_keys() -> dict[str, str]:
-    """Collect LLM API keys from environment."""
+    """Collect LLM and infrastructure API keys from environment."""
     keys = [
         "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY",
         "LLM_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
         "GROQ_API_KEY", "MISTRAL_API_KEY", "TOGETHER_API_KEY",
         "DEEPSEEK_API_KEY", "XAI_API_KEY",
+        # Infrastructure keys — needed by Harbor when env=daytona
+        "DAYTONA_API_KEY",
     ]
     return {k: os.environ[k] for k in keys if k in os.environ}
 
@@ -186,14 +188,39 @@ class DaytonaBackend(RemoteBackend):
             sandbox.fs.create_folder(parent, mode="755")
             sandbox.fs.upload_file(file_path.read_bytes(), remote_path)
 
-        # 3. Upload dataset if external
-        dataset_path = cfg.dataset_path.resolve()
-        if not _is_under(dataset_path, project_root.resolve()):
-            log(f"dataset ({dataset_path.name})...")
-            container_dataset = f"/mnt/dataset/{dataset_path.name}"
-            sandbox.fs.create_folder("/mnt/dataset", mode="755")
-            sandbox.fs.upload_file(dataset_path.read_bytes(), container_dataset)
-            self._path_overrides["dataset_path"] = container_dataset
+        # 3. Upload dataset or harbor tasks if external
+        if cfg.dataset.source == "harbor":
+            harbor_root = cfg.harbor_tasks_root_path.resolve()
+            if not _is_under(harbor_root, project_root.resolve()):
+                log(f"harbor tasks ({harbor_root.name})...")
+                container_harbor = "/mnt/harbor_tasks"
+                # Tar and upload the harbor tasks directory
+                with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
+                    tar_path = f.name
+                subprocess.run(
+                    ["tar", "czf", tar_path, "-C", str(harbor_root.parent), harbor_root.name],
+                    check=True,
+                )
+                tar_bytes = Path(tar_path).read_bytes()
+                Path(tar_path).unlink(missing_ok=True)
+                remote_tar = "/tmp/harbor_tasks.tar.gz"
+                sandbox.fs.upload_file(tar_bytes, remote_tar)
+                _exec_async(
+                    sandbox,
+                    UPLOAD_SESSION_ID,
+                    f"mkdir -p {container_harbor} && "
+                    f"tar xzf {remote_tar} -C {container_harbor} --strip-components=1 && "
+                    f"rm {remote_tar}",
+                )
+                self._path_overrides["harbor_tasks_root"] = container_harbor
+        else:
+            dataset_path = cfg.dataset_path.resolve()
+            if not _is_under(dataset_path, project_root.resolve()):
+                log(f"dataset ({dataset_path.name})...")
+                container_dataset = f"/mnt/dataset/{dataset_path.name}"
+                sandbox.fs.create_folder("/mnt/dataset", mode="755")
+                sandbox.fs.upload_file(dataset_path.read_bytes(), container_dataset)
+                self._path_overrides["dataset_path"] = container_dataset
 
         # 4. Upload external data dirs via tar (chunked if > 50MB)
         MAX_CHUNK = 50 * 1024 * 1024
@@ -217,8 +244,8 @@ class DaytonaBackend(RemoteBackend):
                     raise RuntimeError(
                         f"Data directory '{mapping.host_path.name}' is too large "
                         f"({tar_size / 1024 / 1024:.0f}MB compressed) for Daytona upload. "
-                        f"Max is 1GB. Host the data externally and download it in the "
-                        f"remote command, or remove it from data_dirs."
+                        f"Max is 1GB. Try running with Docker (evoskill run --docker) "
+                        f"or locally (evoskill run) instead."
                     )
 
                 tar_bytes = Path(tar_path).read_bytes()
@@ -282,14 +309,23 @@ class DaytonaBackend(RemoteBackend):
             cwd="/workspace",
         )
 
+        # Ensure harbor CLI is available when harbor mode is enabled
+        if cfg.harbor.enabled:
+            sandbox.process.exec(
+                "which harbor > /dev/null 2>&1 || pip install harbor 2>&1",
+            )
+
         # Preflight checks
-        preflight = sandbox.process.exec(
+        preflight_cmd = (
             "echo '=== evoskill ===' && which evoskill && "
             "echo '=== ANTHROPIC_API_KEY ===' && "
             "([ -n \"$ANTHROPIC_API_KEY\" ] && echo 'set' || echo 'NOT SET') && "
             "echo '=== python ===' && python --version && "
-            "echo '=== git ===' && git --version",
+            "echo '=== git ===' && git --version"
         )
+        if cfg.harbor.enabled:
+            preflight_cmd += " && echo '=== harbor ===' && which harbor && harbor --version"
+        preflight = sandbox.process.exec(preflight_cmd)
         if "NOT SET" in preflight.result and cfg.harness.name == "claude":
             raise RuntimeError(
                 f"Preflight failed: ANTHROPIC_API_KEY not set in sandbox.\n"

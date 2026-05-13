@@ -31,14 +31,23 @@ def _build_compose(cfg: ProjectConfig, extra_args: list[str]) -> dict:
     # Path overrides for dataset/data_dirs inside the container
     path_overrides: dict[str, str] = {}
 
-    # Mount dataset if external
-    dataset_path = cfg.dataset_path.resolve()
-    try:
-        dataset_path.relative_to(project_root)
-    except ValueError:
-        container_dataset = f"/mnt/dataset/{dataset_path.name}"
-        volumes.append(f"{dataset_path}:{container_dataset}:ro")
-        path_overrides["dataset_path"] = container_dataset
+    # Mount dataset / harbor tasks if external
+    if cfg.dataset.source == "harbor":
+        harbor_root = cfg.harbor_tasks_root_path.resolve()
+        try:
+            harbor_root.relative_to(project_root)
+        except ValueError:
+            container_harbor = "/mnt/harbor_tasks"
+            volumes.append(f"{harbor_root}:{container_harbor}:ro")
+            path_overrides["harbor_tasks_root"] = container_harbor
+    else:
+        dataset_path = cfg.dataset_path.resolve()
+        try:
+            dataset_path.relative_to(project_root)
+        except ValueError:
+            container_dataset = f"/mnt/dataset/{dataset_path.name}"
+            volumes.append(f"{dataset_path}:{container_dataset}:ro")
+            path_overrides["dataset_path"] = container_dataset
 
     # Mount external data dirs
     container_data_dirs = []

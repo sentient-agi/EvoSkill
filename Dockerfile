@@ -1,6 +1,6 @@
 # EvoSkill container image.
 #
-# Supports all harnesses: Claude, OpenCode, Codex, Goose, OpenHands.
+# Supports all harnesses: Claude, OpenCode, Codex, Goose, OpenHands, Harbor.
 #
 # Local (BYOC):
 #   docker build -t evoskill .
@@ -62,7 +62,12 @@ RUN pip install --no-cache-dir \
     "tqdm>=4.60.0" \
     "httpx>=0.23.0" \
     "hatchling" \
-    "daytona>=0.1.0"
+    "daytona>=0.1.0" \
+    "harbor>=0.6.0"
+
+# Non-root user
+RUN useradd -m -s /bin/bash evoskill \
+    && mkdir -p /workspace && chown evoskill:evoskill /workspace
 
 # Non-root user
 RUN useradd -m -s /bin/bash evoskill \

@@ -20,6 +20,15 @@ from src.cli.report import RunReport, SkillEntry
 console = Console()
 
 
+def _is_under_project(path: Path, project_root: Path) -> bool:
+    """Check if path is inside the project root."""
+    try:
+        path.relative_to(project_root)
+        return True
+    except ValueError:
+        return False
+
+
 # ── display helpers ──────────────────────────────────────────────────────────
 
 def _build_table(rows: list[dict], baseline_score: float | None) -> Table:
@@ -241,11 +250,15 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
             backend.setup(cfg)
             console.print(f" [green]done[/green]")
 
-            dataset_path = cfg.dataset_path.resolve()
             project_root = cfg.project_root.resolve()
-            external_dataset = not dataset_path.is_relative_to(project_root)
             external_dirs = [d for d in cfg.harness.data_dirs
                              if not Path(d).resolve().is_relative_to(project_root)]
+
+            if cfg.dataset.source == "harbor":
+                harbor_root = cfg.harbor_tasks_root_path.resolve()
+                external_harbor = not _is_under_project(harbor_root, project_root)
+            else:
+                external_harbor = False
 
             console.print("  [2/4] Uploading...")
             def _upload_log(msg):
@@ -253,8 +266,12 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
             backend.upload(cfg, log=_upload_log)
             console.print(f"         [green]done[/green]")
             console.print(f"         project files → /workspace/")
-            if external_dataset:
-                console.print(f"         dataset ({dataset_path.name}) → /mnt/dataset/")
+            if cfg.dataset.source == "harbor" and external_harbor:
+                console.print(f"         harbor tasks ({harbor_root.name}) → /mnt/harbor_tasks/")
+            elif cfg.dataset.source != "harbor":
+                dataset_path = cfg.dataset_path.resolve()
+                if not _is_under_project(dataset_path, project_root):
+                    console.print(f"         dataset ({dataset_path.name}) → /mnt/dataset/")
             if external_dirs:
                 for d in external_dirs:
                     name = Path(d).name
@@ -337,6 +354,29 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
     if not cfg.task_constraints and not quiet:
         console.print("[yellow]Warning:[/yellow] No constraints defined in task.md — skills may be unconstrained.")
 
+    # Validate harbor + dataset coherence
+    if cfg.harbor.enabled and cfg.dataset.source != "harbor":
+        console.print(
+            "[red]Error:[/red] harbor.enabled is true but dataset.source is "
+            f"'{cfg.dataset.source}'. Set dataset.source = \"harbor\" in config.toml."
+        )
+        raise SystemExit(1)
+    if cfg.dataset.source == "harbor" and not cfg.harbor.enabled:
+        console.print(
+            "[red]Error:[/red] dataset.source is 'harbor' but harbor.enabled is false. "
+            "Set harbor.enabled = true in config.toml."
+        )
+        raise SystemExit(1)
+
+    # Auto-fix harbor.env when running on Daytona — Docker is not available in sandboxes
+    if cfg.harbor.enabled and cfg.execution == "daytona" and cfg.harbor.env == "docker":
+        cfg.harbor.env = "daytona"
+        if not quiet:
+            console.print(
+                "[yellow]Note:[/yellow] Overriding harbor.env to 'daytona' — "
+                "Docker is not available inside Daytona sandboxes."
+            )
+
     console.print(f"\n  [bold]EvoSkill[/bold] — {cfg.evolution.mode}  |  {cfg.harness.name}  |  {cfg.evolution.iterations} iterations\n")
 
     if cfg.harness.name == "openhands":
@@ -353,8 +393,19 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
     except FileNotFoundError:
         console.print(f"[red]Error:[/red] Dataset not found at {cfg.dataset_path}")
         raise SystemExit(1)
+    except Exception as exc:
+        # Catches HarborLoadError without importing it (avoids cycle).
+        if exc.__class__.__name__ == "HarborLoadError":
+            console.print(f"[red]Error:[/red] Harbor dataset: {exc}")
+            raise SystemExit(1)
+        raise
 
-    console.print(f"  Dataset: {cfg.dataset_path}  ({len(val_data)} val samples)\n")
+    if cfg.dataset.source == "harbor":
+        console.print(
+            f"  Harbor dataset: {cfg.harbor_tasks_root_path}  ({len(val_data)} val tasks)\n"
+        )
+    else:
+        console.print(f"  Dataset: {cfg.dataset_path}  ({len(val_data)} val samples)\n")
 
     # Build agents — use task.md description as the base agent prompt
     base_factory = make_base_agent_options_from_task(
@@ -363,13 +414,38 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
         data_dirs=cfg.harness.data_dirs,
         project_root=cfg.project_root,
     )
-    agents = LoopAgents(
-        base=Agent(
+
+    if cfg.harbor.enabled:
+        from src.harness.harbor import HarborAgent
+        skills_source = cfg.project_root / ".claude" / "skills"
+        base_agent = HarborAgent(
+            project_root=cfg.project_root,
+            skills_source_dir=skills_source,
+            inner_agent=cfg.harbor.inner_agent,
+            inner_model=cfg.harbor.inner_model,
+            env=cfg.harbor.env,
+            n_concurrent=cfg.harbor.n_concurrent,
+            timeout_seconds=cfg.harness.timeout_seconds,
+            max_retries=cfg.harness.max_retries,
+            jobs_dir=Path(cfg.harbor.jobs_dir) if cfg.harbor.jobs_dir else None,
+            container_skills_path=cfg.harbor.container_skills_path,
+            timeout_multiplier=cfg.harbor.timeout_multiplier,
+            extra_args=cfg.harbor.extra_args,
+        )
+        console.print(
+            f"  [cyan]Harbor mode:[/cyan] inner agent={cfg.harbor.inner_agent}  "
+            f"env={cfg.harbor.env}  n_concurrent={cfg.harbor.n_concurrent}\n"
+        )
+    else:
+        base_agent = Agent(
             base_factory,
             AgentResponse,
             timeout_seconds=cfg.harness.timeout_seconds,
             max_retries=cfg.harness.max_retries,
-        ),
+        )
+
+    agents = LoopAgents(
+        base=base_agent,
         skill_proposer=Agent(
             make_skill_proposer_options(
                 project_root=cfg.project_root,

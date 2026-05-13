@@ -13,7 +13,7 @@
   <a href="https://github.com/sentient-agi/EvoSkill/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache 2.0-007ec6?style=for-the-badge" alt="License: Apache 2.0"></a>
 </p>
 
-<b>Turn your general AI agents into state-of-the-art specialists with a benchmark and EvoSkill, a toolkit for automatically creating and improving AI skills, compatible with Claude Code, Codex CLI, OpenCode, OpenHands, Goose, and more.</b>
+<b>Turn your general AI agents into state-of-the-art specialists with a benchmark and EvoSkill, a toolkit for automatically creating and improving AI skills, compatible with Claude Code, Codex CLI, OpenCode, OpenHands, Goose, Harbor, and more.</b>
 
 <b>EvoSkill</b> significantly extends the feedback-driven idea of <b>[GEPA](https://github.com/sentient-agi/gepa-plus)</b> from single-file optimization to complete agent evolution. Instead of only revising one prompt in place like GEPA, EvoSkill proposes multiple skill and prompt mutations jointly, evaluates new variants on held-out data, and has each iteration produce an entirely new agent program.
 
@@ -60,6 +60,11 @@ Also join us on [Discord](https://discord.gg/sentientfoundation) to discuss your
       <td><a href="https://openai.com/index/introducing-codex/">Codex CLI</a></td>
       <td>✅</td>
       <td>Skill discovery via .agents/skills/ symlink</td>
+    </tr>
+    <tr>
+      <td><a href="https://github.com/harbor-framework/harbor">Harbor</a></td>
+      <td>✅</td>
+      <td>Containerized task benchmarks with built-in verifiers</td>
     </tr>
   </tbody>
 </table>   
@@ -124,6 +129,7 @@ Also join us on [Discord](https://discord.gg/sentientfoundation) to discuss your
 
 - [Installation](#installation)
 - [Quickstart](#quickstart)
+- [Harbor Integration](#harbor-integration)
 - [CLI Reference](#cli-reference)
 - [Configuration Reference](#configuration-reference)
 - [How It Works](#how-it-works)
@@ -155,6 +161,7 @@ brew install --cask claude-code    # Claude Code
 brew install opencode              # OpenCode (v1.4.0+)
 brew install --cask codex          # Codex CLI
 brew install block-goose-cli       # Goose (v1.25.0+)
+pip install harbor                 # Harbor (containerized benchmarks)
 ```
 
 **Common auth setup:**
@@ -180,12 +187,15 @@ OpenRouter-backed evolution runs also accept `LLM_API_KEY`, but `OPENROUTER_API_
 
 Run `evoskill init` inside any git repository:
 
+**CSV dataset (question/answer pairs):**
+
 ```bash
 $ evoskill init
 
   EvoSkill — Project Setup
 
   Which agent runtime? › claude
+  Dataset source? › CSV
   Absolute path to dataset CSV? › /path/to/questions.csv
   Question/input column name? › question
   Answer column name? › answer
@@ -194,10 +204,24 @@ $ evoskill init
   How do you want to run EvoSkill? › Local
 ```
 
+**Harbor dataset (containerized benchmark tasks):**
+
+```bash
+$ evoskill init
+
+  EvoSkill — Project Setup
+
+  Which agent runtime? › claude
+  Dataset source? › Harbor
+  Choose a Harbor dataset: › swe-bench/swe-bench-verified
+  Where to store this dataset? › .evoskill/harbor/datasets/swe-bench-verified
+  How do you want to run EvoSkill? › Local
+```
+
 This creates `.evoskill/config.toml` and `.evoskill/task.md`.
 
-- **Dataset path** — absolute path to your CSV with questions and ground-truth answers.
-- **Data dirs** — absolute paths to directories the agent needs (e.g. reference documents). Comma-separated if multiple.
+- **Dataset source** — CSV (static question/answer pairs) or Harbor (containerized tasks with built-in verifiers).
+- **Data dirs** — (CSV only) absolute paths to directories the agent needs. Comma-separated if multiple.
 - **Execution mode** — Local (direct), Docker (containerized, supports remote via `DOCKER_HOST`), or Daytona (managed cloud sandbox).
 
 ### 2. Describe your task
@@ -264,6 +288,75 @@ ls .claude/skills/             # all learned skills
 ```
 
 Copy `.claude/program.yaml` and `.claude/skills/` into your deployment to use the evolved agent configuration.
+
+## Harbor Integration
+
+[Harbor](https://github.com/harbor-framework/harbor) is a framework for evaluating AI agents against containerized benchmark tasks. EvoSkill integrates with Harbor as an alternative to CSV-based datasets, using Harbor's built-in verifiers as the scoring mechanism.
+
+### How it works
+
+Instead of running agents against static CSV questions, Harbor mode:
+
+1. **Loads tasks** from a downloaded Harbor dataset (each task has its own Dockerfile, test harness, and verifier)
+2. **Runs `harbor run`** for each task, spawning a sandboxed container where the coding agent solves the task
+3. **Reads the verifier reward** from the container output (0.0 to 1.0)
+4. **Feeds results** back into EvoSkill's self-improvement loop to evolve better skills
+
+### Setup
+
+```bash
+pip install harbor    # install the Harbor CLI
+```
+
+Run `evoskill init` and select **Harbor** as the dataset source. Init will show available datasets from the [Harbor Hub](https://hub.harborframework.com/datasets) and auto-download your selection.
+
+### Configuration
+
+When Harbor is selected during init, the following config is auto-generated:
+
+```toml
+[dataset]
+source = "harbor"
+harbor_tasks_root = ".evoskill/harbor/datasets/swe-bench-verified"
+train_ratio = 0.18
+val_ratio = 0.12
+
+[harbor]
+enabled = true
+inner_agent = "claude-code"      # auto-derived from harness.name
+inner_model = "anthropic/claude-sonnet-4-6"  # auto-derived from harness.model
+env = "docker"                   # "docker" for local, "daytona" for remote
+n_concurrent = 1
+timeout_multiplier = 1.0
+container_skills_path = "/skills"
+
+[scorer]
+type = "harbor"
+```
+
+The `inner_agent` and `inner_model` are automatically derived from your harness selection. The `env` is derived from your execution mode (`docker` for local/Docker, `daytona` for Daytona).
+
+### Filtering tasks
+
+You can filter which tasks are included using glob patterns:
+
+```toml
+[dataset]
+harbor_include = ["swe-bench/*"]     # only include matching tasks
+harbor_exclude = ["swe-bench/hard*"] # exclude matching tasks
+harbor_difficulty = ["easy", "medium"]  # filter by difficulty metadata
+harbor_limit = 50                    # max number of tasks
+```
+
+### Execution modes
+
+| Mode | How Harbor runs tasks | Notes |
+|------|----------------------|-------|
+| Local | `harbor run -e docker` | Requires Docker installed locally |
+| Docker | `harbor run -e docker` | Harbor tasks dir mounted as volume |
+| Daytona | `harbor run -e daytona` | Harbor uses Daytona API to create task sandboxes. `DAYTONA_API_KEY` is forwarded automatically. |
+
+> **Note:** When running on Daytona, EvoSkill automatically overrides `harbor.env` to `"daytona"` since Docker is not available inside Daytona sandboxes.
 
 ## CLI Reference
 
@@ -408,6 +501,7 @@ Notes:
 | `exact` | Case-insensitive exact string match |
 | `llm` | LLM-as-judge grading with a custom rubric |
 | `script` | Shell script scorer — receives `{predicted}` and `{expected}` as variables |
+| `harbor` | Reads reward from Harbor's built-in verifier (auto-set when dataset source is Harbor) |
 
 **LLM scorer options:**
 

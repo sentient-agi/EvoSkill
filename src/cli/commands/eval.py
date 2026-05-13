@@ -26,6 +26,21 @@ def eval_cmd(verbose: bool, config_path: Path | None):
     from src.registry import ProgramManager
     from src.schemas import AgentResponse
     cfg = load_config(config_path=config_path)
+
+    # Validate harbor + dataset coherence
+    if cfg.harbor.enabled and cfg.dataset.source != "harbor":
+        console.print(
+            "[red]Error:[/red] harbor.enabled is true but dataset.source is "
+            f"'{cfg.dataset.source}'. Set dataset.source = \"harbor\" in config.toml."
+        )
+        raise SystemExit(1)
+    if cfg.dataset.source == "harbor" and not cfg.harbor.enabled:
+        console.print(
+            "[red]Error:[/red] dataset.source is 'harbor' but harbor.enabled is false. "
+            "Set harbor.enabled = true in config.toml."
+        )
+        raise SystemExit(1)
+
     sdk = cfg.harness.name
     set_sdk(sdk)
 
@@ -38,6 +53,11 @@ def eval_cmd(verbose: bool, config_path: Path | None):
     except FileNotFoundError:
         console.print(f'[red]Error:[/red] Dataset not found at {cfg.dataset_path}')
         raise SystemExit(1)
+    except Exception as exc:
+        if exc.__class__.__name__ == "HarborLoadError":
+            console.print(f'[red]Error:[/red] Harbor dataset: {exc}')
+            raise SystemExit(1)
+        raise
 
     manager = ProgramManager(cwd=cfg.project_root)
     best = manager.get_best_from_frontier()
@@ -49,16 +69,33 @@ def eval_cmd(verbose: bool, config_path: Path | None):
 
     console.print(f'\n  Evaluating [bold]{best}[/bold] on {len(val_data)} samples...\n')
 
-    agent = Agent(
-        make_base_agent_options(
-            model=cfg.harness.model,
-            data_dirs=cfg.harness.data_dirs,
+    if cfg.harbor.enabled:
+        from src.harness.harbor import HarborAgent
+        agent = HarborAgent(
             project_root=cfg.project_root,
-        ),
-        AgentResponse,
-        timeout_seconds=cfg.harness.timeout_seconds,
-        max_retries=cfg.harness.max_retries,
-    )
+            skills_source_dir=cfg.project_root / '.claude' / 'skills',
+            inner_agent=cfg.harbor.inner_agent,
+            inner_model=cfg.harbor.inner_model,
+            env=cfg.harbor.env,
+            n_concurrent=cfg.harbor.n_concurrent,
+            timeout_seconds=cfg.harness.timeout_seconds,
+            max_retries=cfg.harness.max_retries,
+            jobs_dir=Path(cfg.harbor.jobs_dir) if cfg.harbor.jobs_dir else None,
+            container_skills_path=cfg.harbor.container_skills_path,
+            timeout_multiplier=cfg.harbor.timeout_multiplier,
+            extra_args=cfg.harbor.extra_args,
+        )
+    else:
+        agent = Agent(
+            make_base_agent_options(
+                model=cfg.harness.model,
+                data_dirs=cfg.harness.data_dirs,
+                project_root=cfg.project_root,
+            ),
+            AgentResponse,
+            timeout_seconds=cfg.harness.timeout_seconds,
+            max_retries=cfg.harness.max_retries,
+        )
     scorer = make_scorer(cfg)
 
     qa_data = [(q, a) for q, a, _ in val_data]

@@ -15,21 +15,25 @@ if TYPE_CHECKING:
 def load_and_split(cfg: ProjectConfig):
     from src.api.data_utils import stratified_split
 
-    data = pd.read_csv(cfg.dataset_path)
+    if cfg.dataset.source == "harbor":
+        from src.api.harbor_loader import load_harbor_tasks
+        data = load_harbor_tasks(cfg)
+    else:
+        data = pd.read_csv(cfg.dataset_path)
 
-    renames: dict[str, str] = {}
-    if cfg.dataset.question_column != "question":
-        renames[cfg.dataset.question_column] = "question"
-    if cfg.dataset.ground_truth_column != "ground_truth":
-        renames[cfg.dataset.ground_truth_column] = "ground_truth"
-    if renames:
-        data.rename(columns=renames, inplace=True)
+        renames: dict[str, str] = {}
+        if cfg.dataset.question_column != "question":
+            renames[cfg.dataset.question_column] = "question"
+        if cfg.dataset.ground_truth_column != "ground_truth":
+            renames[cfg.dataset.ground_truth_column] = "ground_truth"
+        if renames:
+            data.rename(columns=renames, inplace=True)
 
-    if cfg.dataset.category_column and cfg.dataset.category_column in data.columns:
-        if cfg.dataset.category_column != "category":
-            data.rename(columns={cfg.dataset.category_column: "category"}, inplace=True)
-    elif "category" not in data.columns:
-        data["category"] = "default"
+        if cfg.dataset.category_column and cfg.dataset.category_column in data.columns:
+            if cfg.dataset.category_column != "category":
+                data.rename(columns={cfg.dataset.category_column: "category"}, inplace=True)
+        elif "category" not in data.columns:
+            data["category"] = "default"
 
     return stratified_split(
         data,
@@ -152,6 +156,10 @@ async def call_llm(provider: str, model: str, prompt: str) -> str:
 
 def make_scorer(cfg: ProjectConfig):
     from src.loop.runner import _score_multi_tolerance
+
+    if cfg.scorer.type == "harbor":
+        from src.evaluation.harbor_scorer import harbor_reward_scorer
+        return harbor_reward_scorer
 
     if cfg.scorer.type == "exact":
 
