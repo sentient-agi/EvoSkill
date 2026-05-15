@@ -726,13 +726,13 @@ class TestCodexOptions:
             schema={"type": "object"},
             tools=["Read", "Bash"],
             project_root=tmp_path,
-            model="codex-mini-latest",
+            model="gpt-5.1-codex-mini",
         )
 
         assert result["system"] == "You are helpful."
         assert result["output_schema"]["type"] == "object"
         assert result["output_schema"]["additionalProperties"] is False
-        assert result["model"] == "codex-mini-latest"
+        assert result["model"] == "gpt-5.1-codex-mini"
         assert result["working_directory"] == str(tmp_path.resolve())
         assert "Read" in result["tools"]
         assert "Bash" in result["tools"]
@@ -812,7 +812,7 @@ def _make_codex_turn(final_response=None, turn_id="turn-abc", thread_id="thread-
     )
 
 
-def _make_codex_get_options(model="codex-mini-latest", tools=None):
+def _make_codex_get_options(model="gpt-5.1-codex-mini", tools=None):
     return lambda: {
         "model": model,
         "tools": tools or ["Read", "Bash"],
@@ -919,6 +919,64 @@ class TestCodexParseResponse:
 
         assert fields["output"] is None
         assert "ValidationError" in fields["parse_error"]
+
+
+# ===========================================================================
+# TestCodexExecuteQuery — execute_query()
+# ===========================================================================
+
+class TestCodexExecuteQuery:
+    """Test Codex SDK invocation without requiring a real codex binary."""
+
+    def test_passes_thread_options_and_prompt_to_sdk(self, monkeypatch, tmp_path):
+        import asyncio
+        import sys
+        import types
+
+        captured = {}
+
+        class FakeThread:
+            async def run(self, prompt, run_opts):
+                captured["prompt"] = prompt
+                captured["run_opts"] = run_opts
+                return types.SimpleNamespace(final_response='{"final_answer":"ok","reasoning":"r"}')
+
+        class FakeCodex:
+            def __init__(self, options=None):
+                captured["codex_options"] = options
+
+            def start_thread(self, thread_opts):
+                captured["thread_opts"] = thread_opts
+                return FakeThread()
+
+        fake_sdk = types.ModuleType("openai_codex_sdk")
+        fake_sdk.Codex = FakeCodex
+        monkeypatch.setitem(sys.modules, "openai_codex_sdk", fake_sdk)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+        from src.harness.codex.executor import execute_query
+
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        options = {
+            "system": "System instructions.",
+            "output_schema": {"type": "object"},
+            "model": "gpt-5.1-codex-mini",
+            "working_directory": str(tmp_path),
+            "data_dirs": [str(data_dir)],
+        }
+
+        result = asyncio.run(execute_query(options, "Answer this."))
+
+        assert result[0].final_response
+        assert captured["codex_options"] == {"api_key": "sk-test"}
+        assert captured["thread_opts"] == {
+            "working_directory": str(tmp_path),
+            "model": "gpt-5.1-codex-mini",
+            "additional_directories": [str(data_dir)],
+        }
+        assert captured["run_opts"] == {"output_schema": {"type": "object"}}
+        assert captured["prompt"] == "System instructions.\n\nAnswer this."
 
 
 # ===========================================================================

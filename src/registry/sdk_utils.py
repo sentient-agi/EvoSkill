@@ -168,7 +168,7 @@ def options_to_config(
         elif sdk == "codex":
             base_metadata.update({
                 "sdk": "codex",
-                "model": options.get("model", "codex-mini-latest"),
+                "model": options.get("model", "gpt-5.1-codex-mini"),
                 "working_directory": options.get("working_directory"),
             })
             output_format = {"schema": options.get("output_schema", {})}

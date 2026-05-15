@@ -40,7 +40,7 @@ class HarnessConfig:
 @dataclass
 class EvolutionConfig:
     mode: Literal['skill_only', 'prompt_only'] = 'skill_only'
-    iterations: int = 20
+    iterations: int = 7
     frontier_size: int = 3
     concurrency: int = 4
     no_improvement_limit: int = 5
@@ -49,17 +49,43 @@ class EvolutionConfig:
 
 @dataclass
 class DatasetConfig:
+    source: Literal['csv', 'harbor'] = 'csv'
     path: str = '/absolute/path/to/questions.csv'
     question_column: str = 'question'
     ground_truth_column: str = 'ground_truth'
     category_column: str | None = None
     train_ratio: float = 0.18
     val_ratio: float = 0.12
+    # Harbor-specific (only used when source == "harbor")
+    harbor_tasks_root: str = ''       # path to a downloaded harbor dataset dir
+    harbor_limit: int | None = None   # max tasks to include
+    harbor_include: list[str] = field(default_factory=list)  # glob patterns on task id
+    harbor_exclude: list[str] = field(default_factory=list)
+    harbor_difficulty: list[str] = field(default_factory=list)  # e.g. ["easy"] — empty = no filter
+
+
+@dataclass
+class HarborConfig:
+    """Run the base agent inside Harbor sandboxes instead of via the LLM SDK.
+
+    When enabled, the base agent's run() invokes `harbor run -p <task>` with
+    EvoSkill's evolved skills mounted, and reads the reward from reward.txt.
+    Proposer/generator agents continue to use harness.name's SDK normally.
+    """
+    enabled: bool = False
+    inner_agent: str = 'claude-code'           # one of harbor's registered agents
+    inner_model: str = 'anthropic/claude-sonnet-4-5'
+    env: Literal['docker', 'daytona', 'modal', 'e2b', 'runloop'] = 'docker'
+    n_concurrent: int = 1                      # parallel trials per harbor invocation
+    timeout_multiplier: float = 1.0
+    jobs_dir: str = ''                         # where to drop harbor jobs/<id>/ output (default: <project>/.evoskill/harbor_jobs)
+    container_skills_path: str = '/skills'     # path inside container we mount evolved skills to
+    extra_args: list[str] = field(default_factory=list)  # passthrough to harbor run
 
 
 @dataclass
 class ScorerConfig:
-    type: Literal['exact', 'multi_tolerance', 'llm', 'script'] = 'multi_tolerance'
+    type: Literal['exact', 'multi_tolerance', 'llm', 'script', 'harbor'] = 'multi_tolerance'
     rubric: str | None = None
     model: str | None = None
     provider: str | None = None
@@ -102,6 +128,7 @@ class ProjectConfig:
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     scorer: ScorerConfig = field(default_factory=ScorerConfig)
     remote: RemoteConfig | None = None
+    harbor: HarborConfig = field(default_factory=HarborConfig)
     execution: str = 'local'  # 'local', 'docker', or 'daytona'
     project_root: Path = field(default_factory=Path.cwd)
     task_description: str = ''
@@ -118,6 +145,15 @@ class ProjectConfig:
         if override:
             return Path(override)
         path = Path(self.dataset.path)
+        return path if path.is_absolute() else self.project_root / path
+
+    @property
+    def harbor_tasks_root_path(self) -> Path:
+        """Return the harbor tasks root, with container override and relative path support."""
+        override = _docker_path_overrides().get("harbor_tasks_root")
+        if override:
+            return Path(override)
+        path = Path(self.dataset.harbor_tasks_root)
         return path if path.is_absolute() else self.project_root / path
 
 
@@ -233,12 +269,17 @@ def load_config(
 
     execution = raw.get('execution', 'local')
 
+    # Parse [harbor] section (optional)
+    harbor_raw = dict(raw.get('harbor', {}))
+    harbor = HarborConfig(**harbor_raw) if harbor_raw else HarborConfig()
+
     return ProjectConfig(
         harness=harness,
         evolution=evolution,
         dataset=dataset,
         scorer=scorer,
         remote=remote,
+        harbor=harbor,
         execution=execution,
         project_root=root,
         task_description=description,

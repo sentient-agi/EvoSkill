@@ -5,7 +5,7 @@ from typing import Literal
 HarnessName = Literal["claude", "opencode", "codex", "goose", "openhands"]
 
 DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6"
-DEFAULT_CODEX_MODEL = "codex-mini-latest"
+DEFAULT_CODEX_MODEL = "gpt-5.1-codex-mini"
 
 _DEFAULT_MODELS: dict[HarnessName, str] = {
     "claude": DEFAULT_ANTHROPIC_MODEL,

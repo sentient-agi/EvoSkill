@@ -1,46 +1,51 @@
 # EvoSkill container image.
 #
-# Supports all harnesses: Claude, OpenCode, Codex, Goose, OpenHands.
+# Supports all harnesses: Claude, OpenCode, Codex, Goose, OpenHands, Harbor.
 #
 # Local (BYOC):
 #   docker build -t evoskill .
 #   evoskill run --docker
 #
-# Daytona:
-#   docker build -t evoskill .
-#   docker tag evoskill <your-registry>/evoskill:latest
-#   docker push <your-registry>/evoskill:latest
+# Daytona (cross-compile for x86 if on Apple Silicon):
+#   docker buildx build --platform linux/amd64 -t <your-registry>/evoskill:latest --push .
 #   # Set image = "<your-registry>/evoskill:latest" in .evoskill/config.toml
 
 FROM python:3.12-slim
 
 # System deps
+ARG NODE_MAJOR=20
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         git-lfs \
         curl \
         build-essential \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
+        ca-certificates \
+        gnupg \
+        libgomp1 \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+       | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+       > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && git lfs install
 
 # CLI tools for harnesses that need external binaries
 #   claude   — npm (claude-agent-sdk spawns this)
 #   opencode — npm (opencode harness spawns `opencode serve`)
+#   codex    — npm (openai-codex-sdk spawns `codex`)
 #   goose    — tarball from GitHub releases (goose harness spawns this)
-RUN npm install -g @anthropic-ai/claude-code opencode-ai && npm cache clean --force
+RUN npm install -g @anthropic-ai/claude-code opencode-ai @openai/codex && npm cache clean --force
 
+ARG GOOSE_VERSION=v1.33.1
 RUN ARCH=$(uname -m) && \
-    GOOSE_VER=$(curl -sL "https://api.github.com/repos/block/goose/releases/latest" \
-      | grep -m1 '"tag_name"' | cut -d'"' -f4) && \
-    if [ -z "$GOOSE_VER" ]; then \
-      GOOSE_VER=$(curl -sL "https://api.github.com/repos/block/goose/releases" \
-        | grep -m1 '"tag_name"' | cut -d'"' -f4); \
-    fi && \
-    echo "Installing goose ${GOOSE_VER} for ${ARCH}" && \
-    curl -fsSL "https://github.com/block/goose/releases/download/${GOOSE_VER}/goose-${ARCH}-unknown-linux-gnu.tar.gz" \
-    | tar xz -C /usr/local/bin/
+    echo "Installing goose ${GOOSE_VERSION} for ${ARCH}" && \
+    curl --http1.1 -fSL --retry 5 --retry-delay 10 \
+      -o /tmp/goose.tar.gz \
+      "https://github.com/block/goose/releases/download/${GOOSE_VERSION}/goose-${ARCH}-unknown-linux-gnu.tar.gz" && \
+    tar xz -C /usr/local/bin/ -f /tmp/goose.tar.gz && \
+    rm /tmp/goose.tar.gz
 
 # Python deps — core + all harness SDKs.
 # Excludes packages not imported at runtime (torch, datasets, notebook, plotly, etc.)
@@ -59,8 +64,14 @@ RUN pip install --no-cache-dir \
     "pyyaml>=6.0" \
     "questionary>=2.1.1" \
     "tqdm>=4.60.0" \
+    "httpx>=0.23.0" \
     "hatchling" \
-    "daytona>=0.1.0"
+    "daytona>=0.1.0" \
+    "harbor>=0.6.0"
+
+# Non-root user
+RUN useradd -m -s /bin/bash evoskill \
+    && mkdir -p /workspace && chown evoskill:evoskill /workspace
 
 # AppWorld: pip install for Python code only. LFS bundle files (needed by
 # `appworld install`) are fetched at runtime via git clone + lfs pull.
@@ -84,3 +95,5 @@ RUN git config --global user.email "evoskill@sandbox" \
     && git config --global init.defaultBranch main
 
 WORKDIR /workspace
+USER evoskill
+ENV PATH="/home/evoskill/.local/bin:${PATH}"

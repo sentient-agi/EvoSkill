@@ -580,10 +580,10 @@ class ProgramManager:
             # There are staged changes, commit them
             commit_result = self._run_git(["commit", "-m", message], check=False)
             if commit_result.returncode != 0:
-                # Log error but don't crash - common issues: no user config, lock file, etc.
-                import logging
-                logging.warning(
-                    f"Git commit failed (exit {commit_result.returncode}): {commit_result.stderr.strip()}"
+                raise ProgramManagerError(
+                    "Cannot save EvoSkill program changes because Git commit "
+                    f"failed with exit {commit_result.returncode}.\n\n"
+                    f"git commit stderr:\n{commit_result.stderr.strip()}"
                 )
 
     def _git_tag(self, tag: str) -> None:

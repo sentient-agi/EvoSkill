@@ -21,6 +21,38 @@ from src.remote.sync import (
 )
 
 SESSION_ID = "evoskill-run"
+UPLOAD_SESSION_ID = "evoskill-upload"
+
+
+def _exec_async(sandbox, session_id: str, command: str, *,
+                poll_interval: float = 3.0, max_wait_seconds: int = 1800) -> None:
+    """Run a long-running command on the sandbox without blocking on HTTP.
+
+    Uses Daytona's session API with run_async=True so the SDK call returns
+    immediately. Polls get_session_command() until exit_code is set. This
+    avoids ConnectionResetError that occurs when a single exec() call blocks
+    long enough for the server/proxy to drop the connection.
+    """
+    from daytona import SessionExecuteRequest
+
+    req = SessionExecuteRequest(command=command, run_async=True)
+    response = sandbox.process.execute_session_command(session_id, req)
+    cmd_id = response.cmd_id
+
+    deadline = time.monotonic() + max_wait_seconds
+    while time.monotonic() < deadline:
+        info = sandbox.process.get_session_command(session_id, cmd_id)
+        if info.exit_code is not None:
+            if info.exit_code != 0:
+                logs = sandbox.process.get_session_command_logs(session_id, cmd_id)
+                tail = (logs.output or logs.stdout or logs.stderr or "")[-4000:]
+                raise RuntimeError(
+                    f"Sandbox command failed (exit={info.exit_code}):\n{command}\n--- logs ---\n{tail}"
+                )
+            return
+        time.sleep(poll_interval)
+
+    raise RuntimeError(f"Sandbox command timed out after {max_wait_seconds}s:\n{command}")
 
 
 def _make_client(api_key: str):
@@ -57,12 +89,14 @@ def _is_under(path: Path, parent: Path) -> bool:
 
 
 def _collect_api_keys() -> dict[str, str]:
-    """Collect LLM API keys from environment."""
+    """Collect LLM and infrastructure API keys from environment."""
     keys = [
         "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY",
         "LLM_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
         "GROQ_API_KEY", "MISTRAL_API_KEY", "TOGETHER_API_KEY",
         "DEEPSEEK_API_KEY", "XAI_API_KEY",
+        # Infrastructure keys — needed by Harbor when env=daytona
+        "DAYTONA_API_KEY",
     ]
     return {k: os.environ[k] for k in keys if k in os.environ}
 
@@ -114,11 +148,19 @@ class DaytonaBackend(RemoteBackend):
         )
         self._sandbox = self._client.create(params)
 
-    def upload(self, cfg: ProjectConfig) -> None:
+    def upload(self, cfg: ProjectConfig, log=None) -> None:
         sandbox = self._sandbox
         project_root = cfg.project_root
+        if log is None:
+            log = lambda msg: None  # noqa: E731
+
+        # Create a session for long-running upload-side commands. Heavy work
+        # is dispatched via _exec_async (run_async + polling) so the SDK never
+        # holds a single HTTP connection long enough for the server to drop it.
+        sandbox.process.create_session(UPLOAD_SESSION_ID)
 
         # 1. Create and upload git bundle
+        log("git bundle...")
         with tempfile.NamedTemporaryFile(suffix=".bundle", delete=False) as f:
             bundle_path = f.name
 
@@ -127,13 +169,16 @@ class DaytonaBackend(RemoteBackend):
 
         bundle_bytes = Path(bundle_path).read_bytes()
         sandbox.fs.upload_file(bundle_bytes, "/workspace/repo.bundle")
-        sandbox.process.exec(
+        _exec_async(
+            sandbox,
+            UPLOAD_SESSION_ID,
             "cd /workspace && git init && git bundle unbundle repo.bundle && rm repo.bundle",
-            cwd="/workspace",
         )
 
         # 2. Upload project files (skip .git — handled by bundle)
         files = upload_file_list(project_root)
+        file_count = len(files)
+        log(f"project files ({file_count} files)...")
         for file_path in files:
             rel = file_path.relative_to(project_root)
             if rel.parts and rel.parts[0] == ".git":
@@ -143,53 +188,115 @@ class DaytonaBackend(RemoteBackend):
             sandbox.fs.create_folder(parent, mode="755")
             sandbox.fs.upload_file(file_path.read_bytes(), remote_path)
 
-        # 3. Upload dataset if external
-        dataset_path = cfg.dataset_path.resolve()
-        if not _is_under(dataset_path, project_root.resolve()):
-            container_dataset = f"/mnt/dataset/{dataset_path.name}"
-            sandbox.fs.create_folder("/mnt/dataset", mode="755")
-            sandbox.fs.upload_file(dataset_path.read_bytes(), container_dataset)
-            self._path_overrides["dataset_path"] = container_dataset
+        # 3. Upload dataset or harbor tasks if external
+        if cfg.dataset.source == "harbor":
+            harbor_root = cfg.harbor_tasks_root_path.resolve()
+            if not _is_under(harbor_root, project_root.resolve()):
+                log(f"harbor tasks ({harbor_root.name})...")
+                container_harbor = "/mnt/harbor_tasks"
+                # Tar and upload the harbor tasks directory
+                with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
+                    tar_path = f.name
+                subprocess.run(
+                    ["tar", "czf", tar_path, "-C", str(harbor_root.parent), harbor_root.name],
+                    check=True,
+                )
+                tar_bytes = Path(tar_path).read_bytes()
+                Path(tar_path).unlink(missing_ok=True)
+                remote_tar = "/tmp/harbor_tasks.tar.gz"
+                sandbox.fs.upload_file(tar_bytes, remote_tar)
+                _exec_async(
+                    sandbox,
+                    UPLOAD_SESSION_ID,
+                    f"mkdir -p {container_harbor} && "
+                    f"tar xzf {remote_tar} -C {container_harbor} --strip-components=1 && "
+                    f"rm {remote_tar}",
+                )
+                self._path_overrides["harbor_tasks_root"] = container_harbor
+        else:
+            dataset_path = cfg.dataset_path.resolve()
+            if not _is_under(dataset_path, project_root.resolve()):
+                log(f"dataset ({dataset_path.name})...")
+                container_dataset = f"/mnt/dataset/{dataset_path.name}"
+                sandbox.fs.create_folder("/mnt/dataset", mode="755")
+                sandbox.fs.upload_file(dataset_path.read_bytes(), container_dataset)
+                self._path_overrides["dataset_path"] = container_dataset
 
         # 4. Upload external data dirs via tar (chunked if > 50MB)
         MAX_CHUNK = 50 * 1024 * 1024
+        MAX_UPLOAD = 1024 * 1024 * 1024  # 1GB compressed limit
         mappings = remap_data_dirs(cfg.harness.data_dirs, project_root)
         container_data_dirs = []
 
         for mapping in mappings:
             container_data_dirs.append(mapping.container_path)
             if mapping.needs_upload:
+                log(f"compressing {mapping.host_path.name}...")
                 with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
                     tar_path = f.name
                 subprocess.run(
                     ["tar", "czf", tar_path, "-C", str(mapping.host_path.parent), mapping.host_path.name],
                     check=True,
                 )
+                tar_size = Path(tar_path).stat().st_size
+                if tar_size > MAX_UPLOAD:
+                    Path(tar_path).unlink(missing_ok=True)
+                    raise RuntimeError(
+                        f"Data directory '{mapping.host_path.name}' is too large "
+                        f"({tar_size / 1024 / 1024:.0f}MB compressed) for Daytona upload. "
+                        f"Max is 1GB. Try running with Docker (evoskill run --docker) "
+                        f"or locally (evoskill run) instead."
+                    )
+
                 tar_bytes = Path(tar_path).read_bytes()
                 Path(tar_path).unlink(missing_ok=True)
+                tar_mb = len(tar_bytes) / 1024 / 1024
 
                 if len(tar_bytes) <= MAX_CHUNK:
+                    log(f"uploading {mapping.host_path.name} ({tar_mb:.0f}MB)...")
                     remote_tar = f"/tmp/{mapping.host_path.name}.tar.gz"
                     sandbox.fs.upload_file(tar_bytes, remote_tar)
-                    sandbox.process.exec(
+                    log(f"extracting {mapping.host_path.name}...")
+                    _exec_async(
+                        sandbox,
+                        UPLOAD_SESSION_ID,
                         f"mkdir -p {mapping.container_path} && "
                         f"tar xzf {remote_tar} -C /mnt/data/ && "
                         f"rm {remote_tar}",
                     )
                 else:
+                    n_chunks = (len(tar_bytes) + MAX_CHUNK - 1) // MAX_CHUNK
+                    log(f"uploading {mapping.host_path.name} ({tar_mb:.0f}MB, {n_chunks} chunks)...")
                     sandbox.process.exec("mkdir -p /tmp/chunks")
-                    for i in range(0, len(tar_bytes), MAX_CHUNK):
+                    for idx, i in enumerate(range(0, len(tar_bytes), MAX_CHUNK)):
                         chunk = tar_bytes[i:i + MAX_CHUNK]
                         sandbox.fs.upload_file(chunk, f"/tmp/chunks/part_{i:010d}")
-                    sandbox.process.exec(
-                        f"cat /tmp/chunks/part_* > /tmp/combined.tar.gz && "
+                        log(f"  chunk {idx + 1}/{n_chunks}")
+                    log(f"reassembling chunks...")
+                    _exec_async(
+                        sandbox,
+                        UPLOAD_SESSION_ID,
+                        "cat /tmp/chunks/part_* > /tmp/combined.tar.gz && "
+                        "rm -rf /tmp/chunks",
+                    )
+                    log(f"extracting {mapping.host_path.name}...")
+                    _exec_async(
+                        sandbox,
+                        UPLOAD_SESSION_ID,
                         f"mkdir -p {mapping.container_path} && "
                         f"tar xzf /tmp/combined.tar.gz -C /mnt/data/ && "
-                        f"rm -rf /tmp/chunks /tmp/combined.tar.gz",
+                        f"rm -f /tmp/combined.tar.gz",
                     )
 
         if container_data_dirs:
             self._path_overrides["data_dirs"] = ",".join(container_data_dirs)
+
+        # Best-effort cleanup of upload session — sandbox tear-down handles it
+        # too, but explicit deletion releases server-side state immediately.
+        try:
+            sandbox.process.delete_session(UPLOAD_SESSION_ID)
+        except Exception:
+            pass
 
     def run(self, cfg: ProjectConfig, extra_args: list[str] | None = None) -> RunInfo:
         from daytona import SessionExecuteRequest
@@ -202,14 +309,23 @@ class DaytonaBackend(RemoteBackend):
             cwd="/workspace",
         )
 
+        # Ensure harbor CLI is available when harbor mode is enabled
+        if cfg.harbor.enabled:
+            sandbox.process.exec(
+                "which harbor > /dev/null 2>&1 || pip install harbor 2>&1",
+            )
+
         # Preflight checks
-        preflight = sandbox.process.exec(
+        preflight_cmd = (
             "echo '=== evoskill ===' && which evoskill && "
             "echo '=== ANTHROPIC_API_KEY ===' && "
             "([ -n \"$ANTHROPIC_API_KEY\" ] && echo 'set' || echo 'NOT SET') && "
             "echo '=== python ===' && python --version && "
-            "echo '=== git ===' && git --version",
+            "echo '=== git ===' && git --version"
         )
+        if cfg.harbor.enabled:
+            preflight_cmd += " && echo '=== harbor ===' && which harbor && harbor --version"
+        preflight = sandbox.process.exec(preflight_cmd)
         if "NOT SET" in preflight.result and cfg.harness.name == "claude":
             raise RuntimeError(
                 f"Preflight failed: ANTHROPIC_API_KEY not set in sandbox.\n"
@@ -296,26 +412,42 @@ class DaytonaBackend(RemoteBackend):
         sandbox = _get_sandbox(client, sandbox_id)
 
         if follow:
-            last_size = 0
-            while True:
-                logs = sandbox.process.get_session_command_logs(session_id, cmd_id)
-                content = logs.output or logs.stdout or ""
-                if len(content) > last_size:
-                    for line in content[last_size:].splitlines():
-                        yield line
-                    last_size = len(content)
+            import asyncio
+            import queue
+            import threading
 
-                cmd_info = sandbox.process.get_session_command(session_id, cmd_id)
-                if cmd_info.exit_code is not None:
-                    # Final read
-                    logs = sandbox.process.get_session_command_logs(session_id, cmd_id)
-                    final = logs.output or logs.stdout or ""
-                    if len(final) > last_size:
-                        for line in final[last_size:].splitlines():
-                            yield line
-                    yield f"--- Run completed (exit_code={cmd_info.exit_code}) ---"
+            log_queue: queue.Queue[str | None] = queue.Queue()
+
+            def _run_async_stream():
+                """Run the async log stream in a separate thread with its own event loop."""
+                async def _stream():
+                    await sandbox.process.get_session_command_logs_async(
+                        session_id, cmd_id,
+                        on_stdout=lambda chunk: log_queue.put(chunk),
+                        on_stderr=lambda chunk: log_queue.put(chunk),
+                    )
+                    log_queue.put(None)
+
+                loop = asyncio.new_event_loop()
+                try:
+                    loop.run_until_complete(_stream())
+                except Exception:
+                    log_queue.put(None)
+                finally:
+                    loop.close()
+
+            thread = threading.Thread(target=_run_async_stream, daemon=True)
+            thread.start()
+
+            while True:
+                chunk = log_queue.get()
+                if chunk is None:
+                    cmd_info = sandbox.process.get_session_command(session_id, cmd_id)
+                    exit_code = cmd_info.exit_code if cmd_info.exit_code is not None else 0
+                    yield f"--- Run completed (exit_code={exit_code}) ---"
                     break
-                time.sleep(5)
+                for line in chunk.splitlines():
+                    yield line
         else:
             logs = sandbox.process.get_session_command_logs(session_id, cmd_id)
             content = logs.output or logs.stdout or ""
@@ -371,14 +503,33 @@ class DaytonaBackend(RemoteBackend):
         paths = download_file_list(download_cfg)
         for remote_rel in paths:
             remote_path = f"/workspace/{remote_rel}"
-            local_path = project_root / remote_rel
-            try:
-                content = sandbox.fs.download_file(remote_path)
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                if isinstance(content, bytes):
-                    local_path.write_bytes(content)
-            except Exception:
-                pass
+            if remote_rel.endswith("/"):
+                # Directory: list contents and download each file
+                try:
+                    entries = sandbox.fs.list_files(remote_path)
+                except Exception:
+                    continue
+                for entry in entries:
+                    if entry.is_dir:
+                        continue
+                    file_remote = f"{remote_path}{entry.name}"
+                    file_local = project_root / remote_rel / entry.name
+                    try:
+                        content = sandbox.fs.download_file(file_remote)
+                        file_local.parent.mkdir(parents=True, exist_ok=True)
+                        if isinstance(content, bytes):
+                            file_local.write_bytes(content)
+                    except Exception:
+                        pass
+            else:
+                local_path = project_root / remote_rel
+                try:
+                    content = sandbox.fs.download_file(remote_path)
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    if isinstance(content, bytes):
+                        local_path.write_bytes(content)
+                except Exception:
+                    pass
 
     def stop(self, cfg: ProjectConfig, run_info: RunInfo) -> None:
         sandbox_id = run_info.extra.get("sandbox_id")

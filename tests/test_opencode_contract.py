@@ -6,10 +6,12 @@ from pathlib import Path
 import pytest
 
 from src.harness import Agent
+from src.harness.agent import AgentTrace
 from src.harness.sdk_config import set_sdk
 from src.loop import LoopAgents
 from src.loop.config import LoopConfig
 from src.loop.runner import SelfImprovingLoop
+from src.registry.models import ProgramConfig
 from src.schemas import (
     AgentResponse,
     PromptGeneratorResponse,
@@ -236,3 +238,97 @@ def test_ensure_base_program_does_not_call_global_claude_base_factory_in_opencod
     assert created_config.metadata["model_id"] == "claude-sonnet-4-6"
     assert "OpenCode base prompt" in str(created_config.system_prompt)
     assert set(created_config.allowed_tools) == {"read", "bash", "edit", "skill"}
+
+
+def test_mutate_switches_to_parent_before_reading_program_config(tmp_path: Path) -> None:
+    class DummyAgent:
+        def __init__(self, output):
+            self.output = output
+
+        async def run(self, _query):
+            return AgentTrace(
+                duration_ms=1,
+                total_cost_usd=0.0,
+                num_turns=1,
+                usage={},
+                result="ok",
+                is_error=False,
+                output=self.output,
+                messages=[],
+            )
+
+    class DummyManager:
+        cwd = tmp_path
+
+        def __init__(self) -> None:
+            self.current = "feature/examples-demo"
+            self.switches: list[str] = []
+            self.created: list[tuple[str, ProgramConfig, str | None]] = []
+
+        def switch_to(self, name):
+            self.current = f"program/{name}"
+            self.switches.append(name)
+
+        def get_current(self):
+            assert self.current == "program/base"
+            return ProgramConfig(
+                name="base",
+                system_prompt={"type": "preset", "preset": "claude_code"},
+                allowed_tools=["Read", "Write"],
+            )
+
+        def create_program(self, name, config, parent=None):
+            self.created.append((name, config, parent))
+            self.current = f"program/{name}"
+
+        def commit(self, _message):
+            return False
+
+    manager = DummyManager()
+    agents = LoopAgents(
+        base=DummyAgent(AgentResponse(final_answer="wrong", reasoning="")),
+        skill_proposer=DummyAgent(
+            SkillProposerResponse(
+                proposed_skill="Create a test skill.",
+                justification="It covers the missing behavior.",
+            )
+        ),
+        prompt_proposer=DummyAgent(
+            PromptProposerResponse(
+                proposed_prompt_change="Be more precise.",
+                justification="It covers the missing behavior.",
+            )
+        ),
+        skill_generator=DummyAgent(
+            ToolGeneratorResponse(generated_skill="test-skill", reasoning="")
+        ),
+        prompt_generator=DummyAgent(
+            PromptGeneratorResponse(optimized_prompt="Be precise.", reasoning="")
+        ),
+    )
+    loop = SelfImprovingLoop(
+        LoopConfig(max_iterations=1, evolution_mode="skill_only"),
+        agents,
+        manager,
+        train_pools={"math": [("2 + 2", "4")]},
+        val_data=[("2 + 2", "4", "math")],
+    )
+    failure_trace = AgentTrace[AgentResponse](
+        duration_ms=1,
+        total_cost_usd=0.0,
+        num_turns=1,
+        usage={},
+        result="wrong",
+        is_error=False,
+        output=AgentResponse(final_answer="wrong", reasoning=""),
+        messages=[],
+    )
+
+    result = asyncio.run(
+        loop._mutate("base", [(failure_trace, "wrong", "4", "math")], iteration=1)
+    )
+
+    assert result is not None
+    assert manager.switches == ["base"]
+    assert manager.created[0][0] == "iter-skill-1"
+    assert manager.created[0][2] == "base"

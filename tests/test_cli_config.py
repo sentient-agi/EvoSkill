@@ -24,7 +24,7 @@ def _write_project(tmp_path: Path, config_text: str) -> Path:
         ("opencode", "anthropic/claude-sonnet-4-6"),
         ("goose", "anthropic/claude-sonnet-4-6"),
         ("openhands", "anthropic/claude-sonnet-4-6"),
-        ("codex", "codex-mini-latest"),
+        ("codex", "gpt-5.1-codex-mini"),
     ],
 )
 def test_default_model_for_harness(harness: str, expected: str) -> None:
@@ -52,7 +52,7 @@ def test_load_config_normalizes_legacy_sonnet_model(tmp_path: Path, harness: str
     [
         ("claude", "anthropic/claude-sonnet-4-6"),
         ("goose", "anthropic/claude-sonnet-4-6"),
-        ("codex", "codex-mini-latest"),
+        ("codex", "gpt-5.1-codex-mini"),
     ],
 )
 def test_load_config_applies_harness_default_when_model_missing(
@@ -162,7 +162,7 @@ def test_load_config_explicit_config_path_preserves_project_root(tmp_path: Path)
 
     assert cfg.project_root == project_root
     assert cfg.harness.name == "codex"
-    assert cfg.harness.model == "codex-mini-latest"
+    assert cfg.harness.model == "gpt-5.1-codex-mini"
 
 
 def test_load_config_explicit_config_requires_evoskill_root(tmp_path: Path) -> None:
@@ -225,7 +225,7 @@ def test_init_write_config_uses_harness_default_model(tmp_path: Path) -> None:
         raw = tomllib.load(f)
 
     assert raw["harness"]["name"] == "codex"
-    assert raw["harness"]["model"] == "codex-mini-latest"
+    assert raw["harness"]["model"] == "gpt-5.1-codex-mini"
     assert raw["harness"]["data_dirs"] == ["./docs"]
     assert raw["harness"]["timeout_seconds"] == 1200
     assert raw["harness"]["max_retries"] == 3

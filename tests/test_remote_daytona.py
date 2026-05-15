@@ -45,8 +45,11 @@ def _mock_sandbox():
     sb.id = "sb_test123"
     sb.process.exec.return_value = MagicMock(result="ok")
     sb.process.create_session = MagicMock()
+    sb.process.delete_session = MagicMock()
     sb.process.execute_session_command.return_value = MagicMock(cmd_id="cmd_abc")
-    sb.process.get_session_command.return_value = MagicMock(exit_code=None)
+    # Default to completed/success so _exec_async polling returns immediately.
+    # Tests that need to simulate "still running" override this explicitly.
+    sb.process.get_session_command.return_value = MagicMock(exit_code=0)
     sb.process.get_session_command_logs.return_value = MagicMock(
         output="", stdout="", stderr=""
     )
@@ -498,3 +501,144 @@ def test_remote_env_sets_bypass_permissions(tmp_path):
     assert mock_build.called
     _, kwargs = mock_build.call_args
     assert kwargs["permission_mode"] == "bypassPermissions"
+
+
+# ── _exec_async helper ───────────────────────────────────────────────────────
+
+def test_exec_async_returns_on_success():
+    """Polls until exit_code becomes 0, then returns."""
+    from src.remote.daytona import _exec_async
+
+    sb = _mock_sandbox()
+    sb.process.execute_session_command.return_value = MagicMock(cmd_id="c1")
+    sb.process.get_session_command.side_effect = [
+        MagicMock(exit_code=None),
+        MagicMock(exit_code=None),
+        MagicMock(exit_code=0),
+    ]
+
+    with patch("src.remote.daytona.time.sleep"):
+        _exec_async(sb, "sess", "do something")
+
+    assert sb.process.execute_session_command.called
+    req = sb.process.execute_session_command.call_args[0][1]
+    assert req.run_async is True
+    assert req.command == "do something"
+    assert sb.process.get_session_command.call_count == 3
+
+
+def test_exec_async_raises_on_nonzero_exit():
+    """Includes log tail in the raised error message."""
+    from src.remote.daytona import _exec_async
+
+    sb = _mock_sandbox()
+    sb.process.execute_session_command.return_value = MagicMock(cmd_id="c1")
+    sb.process.get_session_command.return_value = MagicMock(exit_code=2)
+    sb.process.get_session_command_logs.return_value = MagicMock(
+        output="boom: file not found", stdout="", stderr=""
+    )
+
+    with patch("src.remote.daytona.time.sleep"):
+        with pytest.raises(RuntimeError, match="exit=2"):
+            _exec_async(sb, "sess", "bad cmd")
+
+
+def test_exec_async_includes_log_in_error():
+    from src.remote.daytona import _exec_async
+
+    sb = _mock_sandbox()
+    sb.process.execute_session_command.return_value = MagicMock(cmd_id="c1")
+    sb.process.get_session_command.return_value = MagicMock(exit_code=1)
+    sb.process.get_session_command_logs.return_value = MagicMock(
+        output="", stdout="some stdout", stderr="critical stderr msg"
+    )
+
+    with patch("src.remote.daytona.time.sleep"):
+        with pytest.raises(RuntimeError, match="some stdout"):
+            _exec_async(sb, "sess", "bad cmd")
+
+
+def test_exec_async_times_out():
+    """Raises if exit_code never gets set within max_wait_seconds."""
+    from src.remote.daytona import _exec_async
+
+    sb = _mock_sandbox()
+    sb.process.execute_session_command.return_value = MagicMock(cmd_id="c1")
+    sb.process.get_session_command.return_value = MagicMock(exit_code=None)
+
+    with patch("src.remote.daytona.time.sleep"):
+        with pytest.raises(RuntimeError, match="timed out"):
+            _exec_async(sb, "sess", "slow cmd",
+                        poll_interval=0.001, max_wait_seconds=0.01)
+
+
+def test_exec_async_uses_provided_session_id():
+    from src.remote.daytona import _exec_async
+
+    sb = _mock_sandbox()
+    sb.process.execute_session_command.return_value = MagicMock(cmd_id="c1")
+    sb.process.get_session_command.return_value = MagicMock(exit_code=0)
+
+    _exec_async(sb, "my-session", "do it")
+
+    args, _ = sb.process.execute_session_command.call_args
+    assert args[0] == "my-session"
+
+
+# ── Upload uses async session for heavy ops ──────────────────────────────────
+
+def test_upload_creates_upload_session(tmp_path):
+    sb = _mock_sandbox()
+    client = MagicMock()
+    client.create.return_value = sb
+    cfg = _make_cfg(tmp_path)
+
+    with _Patches(client):
+        backend = _setup_backend(client, cfg)
+        backend.upload(cfg)
+
+    create_calls = [c.args for c in sb.process.create_session.call_args_list]
+    assert ("evoskill-upload",) in create_calls
+
+
+def test_upload_dispatches_git_unbundle_via_session(tmp_path):
+    """Git unbundle goes through execute_session_command, not blocking exec."""
+    sb = _mock_sandbox()
+    client = MagicMock()
+    client.create.return_value = sb
+    cfg = _make_cfg(tmp_path)
+
+    with _Patches(client):
+        backend = _setup_backend(client, cfg)
+        backend.upload(cfg)
+
+    # Look for the git unbundle command dispatched via session
+    session_cmds = [
+        call.args[1].command
+        for call in sb.process.execute_session_command.call_args_list
+    ]
+    assert any("git bundle unbundle" in c for c in session_cmds)
+
+
+def test_upload_single_chunk_data_uses_async_for_extract(tmp_path):
+    """Even single-chunk extract goes through async session, not blocking exec."""
+    sb = _mock_sandbox()
+    client = MagicMock()
+    client.create.return_value = sb
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    ext_dir = tmp_path / "external_data"
+    ext_dir.mkdir()
+    (ext_dir / "file.csv").write_text("data")
+    cfg = _make_cfg(project_dir, data_dirs=[str(ext_dir)])
+
+    with _Patches(client):
+        backend = _setup_backend(client, cfg)
+        backend.upload(cfg)
+
+    session_cmds = [
+        call.args[1].command
+        for call in sb.process.execute_session_command.call_args_list
+    ]
+    # Extract command should go through async session
+    assert any("tar xzf /tmp/external_data.tar.gz" in c for c in session_cmds)

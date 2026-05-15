@@ -26,9 +26,12 @@ config.json
 .DS_Store
 .dataset/
 
+.agents/
+
 # Cache
 .cache/
 *.txt
+!**/prompt.txt
 output.txt
 scratch/
 

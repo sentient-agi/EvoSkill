@@ -518,6 +518,7 @@ class SelfImprovingLoop:
 
             # Create child program branch
             child_name = f"iter-skill-{actual_iteration}"
+            self.manager.switch_to(parent)
             parent_config = self.manager.get_current()
             child_config = parent_config.mutate(child_name)
             self.manager.create_program(child_name, child_config, parent=parent)
@@ -577,6 +578,7 @@ and modify it to add these capabilities. Preserve all existing content that is s
 
             # Create child program branch
             child_name = f"iter-prompt-{actual_iteration}"
+            self.manager.switch_to(parent)
             parent_config = self.manager.get_current()
             original_prompt = parent_config.system_prompt
             child_config = parent_config.mutate(child_name)
