@@ -117,7 +117,14 @@ def options_to_config(
     Returns:
         ProgramConfig ready for git storage
     """
-    base_metadata = {"created_at": datetime.now().isoformat()}
+    # NOTE: deliberately do NOT include `created_at` here. The timestamp
+    # would byte-change program.yaml on every --fresh launch, which in turn
+    # changes the workspace's git tree SHA and busts the run-cache key (see
+    # src/cache/run_cache.py:_get_tree_hash). Git's commit timestamp already
+    # records when the program was created, so the metadata field is
+    # redundant and only serves to defeat caching across re-runs of the
+    # same content.
+    base_metadata: dict[str, Any] = {}
     if metadata:
         base_metadata.update(metadata)
 

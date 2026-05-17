@@ -82,6 +82,12 @@ class ProgramConfig(BaseModel):
         Returns:
             A new ProgramConfig with this program as parent
         """
+        # NOTE: do NOT call .with_timestamp() here. A wall-clock timestamp
+        # on every child program would byte-change program.yaml on each
+        # iteration and bust the run-cache (which keys on the workspace's
+        # git tree SHA). Git's commit timestamp already records iteration
+        # ordering. See src/cache/run_cache.py:_get_tree_hash and the
+        # parallel comment in src/registry/sdk_utils.py.
         return ProgramConfig(
             name=name,
             parent=f"program/{self.name}",
@@ -90,4 +96,4 @@ class ProgramConfig(BaseModel):
             allowed_tools=allowed_tools or self.allowed_tools,
             output_format=output_format if output_format is not None else self.output_format,
             metadata=metadata or {},
-        ).with_timestamp()
+        )
