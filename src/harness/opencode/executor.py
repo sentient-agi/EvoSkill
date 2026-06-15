@@ -113,13 +113,16 @@ def shutdown_all_servers() -> None:
 
 
 def _wait_for_port(port: int, timeout: float = 15) -> None:
+    """Wait for the opencode HTTP server to become fully ready (health check)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            r = httpx.get(f"http://127.0.0.1:{port}/health", timeout=1)
+            if r.status_code == 200:
                 return
-        except OSError:
-            time.sleep(0.5)
+        except Exception:
+            pass
+        time.sleep(0.5)
 
 
 def _ensure_server(options: dict[str, Any]) -> str:
@@ -191,8 +194,26 @@ async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
             body["tools"] = options["tools"]
         if options.get("mode"):
             body["mode"] = options["mode"]
-        if options.get("format"):
+        if options.get("format") and not os.environ.get("EVOSKILL_NO_FORMAT"):
             body["format"] = options["format"]
+        elif options.get("format") and os.environ.get("EVOSKILL_NO_FORMAT"):
+            # When the opencode serve runtime (e.g. Linux Docker) has a JSON Schema
+            # codec bug (POST 200 but GET 400: "Expected OutputFormatJsonSchema"),
+            # inject the schema into the system prompt instead of passing it as a
+            # structured format field. The model is instructed to return raw JSON.
+            import json as _json
+            fmt = options["format"]
+            schema = fmt.get("schema", {})
+            json_inst = (
+                "\n\n## CRITICAL: Output Format Instructions\n"
+                "You MUST respond with a single JSON object matching this exact schema:\n"
+                f"```json\n{_json.dumps(schema, indent=2)}\n```\n"
+                "Rules:\n"
+                "- Return ONLY the JSON object, no other text\n"
+                "- Do NOT wrap in markdown code fences (no ```json)\n"
+                "- The response must start with '{' and end with '}'"
+            )
+            body["system"] = (body.get("system", "") or "") + json_inst
 
         r = await client.post(f"/session/{session_id}/message", json=body)
         r.raise_for_status()
@@ -242,22 +263,51 @@ def parse_response(
         except (ValidationError, TypeError, ValueError) as e:
             parse_error = f"{type(e).__name__}: {e}"
 
-    # fallback: parse JSON from text (even if structured failed)
+    # fallback: parse JSON from text — multiple extraction strategies
     if output is None and result_text.strip():
         text = result_text.strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
+
+        # Try strategies in order: raw JSON, code-fence extraction, first JSON block
+        candidates: list[str] = []
+
+        # Strategy 1: text as-is
+        candidates.append(text)
+
+        # Strategy 2: strip leading/trailing ``` fences + optional language tag
+        stripped = text
+        if stripped.startswith("```"):
+            lines = stripped.splitlines()
             lines = lines[1:] if lines[0].startswith("```") else lines
             lines = lines[:-1] if lines and lines[-1].strip() == "```" else lines
-            text = "\n".join(lines).strip()
-        try:
-            parsed = json.loads(text)
-            output = response_model.model_validate(parsed)
-            raw_structured = parsed
-            parse_error = None
-        except (json.JSONDecodeError, ValidationError, TypeError, ValueError) as e:
-            if parse_error is None:
-                parse_error = f"{type(e).__name__}: {e}"
+            stripped = "\n".join(lines).strip()
+        if stripped != text:
+            candidates.append(stripped)
+
+        # Strategy 3: extract first { ... } JSON object from text (robust to surrounding prose)
+        import re as _re
+        brace_start = text.find("{")
+        if brace_start >= 0:
+            depth = 0
+            for i in range(brace_start, len(text)):
+                ch = text[i]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidates.append(text[brace_start:i + 1])
+                        break
+
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+                output = response_model.model_validate(parsed)
+                raw_structured = parsed
+                parse_error = None
+                break
+            except (json.JSONDecodeError, ValidationError, TypeError, ValueError) as e:
+                if parse_error is None:
+                    parse_error = f"{type(e).__name__}: {e}"
 
     if output is None and parse_error is None:
         parse_error = "No structured output returned (context limit likely exceeded)"

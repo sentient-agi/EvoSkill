@@ -45,6 +45,8 @@ def load_and_split(cfg: ProjectConfig):
 def infer_provider(model: str) -> str:
     """Infer the LLM provider from the configured model name."""
     normalized = model.strip()
+    if normalized.startswith("deepseek/"):
+        return "deepseek"
     if normalized.startswith("openrouter/"):
         return "openrouter"
     if normalized.startswith(("fireworks/", "fireworks-ai/", "fireworks_ai/")):
@@ -71,6 +73,8 @@ def _normalize_provider_model(provider: str, model: str) -> str:
     """Strip provider prefixes that the downstream SDKs do not expect."""
     normalized = model.strip()
 
+    if provider == "deepseek" and normalized.startswith("deepseek/"):
+        return normalized[len("deepseek/"):]
     if provider == "openrouter" and normalized.startswith("openrouter/"):
         return normalized[len("openrouter/") :]
     if provider == "fireworks":
@@ -115,6 +119,25 @@ async def call_llm(provider: str, model: str, prompt: str) -> str:
             ) from exc
 
         client = openai.AsyncOpenAI(api_key=api_key)
+        response = await client.chat.completions.create(
+            model=normalized_model,
+            max_tokens=16,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content
+
+    if provider == "deepseek":
+        try:
+            import openai
+        except ImportError as exc:
+            raise RuntimeError(
+                "openai package not installed. Run: uv add openai"
+            ) from exc
+
+        client = openai.AsyncOpenAI(
+            base_url="https://api.deepseek.com",
+            api_key=api_key,
+        )
         response = await client.chat.completions.create(
             model=normalized_model,
             max_tokens=16,
