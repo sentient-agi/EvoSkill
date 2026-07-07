@@ -48,14 +48,17 @@ class EvalSettings(BaseSettings):
         default=Path("~/officeqa/officeqa.csv").expanduser(),
         description="Path to OfficeQA dataset CSV",
     )
-    sdk: Literal["claude", "opencode", "codex", "goose", "openhands"] = Field(
+    sdk: Literal[
+        "claude", "opencode", "codex", "goose", "openhands"
+    ] = Field(
         default="claude",
-        description="SDK to use: 'claude', 'opencode', 'codex', or 'goose'",
+        description="SDK to use: 'claude', 'opencode', 'codex', 'goose', or 'openhands'",
     )
 
 
 async def main(settings: EvalSettings):
     set_sdk(settings.sdk)
+    print(f"[SDK] {settings.sdk} backend, model: {settings.model}")
 
     # Load dataset
     data = pd.read_csv(settings.dataset_path)

@@ -8,6 +8,7 @@ import pandas as pd
 
 from src.harness import Agent
 from src.agent_profiles import dabstep_agent_options, make_dabstep_agent_options
+from src.agent_profiles import set_sdk, set_vllm_config
 from src.evaluation.eval_full import evaluate_full, load_results
 from src.evaluation.dabstep_scorer import question_scorer
 from src.schemas import AgentResponse
@@ -80,7 +81,45 @@ async def main():
         default="claude-opus-4-5-20251101",
         help="Model for agent (default: claude-opus-4-5-20251101)",
     )
+    parser.add_argument(
+        "--sdk",
+        type=str,
+        default="claude",
+        choices=["claude", "opencode", "vllm"],
+        help="SDK backend to use: claude (default), opencode, or vllm",
+    )
+    parser.add_argument(
+        "--vllm-base-url",
+        type=str,
+        default="http://localhost:8000/v1",
+        help="vLLM server base URL (used when --sdk vllm, default: http://localhost:8000/v1)",
+    )
+    parser.add_argument(
+        "--vllm-max-tokens",
+        type=int,
+        default=8192,
+        help="Max tokens for vLLM generation (default: 8192)",
+    )
+    parser.add_argument(
+        "--vllm-context-length",
+        type=int,
+        default=131072,
+        help="vLLM model context window size (default: 131072 for 128K models like Qwen2.5-72B)",
+    )
     args = parser.parse_args()
+
+    # Configure SDK backend
+    set_sdk(args.sdk)
+    if args.sdk == "vllm":
+        set_vllm_config(
+            base_url=args.vllm_base_url,
+            model_name=args.model,
+            max_tokens=args.vllm_max_tokens,
+            context_length=args.vllm_context_length,
+        )
+        print(f"[SDK] vLLM backend: {args.vllm_base_url}, model: {args.model}, context: {args.vllm_context_length}, max_tokens: {args.vllm_max_tokens}")
+    else:
+        print(f"[SDK] {args.sdk} backend, model: {args.model}")
 
     # Load dataset
     data = pd.read_csv(args.dataset)
@@ -97,9 +136,14 @@ async def main():
 
     # Auto-discover context files from data-dir
     data_dir = Path(args.data_dir).resolve()
-    context_file_names = sorted(f.name for f in data_dir.iterdir() if f.is_file())
-    context_files_text = "\n".join(f"- {data_dir / name}" for name in context_file_names)
-    print(f"Context files ({len(context_file_names)}): {', '.join(context_file_names)}")
+    if data_dir.exists():
+        context_file_names = sorted(f.name for f in data_dir.iterdir() if f.is_file())
+        context_files_text = "\n".join(f"- {data_dir / name}" for name in context_file_names)
+        print(f"Context files ({len(context_file_names)}): {', '.join(context_file_names)}")
+    else:
+        context_file_names = []
+        context_files_text = "(no context files available)"
+        print(f"[WARNING] data-dir not found: {data_dir}. Context files will be unavailable.")
 
     # Prepare items: (task_id, formatted_prompt, answer)
     items = [

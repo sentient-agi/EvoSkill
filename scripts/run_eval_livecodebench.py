@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.harness import Agent, set_sdk
-from src.agent_profiles import make_livecodebench_agent_options
+from src.agent_profiles import make_livecodebench_agent_options, set_vllm_config
 from src.evaluation.eval_full import evaluate_full, load_results
 from src.evaluation.livecodebench import (
     score_livecodebench,
@@ -77,14 +77,42 @@ async def main():
     parser.add_argument(
         "--sdk",
         type=str,
-        choices=["claude", "opencode"],
+        choices=["claude", "opencode", "vllm"],
         default="claude",
-        help="SDK to use: 'claude' or 'opencode' (default: claude)",
+        help="SDK to use: 'claude', 'opencode', or 'vllm' (default: claude)",
+    )
+    parser.add_argument(
+        "--vllm-base-url",
+        type=str,
+        default="http://localhost:8000/v1",
+        help="vLLM server base URL (used when --sdk vllm, default: http://localhost:8000/v1)",
+    )
+    parser.add_argument(
+        "--vllm-max-tokens",
+        type=int,
+        default=8192,
+        help="Max tokens for vLLM generation (default: 8192)",
+    )
+    parser.add_argument(
+        "--vllm-context-length",
+        type=int,
+        default=131072,
+        help="vLLM model context window size (default: 131072 for 128K models like Qwen2.5-72B)",
     )
     args = parser.parse_args()
 
     # Set SDK
     set_sdk(args.sdk)
+    if args.sdk == "vllm":
+        set_vllm_config(
+            base_url=args.vllm_base_url,
+            model_name=args.model,
+            max_tokens=args.vllm_max_tokens,
+            context_length=args.vllm_context_length,
+        )
+        print(f"[SDK] vLLM backend: {args.vllm_base_url}, model: {args.model}, context: {args.vllm_context_length}, max_tokens: {args.vllm_max_tokens}")
+    else:
+        print(f"[SDK] {args.sdk} backend, model: {args.model}")
 
     # Ensure dataset is downloaded
     if args.dataset is None:
