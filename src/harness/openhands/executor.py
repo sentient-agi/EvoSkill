@@ -50,7 +50,10 @@ def _import_openhands_sdk() -> Any:
 
 
 def _import_openhands_skills() -> Any:
-    return importlib.import_module("openhands.sdk.context.skills")
+    try:
+        return importlib.import_module("openhands.sdk.skills")
+    except ImportError:
+        return importlib.import_module("openhands.sdk.context.skills")
 
 
 def _import_openhands_llm() -> Any:

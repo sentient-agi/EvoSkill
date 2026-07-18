@@ -25,6 +25,7 @@ def _install_fake_openhands(
     final_message: str,
     extracted_message: str | None = None,
     metrics: dict | None = None,
+    skills_module_path: str = "openhands.sdk.context.skills",
 ) -> dict[str, object]:
     captured: dict[str, object] = {}
 
@@ -128,7 +129,7 @@ def _install_fake_openhands(
     monkeypatch.setitem(sys.modules, "openhands.sdk", sdk_module)
     monkeypatch.setitem(
         sys.modules,
-        "openhands.sdk.context.skills",
+        skills_module_path,
         SimpleNamespace(load_skills_from_dir=fake_load_skills_from_dir),
     )
     monkeypatch.setitem(
@@ -202,6 +203,48 @@ def test_openhands_runtime_uses_direct_json_without_fallback(
     assert captured["conversation_init"]["workspace"].working_dir == str(tmp_path)
     assert captured["skills_dir"] == str(tmp_path / ".claude" / "skills")
     assert captured["register_default_tools"] == {"enable_browser": False}
+
+
+def test_openhands_runtime_loads_skills_from_current_sdk_module(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    set_sdk("openhands")
+    skills_dir = tmp_path / ".claude" / "skills" / "repo-skill"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text("---\nname: repo-skill\ndescription: Repo-local skill\n---\n")
+
+    monkeypatch.delitem(sys.modules, "openhands.sdk.context.skills", raising=False)
+    captured = _install_fake_openhands(
+        monkeypatch,
+        final_message='{"final_answer":"4","reasoning":"basic arithmetic"}',
+        skills_module_path="openhands.sdk.skills",
+    )
+
+    agent = Agent(
+        {
+            "sdk": "openhands",
+            "system": "Answer the question with the final answer only.",
+            "format": {
+                "type": "json_schema",
+                "schema": AgentResponse.model_json_schema(),
+            },
+            "tools": ["Read", "Edit", "Bash", "TodoWrite", "Skill"],
+            "provider_id": "anthropic",
+            "model_id": "claude-sonnet-4-5-20250929",
+            "model": "anthropic/claude-sonnet-4-5-20250929",
+            "cwd": str(tmp_path),
+            "skills_dir": str(tmp_path / ".claude" / "skills"),
+            "add_dirs": [],
+        },
+        AgentResponse,
+    )
+
+    trace = asyncio.run(agent.run("What is 2 + 2?"))
+
+    assert trace.output is not None
+    assert trace.output.final_answer == "4"
+    assert captured["skills_dir"] == str(tmp_path / ".claude" / "skills")
 
 
 def test_openhands_runtime_falls_back_to_strict_extraction_when_final_text_is_not_json(
