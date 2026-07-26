@@ -411,15 +411,31 @@ class ProgramManager:
         if current_branch != target_branch:
             self._git_checkout(current_branch)
 
-        # Now check frontier membership
+        # Now check frontier membership. Size the frontier by its actual tag
+        # set, NOT by ``scored``: ``get_frontier_with_scores`` drops any member
+        # whose config can't be read or has no score yet (the base marked via
+        # ``mark_frontier`` before evaluation, or a transient read failure).
+        # Sizing off that filtered list undercounts a full frontier and lets
+        # ``update_frontier`` push it past ``max_size``.
+        members = self.get_frontier()
+
+        # Re-scoring a program already on the frontier updates its score in
+        # place (done above) and is never a size change.
+        if name in members:
+            return True
+
         scored = self.get_frontier_with_scores()
 
-        # If frontier has room, add unconditionally
-        if len(scored) < max_size:
+        # If frontier has room, add unconditionally.
+        if len(members) < max_size:
             self.mark_frontier(name)
             return True
 
-        # Otherwise, check if we beat the worst
+        # Frontier is full. Evict the worst SCORED member if we beat it. If no
+        # member has a readable score, there is nothing to compare against, so
+        # decline rather than overflow.
+        if not scored:
+            return False
         worst_name, worst_score = scored[-1]
         if score > worst_score:
             # Remove worst, add new
