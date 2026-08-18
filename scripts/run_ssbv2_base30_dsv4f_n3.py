@@ -65,6 +65,8 @@ os.environ["EVOSKILL_SANDBOX"] = "docker"
 #   result JSON, which is the only place a later reader can recover it from.
 #   Verify a dir before reusing it: scripts/ssbv2_solver_env_report.py --cache ...
 SOLVER_IMAGE = os.environ.get("EVOSKILL_DOCKER_IMAGE", "ssb-solver")
+# imported, never redeclared: the marker must name the image the SCORER actually runs.
+from src.agent_profiles.ssbv2_agent.scorer import GRADING_IMAGE  # noqa: E402
 os.environ["EVOSKILL_DOCKER_IMAGE"] = SOLVER_IMAGE
 os.environ.setdefault("EVOSKILL_BASH_TIMEOUT", "600")
 os.environ["EVOSKILL_STREAM"] = "1"
@@ -185,6 +187,50 @@ EMPTY_SKILLS = (Path(_SKILLS_OVERRIDE) if _SKILLS_OVERRIDE
                 else PROJECT_ROOT / ".cache" / f"ssbv2_{TAG}_skills")
 TASKS_CACHE = PROJECT_ROOT / ".cache" / f"ssbv2_{TAG}_tasks"
 OUT = PROJECT_ROOT / "outputs" / "ssbv2_base30" / f"{TAG}.json"
+
+
+def _probe_grading_image() -> dict:
+    """Identity of the image that produces the VERDICT, not the answer.
+
+    assert_cache_env covered the solver image and the scorer SOURCE, which is only half of
+    what decides a score. The grading container (ssb-verifier:latest) runs LibreOffice to
+    recalculate formulas before openpyxl reads them under data_only=True -- so its identity
+    and its LibreOffice version change verdicts on exactly the tasks this benchmark is
+    about, while leaving the cache key untouched. README instructs rebuilding that image
+    (scripts/build_ssb_solver_lo.sh), so this is a routine operator action, not a corner
+    case: rebuild it, get a different LibreOffice, and cached rows scored by the old one sit
+    alongside new rows scored by the new one with nothing recording the difference.
+
+    Soft on purpose. A missing verifier is already fatal at scoring time with a clear
+    message (RecalculationFailed); refusing here would break `--dry-run`-style inspection
+    on a machine that has not built it yet. What must not happen is silently recording
+    NOTHING, so the absent case is recorded as an explicit sentinel and still becomes part
+    of the marker -- a run that could not identify its grader is a different environment
+    from one that could.
+    """
+    import subprocess
+    out = {"grading_image": GRADING_IMAGE, "grading_image_id": "ABSENT",
+           "grading_libreoffice": "ABSENT"}
+    idq = subprocess.run(["docker", "images", "--format", "{{.ID}}", GRADING_IMAGE],
+                         capture_output=True, text=True)
+    ids = [x for x in (idq.stdout or "").strip().splitlines() if x]
+    if not ids:
+        return out
+    out["grading_image_id"] = ids[0]
+    ver = subprocess.run(
+        ["docker", "run", "--rm", "--entrypoint", "cat", GRADING_IMAGE,
+         "/etc/evoskill_libreoffice_version"],
+        capture_output=True, text=True, timeout=300)
+    if ver.returncode == 0 and ver.stdout.strip():
+        out["grading_libreoffice"] = ver.stdout.strip()
+    else:
+        # Pre-2026-08-18 images do not carry the file. Fall back to asking soffice.
+        alt = subprocess.run(
+            ["docker", "run", "--rm", "--entrypoint", "soffice", GRADING_IMAGE, "--version"],
+            capture_output=True, text=True, timeout=300)
+        if alt.returncode == 0 and alt.stdout.strip():
+            out["grading_libreoffice"] = alt.stdout.strip().splitlines()[0]
+    return out
 
 
 def _probe_solver_image() -> dict:
@@ -410,10 +456,16 @@ async def main() -> int:
     from src.cache.cache_env import assert_cache_env, sha12
     from src.agent_profiles.ssbv2_agent import get_solver_prompt
     CACHE_SYS = get_solver_prompt()
+    _grader = _probe_grading_image()
+    print(f"  grader={_grader['grading_image']} ({_grader['grading_image_id']}) "
+          f"libreoffice={_grader['grading_libreoffice']}", flush=True)
     assert_cache_env(CACHE_DIR, {
         "solver_image": _img["image"],
         "solver_image_id": _img["image_id"],
         "solver_formula_engine": _img["soffice"],
+        # the GRADING half — see _probe_grading_image
+        "grading_image_id": _grader["grading_image_id"],
+        "grading_libreoffice": _grader["grading_libreoffice"],
         "turn_budget": BUDGET,
         "model": MODEL,
         "solver_prompt_sha256_12": sha12(CACHE_SYS),

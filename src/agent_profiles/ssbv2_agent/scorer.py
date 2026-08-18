@@ -82,6 +82,13 @@ _DATATABLE_UNO_TIMEOUT_SECONDS = int(os.environ.get("EVOSKILL_DATATABLE_UNO_TIME
 _DATATABLE_DOCKER_SCRIPTS_DIR = str((Path(__file__).parent / "docker_scripts").resolve())
 
 
+# THE IMAGE THAT PRODUCES THE VERDICT. Named once, and overridable, so the runner can
+# record its identity in the cache-environment marker -- and so the two sites that run it
+# (the LibreOffice recalc and the =TABLE() UNO fix) cannot drift apart. A second copy of a
+# convention is a second chance to disagree; that is what resolve_base was about too.
+GRADING_IMAGE = os.environ.get("EVOSKILL_GRADING_IMAGE", "ssb-verifier:latest")
+
+
 class RecalculationFailed(RuntimeError):
     """The grading container could not recalculate a workbook.
 
@@ -124,7 +131,7 @@ def _recalculate_with_libreoffice(xlsx_path: str) -> str:
                 ["docker", "run", "--rm",
                  "-v", f"{xlsx_dir}:/work",
                  "-w", "/work",
-                 "ssb-verifier:latest",
+                 GRADING_IMAGE,
                  "bash", "-c",
                  # cp by exact name: /tmp/*.xlsx skips dot-prefixed (hidden) temp
                  # names, silently failing the copy after a successful convert.
@@ -307,7 +314,7 @@ def _solve_datatables_with_uno(xlsx_path: str, gt_file: str | None = None, answe
                 ["docker", "run", "--rm",
                  "-v", f"{xlsx_dir}:/work",
                  "-v", f"{_DATATABLE_DOCKER_SCRIPTS_DIR}:/scripts:ro",
-                 "ssb-verifier:latest",
+                 GRADING_IMAGE,
                  "bash", "/scripts/run_datatable_fix.sh", xlsx_name],
                 capture_output=True, text=True, timeout=_DATATABLE_UNO_TIMEOUT_SECONDS,
             )

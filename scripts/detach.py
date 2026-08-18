@@ -19,6 +19,7 @@ directive) from INSIDE the new session, so the keep-awake process shares the chi
 fate rather than the launching shell's.
 """
 import os
+import shutil
 import subprocess
 import sys
 
@@ -42,7 +43,14 @@ p = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT,
                      stdin=subprocess.DEVNULL, start_new_session=False)
 with open(pidfile, "w") as f:
     f.write(str(p.pid) + "\n")
-subprocess.Popen(["caffeinate", "-i", "-w", str(p.pid)],
-                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                 stdin=subprocess.DEVNULL)
+# GUARDED, like the other three call sites. README's platform notes say caffeinate is
+# "used when present, skipped on Linux" and loop.py:2021 checks shutil.which -- this one
+# did not, and it is the shim EVERY tau3 leg launch goes through. On any host without
+# caffeinate the Popen raises FileNotFoundError AFTER the child is already running and the
+# pidfile is written, so the launch dies here while the work it detached carries on
+# unsupervised and unrecorded.
+if shutil.which("caffeinate"):
+    subprocess.Popen(["caffeinate", "-i", "-w", str(p.pid)],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     stdin=subprocess.DEVNULL)
 os._exit(0)
