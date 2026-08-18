@@ -19,6 +19,11 @@ dependencies = [
     # Module-scope import in the SpreadsheetBench v2 scorer; the test suite
     # cannot even be collected without it.
     "openpyxl>=3.1",
+    # Module-scope import in src/evaluation/eval_full.py (tqdm.asyncio), which
+    # src/evaluation/__init__ pulls in — so evaluate_agent_parallel, and with it
+    # every leg runner, dies at import without it. Found by the 0817 smoke: the
+    # dev machine's ambient python had it, the shipped venv did not.
+    "tqdm>=4.66",
     "questionary>=2.1.1",
     "rich>=14.2.0",
     "tomli-w>=1.2.0",

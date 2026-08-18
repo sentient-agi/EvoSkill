@@ -95,8 +95,19 @@ SPLIT_KEY = os.environ.get("EVOSKILL_SPLIT_KEY", "train")
 N_SAMPLES = int(os.environ.get("EVOSKILL_N_SAMPLES", "3"))
 N_TASKS = int(os.environ.get("EVOSKILL_N_TASKS", "0"))     # 0 = the whole split
 CONCURRENCY = int(os.environ.get("EVOSKILL_CONCURRENCY", "8"))
-SOLVER_MODEL = os.environ.get(
+_RAW_SOLVER_MODEL = os.environ.get(
     "EVOSKILL_SOLVER_MODEL", "openrouter/deepseek/deepseek-v4-flash-0731")
+# THE SPEC'S MODEL IS AN OPENROUTER ID; LITELLM ROUTES BY PREFIX. The spec stores the bare
+# vendor form (deepseek/deepseek-v4-flash-0731 — spec.py's cross-family pin check requires
+# that form), but this runner's calls go through litellm, where a bare `deepseek/` prefix
+# selects the NATIVE DeepSeek provider. No credential for that exists here, so every episode
+# of the first leg to combine the #320 spec-model export with this runner died with
+# AuthenticationError — while the [PIN] banner claimed the OpenRouter pin was verified for a
+# call that never went through OpenRouter. All prior runs used this default's `openrouter/`
+# form, so the mismatch was invisible until the 2026-08-17 smoke. This runner routes
+# exclusively via OpenRouter (it enforces the org key and the provider pin), so normalize.
+SOLVER_MODEL = (_RAW_SOLVER_MODEL if _RAW_SOLVER_MODEL.startswith("openrouter/")
+                else f"openrouter/{_RAW_SOLVER_MODEL}")
 # ── USER-SIM MODELS: THE TWO TIERS ARE NOW SETTABLE INDEPENDENTLY ───────────
 # tau2 picks the user simulator PER TASK: `user_model = reference if tier == "reference"
 # else cheap` (solver.py:577, tier from user_tier_gate.get_tier). So there are two knobs,
