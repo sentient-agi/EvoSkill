@@ -1,4 +1,6 @@
 import asyncio
+
+from src.harness.errors import UngradableEpisode
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -490,6 +492,8 @@ async def evaluate_agent_parallel(
             try:
                 ans = str(res.trace.output.final_answer)
                 return float(scorer(res.question, ans, res.ground_truth))
+            except UngradableEpisode:
+                raise  # a verdict that could not be computed is not a 0.0
             except Exception:
                 return 0.0
         return 0.0

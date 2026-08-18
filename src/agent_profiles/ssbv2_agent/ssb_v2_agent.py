@@ -18,6 +18,7 @@ from src.harness.utils import eval_run_ground_truth
 from src.agent_profiles.ssbv2_agent import get_solver_prompt, SSBv2AgentResponse
 from src.agent_profiles.ssbv2_agent.task_workspace import setup_task_workspace, get_output_dir
 from src.agent_profiles.ssbv2_agent.scorer import score_and_diff
+from src.harness.errors import UngradableEpisode
 
 
 def _preserve_raw_output(output_file) -> None:
@@ -226,6 +227,8 @@ class SSBv2SolverAgent(Agent[SSBv2AgentResponse]):
                 )
                 _diff_holder.append(_diff_header(passed, n_match, n_total, diff))
                 return 1.0 if passed else 0.0
+            except UngradableEpisode:
+                raise      # infra fault, not a wrong answer -- src/harness/errors.py
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).warning(f"Inline SSBv2 scoring failed for {task_id}: {e}")
@@ -304,6 +307,8 @@ class SSBv2SolverAgent(Agent[SSBv2AgentResponse]):
                         )
                         _diff_holder.append(_diff_header(passed, n_match, n_total, diff))
                         trace.inline_score = 1.0 if passed else 0.0
+            except UngradableEpisode:
+                raise      # infra fault, not a wrong answer -- src/harness/errors.py
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).warning(f"Inline SSBv2 scoring failed for {task_id}: {e}")

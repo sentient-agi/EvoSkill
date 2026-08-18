@@ -89,13 +89,22 @@ _DATATABLE_DOCKER_SCRIPTS_DIR = str((Path(__file__).parent / "docker_scripts").r
 GRADING_IMAGE = os.environ.get("EVOSKILL_GRADING_IMAGE", "ssb-verifier:latest")
 
 
-class RecalculationFailed(RuntimeError):
+from src.harness.errors import UngradableEpisode
+
+
+class RecalculationFailed(UngradableEpisode):
     """The grading container could not recalculate a workbook.
 
-    Deliberately NOT caught anywhere in this module. An episode whose formulas
-    were never recalculated has no computable verdict, and the failure mode it
-    replaces -- degrade to the un-recalculated file and score 0.0 -- puts an
-    infrastructure fault into a results table as if it were solver error.
+    An episode whose formulas were never recalculated has no computable verdict, and
+    the failure mode this replaces -- degrade to the un-recalculated file and score
+    0.0 -- puts an infrastructure fault into a results table as if it were solver
+    error.
+
+    This used to say "deliberately NOT caught anywhere in this module", which was
+    true of this module and false of the program: FOUR broad `except Exception:
+    return 0.0` handlers caught it, including both live call sites. It now inherits
+    UngradableEpisode, and every one of those handlers re-raises that explicitly.
+    See src/harness/errors.py.
     """
 
 
@@ -714,17 +723,32 @@ def _col_name2num(name: str) -> int:
 
 
 def _parse_cell_range(range_str: str) -> tuple:
-    """Parse 'A1:B10' into (min_row, min_col, max_row, max_col)."""
-    if ":" in range_str:
-        start, end = range_str.split(":")
-    else:
-        start = end = range_str
+    """Parse 'A1:B10' into (min_row, min_col, max_row, max_col).
 
+    ACCEPTS THE SPELLINGS EXCEL ACTUALLY WRITES. The pattern ran against the raw
+    string, so '$A$1' and 'a1:b2' made re.match return None and the next line raised
+    AttributeError on m.group(1). Every caller but one swallowed that and dropped the
+    range; a task whose ranges all dropped scored a FALSE PASS with the diff text
+    "All cells match" (measured: answer_position='$A$1' on two workbooks that differ
+    -> passed=True, 0 cells graded). Absolute markers and letter case carry no meaning
+    in a range, so they are normalised here rather than at five call sites.
+
+    A whole-column form (A:A) raises rather than being mangled: it is unbounded, this
+    function's contract is a bounded rectangle, and quietly treating it as a single
+    cell is exactly how the false pass arose.
+    """
     import re
-    m = re.match(r"([A-Z]+)(\d+)", start)
-    start_col, start_row = _col_name2num(m.group(1)), int(m.group(2))
-    m = re.match(r"([A-Z]+)(\d+)", end)
-    end_col, end_row = _col_name2num(m.group(1)), int(m.group(2))
+    raw = range_str
+    range_str = range_str.replace("$", "").strip().upper()
+    start, end = (range_str.split(":", 1) if ":" in range_str else (range_str, range_str))
+    cell = re.compile(r"^([A-Z]+)(\d+)$")
+    ms, me = cell.match(start.strip()), cell.match(end.strip())
+    if not ms or not me:
+        raise ValueError(
+            f"answer_position range {raw!r} is not a bounded A1-style rectangle "
+            f"(whole-column/whole-row forms cannot be expressed here)")
+    start_col, start_row = _col_name2num(ms.group(1)), int(ms.group(2))
+    end_col, end_row = _col_name2num(me.group(1)), int(me.group(2))
     return start_row, start_col, end_row, end_col
 
 
@@ -844,10 +868,19 @@ def compare_workbooks_detailed(
         import re
         ws_gt = wb_gt[sheet_name]
         ws_proc = wb_proc[sheet_name]
+        # A RANGE THE GRADER CANNOT READ IS AN INFRA FAULT, NOT AN EMPTY RESULT.
+        # This used to `continue`, so an unparseable range was dropped in silence and a
+        # task whose ranges ALL dropped came back (True, 0, 0, "All cells match") -- a
+        # false PASS, and the only direction that can move a number is up. The other
+        # _parse_cell_range call sites are PREPARATION passes (data-table solve,
+        # cached-value restore, volatile skip set) where a skipped range degrades
+        # gracefully; this one decides the verdict.
         try:
             min_row, min_col, max_row, max_col = _parse_cell_range(cell_range)
-        except Exception:
-            continue
+        except Exception as e:
+            raise UngradableEpisode(
+                f"cannot parse answer_position range {cell_range!r} "
+                f"(from {answer_position!r}): {e}") from e
 
         for row in range(min_row, max_row + 1):
             for col in range(min_col, max_col + 1):
@@ -872,6 +905,16 @@ def compare_workbooks_detailed(
                             f"got={_transform_value(proc_val)!r}"
                         )
 
+    # ZERO GRADED CELLS IS NOT A PASS. all_pass starts True and only the per-cell loop
+    # can falsify it, so any path that graded nothing returned (True, 0, 0, "All cells
+    # match"). Two measured routes: every range unparseable (now raised above), and
+    # every graded cell excluded by the volatile-function skip set. A task that could
+    # not be graded has no verdict; it is not a solved task.
+    if total_cells == 0:
+        raise UngradableEpisode(
+            f"graded 0 cells for answer_position={answer_position!r} — every range was "
+            f"empty or entirely excluded, so there is no verdict to report. This is an "
+            f"infra/dataset fault, not a solved task.")
     diff_summary = "; ".join(mismatches) if mismatches else "All cells match"
     return all_pass, total_match, total_cells, diff_summary
 
@@ -2194,5 +2237,7 @@ def score_ssbv2(question: str, predicted: str, ground_truth: str) -> float:
     try:
         passed, _, _, _ = score_and_diff(golden_path, proc_file, answer_position, orig_input_file=orig_input_file)
         return 1.0 if passed else 0.0
+    except UngradableEpisode:
+        raise          # no verdict is not a zero -- see src/harness/errors.py
     except Exception:
         return 0.0
