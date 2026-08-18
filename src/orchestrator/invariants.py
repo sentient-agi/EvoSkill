@@ -446,10 +446,23 @@ def check_no_heldout_reachable(evolver_log: Path, split_file: Path) -> Check:
         return _skip(n, "split declares no held-out ids", "#186")
     txt = evolver_log.read_text(errors="ignore")
     # the FULL-POOL path is the high-signal one: a single read of it exposes every spec
-    pool = re.findall(r"data/tau2/domains/[a-z_]+/tasks\.json", txt)
+    # THE POOL PATTERNS ARE PER-BENCHMARK, AND AN UNRECOGNISED BENCHMARK MUST NOT PASS.
+    # Until 2026-08-18 this held only the tau3 pattern, so on an SSB v2 run it matched
+    # nothing, the id matcher below also matched nothing (SSB v2 ids never take the shapes
+    # it looks for), and the check returned an affirmative "0 of N held-out ids present".
+    # Executed against a synthetic SSB v2 evolver log, all three of
+    #   cat .../Debugging/05_05/1_answer.xlsx | ls -R .../Template/16_02 | cp .../04_01/*.xlsx
+    # passed. A green receipt over a benchmark this function cannot see is worse than no
+    # check: loop.py prints it as a contamination audit that passed.
+    POOL_RES = (
+        r"data/tau2/domains/[a-z_]+/tasks\.json",           # tau3: the 97-task pool
+        r"data/spreadsheetbench-v2/[A-Za-z_]+/\d+_\d+",      # SSB v2: any task dir under the corpus
+        r"[A-Za-z_]+/\d+_\d+/\d+_answer\.xlsx",             # SSB v2: a reference workbook
+    )
+    pool = [m for rx in POOL_RES for m in re.findall(rx, txt)]
     if pool:
-        return _fail(n, f"{len(pool)} reference(s) to the FULL task pool path — that file "
-                        f"holds every held-out spec", "#186", pool=pool[:3])
+        return _fail(n, f"{len(pool)} reference(s) to held-out task material — the full pool "
+                        f"path or a reference workbook", "#186", pool=pool[:3])
 
     # #219 CLASS, FOURTH SITE (found 2026-08-09 by the first real smoke test of this module).
     # This used to flag any id appearing as "{i}" / '{i}' / /{i}. anywhere in the transcript.
@@ -467,8 +480,20 @@ def check_no_heldout_reachable(evolver_log: Path, split_file: Path) -> Check:
     # never a bare quoted number.
     distinctive = {i for i in held if len(i) >= 4 and not i.isdigit()}
     ambiguous = held - distinctive
+    # Every spelling a held-out id can take. SSB v2 ids are "Debugging/05_05" on the split
+    # and "Debugging_05_05" as a filename; matching only the split form found neither.
+    def _forms(i: str) -> set[str]:
+        return {i, i.replace("/", "_")}
+    # A DISTINCTIVE id matches on a WORD BOUNDARY, not on a list of delimiters. The old
+    # list ('"{i}"', "'{i}'", "/{i}.") was inherited from the #219 fix, which was about
+    # BARE INTEGERS -- those still go through the structural branch below. Applying that
+    # narrow list to distinctive ids meant a transcript is scanned as JSON, where the
+    # quotes are escaped: `grep -n \"task_097\"` contains no `"task_097"` substring, so a
+    # blatant held-out read passed. Measured before this change: that exact command
+    # returned PASS. A distinctive id cannot appear by coincidence; that is what makes it
+    # distinctive, and it is the premise the surrounding comment already states.
     named = sorted(i for i in distinctive
-                   if f'"{i}"' in txt or f"'{i}'" in txt or f"/{i}." in txt)
+                   if any(re.search(rf"\b{re.escape(f)}\b", txt) for f in _forms(i)))
     for i in sorted(ambiguous):
         # `tasks/5.json`, `digests/5.md`, `task 5`, `task_5` -- shapes that name a BENCHMARK
         # task. Deliberately NOT a bare quoted "5", which is what produced the false positive.
@@ -490,6 +515,16 @@ def check_no_heldout_reachable(evolver_log: Path, split_file: Path) -> Check:
     if named:
         return _fail(n, f"{len(named)} held-out task id(s) appear in the evolver transcript: "
                         f"{sorted(named)[:5]}", "#205", ids=sorted(named)[:10])
+    # NEVER VOUCH FOR A BENCHMARK THIS FUNCTION CANNOT RECOGNISE. If no held-out id takes a
+    # shape any matcher above understands, the clean result is an artefact of not looking.
+    # loop.py treats SKIP as a halt, which is the correct outcome: fix the matcher, do not
+    # ship a green receipt.
+    KNOWN = re.compile(r"^(?:task_\d+|\d+|[A-Za-z][A-Za-z_]*/\d+_\d+)$")
+    unknown = sorted(i for i in held if not KNOWN.match(i))
+    if unknown:
+        return _skip(n, f"{len(unknown)} held-out id(s) take a shape no detector here "
+                        f"understands (e.g. {unknown[:3]}) — this check cannot see this "
+                        f"benchmark and must not report it clean", "#186")
     return _ok(n, f"0 of {len(held)} held-out ids present ({len(ambiguous)} bare-integer id(s) "
                   f"matched structurally, not as bare numbers); no full-pool reads", "#186")
 

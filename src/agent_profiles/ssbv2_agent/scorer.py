@@ -82,15 +82,32 @@ _DATATABLE_UNO_TIMEOUT_SECONDS = int(os.environ.get("EVOSKILL_DATATABLE_UNO_TIME
 _DATATABLE_DOCKER_SCRIPTS_DIR = str((Path(__file__).parent / "docker_scripts").resolve())
 
 
+class RecalculationFailed(RuntimeError):
+    """The grading container could not recalculate a workbook.
+
+    Deliberately NOT caught anywhere in this module. An episode whose formulas
+    were never recalculated has no computable verdict, and the failure mode it
+    replaces -- degrade to the un-recalculated file and score 0.0 -- puts an
+    infrastructure fault into a results table as if it were solver error.
+    """
+
+
 def _recalculate_with_libreoffice(xlsx_path: str) -> str:
     """Recalculate formulas in an xlsx file using LibreOffice via Docker.
 
     Uses ssb-verifier image which has LibreOffice installed.
     Returns the path to the recalculated file (overwrites in place).
-    If recalculation fails, returns the original path unchanged — callers must
-    not treat this silently: a failed recalc means formula cells will read as
-    None under data_only=True, indistinguishable from a genuine wrong answer
-    unless this warning is checked in the logs.
+
+    RAISES RecalculationFailed if the grading container does not succeed. It
+    used to log a warning and return the ORIGINAL path, with a docstring saying
+    "callers must not treat this silently" -- but all four call sites did
+    exactly that, because the contract was enforced only by a human reading
+    logs. The consequence is not a missing warning: under data_only=True every
+    formula cell of an un-recalculated workbook reads None, so the task scores
+    0.0 and is indistinguishable from a solver that answered wrongly. A broken
+    verifier image, a docker daemon hiccup or a recalc timeout therefore
+    manufactured silent zeros in a measured result. A verdict that cannot be
+    computed must stop the run, not be reported as a failing verdict.
 
     Bounded by _RECALC_SEMAPHORE, independent of solver concurrency -- see
     the module-level comment above for why: this is a blocking subprocess
@@ -117,17 +134,19 @@ def _recalculate_with_libreoffice(xlsx_path: str) -> str:
             )
             if result.returncode == 0:
                 return xlsx_path
-            logger.warning(
+            raise RecalculationFailed(
                 f"LibreOffice recalculation failed (exit {result.returncode}) for {xlsx_path}: "
-                f"stdout={result.stdout[-500:]!r} stderr={result.stderr[-500:]!r} — "
-                f"scoring will proceed on the UN-recalculated file, so formula cells will read as None"
+                f"stdout={result.stdout[-500:]!r} stderr={result.stderr[-500:]!r}. "
+                f"Scoring cannot proceed: every formula cell of an un-recalculated workbook "
+                f"reads None under data_only=True, which scores 0.0 and is indistinguishable "
+                f"from a wrong answer. Check that ssb-verifier:latest exists and runs "
+                f"(scripts/build_ssb_solver_lo.sh builds it)."
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            logger.warning(
-                f"LibreOffice recalculation failed for {xlsx_path}: {e} — "
-                f"scoring will proceed on the UN-recalculated file, so formula cells will read as None"
-            )
-    return xlsx_path
+            raise RecalculationFailed(
+                f"LibreOffice recalculation failed for {xlsx_path}: {e!r}. Scoring cannot "
+                f"proceed; see the note above on why this must not degrade to a 0.0."
+            ) from e
 
 
 def _solve_datatables_with_uno(xlsx_path: str, gt_file: str | None = None, answer_position: str | None = None) -> None:
