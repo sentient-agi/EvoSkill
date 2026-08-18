@@ -689,7 +689,11 @@ async def main() -> int:
           + (f" -> {sorted(loaded)}" if loaded else "  (BASE leg — verified empty)"))
     if SKILLS_DIR:
         print(f"               staged from {SKILLS_DIR}")
-    print(f"  [KEY] OpenRouter key ...{_key[-4:]}")
+    # Read from the ENVIRONMENT, not from a local that only one branch binds. The
+    # exported-key path sets _WHICH_KEY without ever assigning _key, so this line
+    # raised NameError on exactly the path the fix above was written to enable.
+    # Mirrors run_ssbv2_base30_dsv4f_n3.py:420, which prints the served key and its source.
+    print(f"  [KEY] OpenRouter key ...{os.environ['OPENROUTER_API_KEY'][-4:]} ({_WHICH_KEY})")
     # Pre-flight, BEFORE any episode is paid for: a pin that turns out to be inert or
     # preference-only after a 150-episode leg is an unusable leg. Raises SystemExit.
     _assert_provider_pin_in_force(solver)

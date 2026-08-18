@@ -865,7 +865,6 @@ def compare_workbooks_detailed(
             mismatches.append(f"Sheet '{sheet_name}' missing from output")
             continue
 
-        import re
         ws_gt = wb_gt[sheet_name]
         ws_proc = wb_proc[sheet_name]
         # A RANGE THE GRADER CANNOT READ IS AN INFRA FAULT, NOT AN EMPTY RESULT.
