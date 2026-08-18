@@ -117,6 +117,37 @@ RUN_DIR=${EVOSKILL_TAU3_RUN_DIR:-$ROOT/outputs/tau3_banking}
 # crashed loudly, which is lucky: the quiet version of this bug disarms a sealed-test guard.
 EVO_SPLIT="${EVOSKILL_TAU3_EVOLVER_SPLIT:-$ROOT/outputs/tau3_banking/split_2020.json}"
 
+# THE SPLIT IS NOT OPTIONAL AND ITS ABSENCE IS NOT A WARNING.
+# Until 2026-08-18 an unreadable split only printed "oracle gate : SKIPPED", and on the
+# SSB v2 path (EVOSKILL_ORACLE_ABSENT=1) that whole block is skipped so it printed NOTHING
+# — while evolver_leak_hook.py silently dropped its held-out-id detector and the banner
+# below still said ARMED. The default above exists on no clone, so a hand-run straight from
+# README.md reached that state BY DEFAULT. This gate is deliberately outside the oracle
+# if/else: the split feeds the sealed-test guard, not the oracle firewall.
+python3 - "$EVO_SPLIT" <<'SPLITPY' || exit 14
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+def refuse(msg):
+    print(f"REFUSING: {msg}", file=sys.stderr)
+    print("  The leak hook needs the split to tell train from held-out; without it every", file=sys.stderr)
+    print("  task id is denied and the evolver cannot work. Point", file=sys.stderr)
+    print("  EVOSKILL_TAU3_EVOLVER_SPLIT at this run's split json.", file=sys.stderr)
+    raise SystemExit(1)
+if not p.is_file():
+    refuse(f"no split file at {p}")
+try:
+    d = json.loads(p.read_text())
+except Exception as e:
+    refuse(f"split at {p} is unparseable: {e}")
+held = set(d.get("val", [])) | set(d.get("test", []))
+if not held:
+    refuse(f"split at {p} names no val/test arm - nothing to protect")
+if not set(d.get("train", [])):
+    refuse(f"split at {p} names no train arm")
+print(f"  split      : {p.name} - {len(set(d['train']))} train, {len(held)} held-out [OK]")
+SPLITPY
+
 if [ "${EVOSKILL_ORACLE_ABSENT:-0}" = "1" ]; then
   echo "ORACLE DECLARED ABSENT — this benchmark exposes no golden specifications."
   echo "  granted + self-describing: $ORACLE/README.md"
@@ -929,6 +960,61 @@ if [ "$_HOOK_RC" -ne 2 ]; then
   fi
   exit 13
 fi
+# THE PROBE THAT CAN ACTUALLY OBSERVE A DEAD ID-DETECTOR.
+# The path probe above is satisfied by LEAK_PATH_RE alone, which still matches when the
+# held-out-id half of the hook is dead — that is precisely how the 2026-08-18 fail-open
+# survived a green "ARMED" banner through two release smokes. So take a REAL held-out id
+# from THIS run's split and require a deny, and run THE COMMAND STRING THE SETTINGS FILE
+# ACTUALLY CONTAINS, the way the sync-agent probe above does (#212) — not a path this
+# shell rebuilds with env it supplies itself, which cannot detect a mis-wired command.
+_leakcmd=$(python3 - "$HOOK_SETTINGS" <<'LEAKPY'
+import json, sys
+for m in json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]:
+    c = m["hooks"][0]["command"]
+    if "evolver_leak_hook.py" in c:
+        print(c); break
+LEAKPY
+)
+if [ -z "$_leakcmd" ]; then
+  echo "REFUSING: no evolver_leak_hook.py entry in $HOOK_SETTINGS — the hook is not wired." >&2
+  exit 13
+fi
+case "$_leakcmd" in
+  *'$ROOT'*|*'$EVO_SPLIT'*|*'$STAGING'*)
+    echo "REFUSING: the leak-hook command carries an UNEXPANDED variable and cannot run:" >&2
+    echo "    $_leakcmd" >&2
+    echo "  CC reports only a per-call 'hook error' the model never surfaces (#212)." >&2
+    exit 13;;
+esac
+_heldid=$(python3 -c "
+import json
+d = json.load(open('$EVO_SPLIT'))
+h = sorted(set(d.get('val', [])) | set(d.get('test', [])))
+print(h[0].replace('/', '_'))")
+_iprobe='{"tool_name":"Read","tool_input":{"file_path":"/tmp/'"$_heldid"'.json"}}'
+_IRC=0
+_ierrf=$(mktemp)
+# `bash -c`, NOT `eval`: measured 2026-08-18, a bare `eval` as the last stage of a
+# pipeline under this script's `set -e` reports 1 even when the hook exits 2 and prints
+# BLOCKED — i.e. it turns a WORKING guard into a refusal, and would have turned a
+# fail-open into "1" too, which this probe treats as not-blocked. A fresh `bash -c` does
+# not inherit errexit, returns the hook's real code, and still runs the settings file's
+# own command string, which is the property that matters (#212).
+printf '%s' "$_iprobe" | bash -c "$_leakcmd" >/dev/null 2>"$_ierrf" || _IRC=$?
+_IERR=$(cat "$_ierrf"); rm -f "$_ierrf"
+if [ "$_IRC" -ne 2 ]; then
+  echo "REFUSING: the leak hook did NOT block held-out task id '$_heldid'." >&2
+  echo "  Expected exit 2; got $_IRC, running the settings file's own command:" >&2
+  echo "    $_leakcmd" >&2
+  echo "  Held-out ids are nameable to the evolver. If the split is unusable the hook" >&2
+  echo "  drops to denying EVERY id, so a 0 here means the wiring itself is wrong." >&2
+  if [ "$_IRC" -ne 0 ]; then
+    echo "  A non-zero code that is NOT 2 does not block under Claude Code — the hook is" >&2
+    echo "  crashing and enforces NOTHING. Its stderr was:" >&2
+    printf '%s\n' "$_IERR" | sed 's/^/    /' >&2
+  fi
+  exit 13
+fi
 # ... and prove it ALLOWS ordinary environment reads. Without a must-ALLOW case the
 # matcher can be widened until it denies everything, which LOOKS like maximal safety and
 # is in fact a dead evolver: a blocked read is invisible in the result, the model simply
@@ -998,7 +1084,8 @@ do
 done
 echo "  peer skills: ARMED and probe-verified (other runs' skills_v* denied, #213)"
 HOOKFLAG=(--settings "$HOOK_SETTINGS")
-echo "  leak hook  : ARMED, deny-probe returned exit 2 (held-out specs denied to Bash),"
+echo "  leak hook  : ARMED — path-probe exit 2, held-out-ID probe exit 2 for '$_heldid'"
+echo "               via the settings file's own command,"
 echo "               allow-probe returned exit 0 (own evidence dir still readable)"
 # Kept OUT of GRANTS on purpose: the Phoenix branch below asserts "exactly 4
 # grants" and GRANTS is what the dry run prints as the add-dir set. Folding a

@@ -21,7 +21,9 @@ those would forbid env-aware evolution. Only TASK SPECS and their expected end
 states are held-out, and only for ids outside the train arm.
 
 Env:
-  EVOSKILL_EVOLVER_SPLIT   path to split json (required; refuses if unset/absent)
+  EVOSKILL_EVOLVER_SPLIT   path to split json. REQUIRED: if unset, absent,
+                           unparseable, or naming no val/test arm, every task
+                           id is denied (exit 2) rather than allowed.
 """
 from __future__ import annotations
 
@@ -55,14 +57,31 @@ def main() -> int:
     except Exception:
         return 0  # never wedge the evolver on a malformed payload
 
+    # NO USABLE SPLIT => NO DISCRIMINATION => REFUSE THE WHOLE POOL.
+    # This block used to set `held = set()` and fall through, which made the
+    # membership test below unable to EVER fire: the comment said "fail CLOSED"
+    # while the code failed OPEN. Measured 2026-08-18 on the shipped default
+    # (EVO_SPLIT -> outputs/tau3_banking/split_2020.json, a path that exists on
+    # no clone): held-out ids task_097 and task_052 both returned rc=0 while the
+    # launcher printed "leak hook: ARMED". The launcher's deny-probe could not
+    # observe it because that probe names a PATH and a deny-root, never an id
+    # read from the split. evolver_leak_audit.main() already refuses on exactly
+    # this input ("split names no val/test arm"); these two enforcement points
+    # share a module and must not disagree about what an unusable split means.
     split_path = os.environ.get("EVOSKILL_EVOLVER_SPLIT", "")
+    blind = False
+    held: set[str] = set()
     if not split_path or not Path(split_path).is_file():
-        # Fail CLOSED on the thing this exists to prevent: with no split we
-        # cannot tell train from held-out, so block the spec pool wholesale.
-        held: set[str] = set()
+        blind = True
     else:
-        split = json.loads(Path(split_path).read_text())
-        held = held_forms(set(split.get("val", [])) | set(split.get("test", [])))
+        try:
+            split = json.loads(Path(split_path).read_text())
+        except Exception:
+            blind = True
+        else:
+            held = held_forms(set(split.get("val", [])) | set(split.get("test", [])))
+            if not held:
+                blind = True
 
     ti = payload.get("tool_input") or {}
     text = " ".join(str(ti.get(k, "")) for k in _FIELDS if ti.get(k))
@@ -82,9 +101,19 @@ def main() -> int:
         if d in text:
             _deny(f"  reads a declared held-out data root: {d!r}")
 
-    hit = sorted({t for t in TASK_RE.findall(text) if t in held})
-    if hit:
-        _deny(f"  names held-out task id(s): {hit}")
+    found = TASK_RE.findall(text)
+    if blind:
+        # Cannot tell train from held-out: any task id is a potential leak.
+        if found:
+            _deny(
+                f"  names task id(s) {sorted(set(found))}, and no usable split is "
+                f"readable at {split_path or '<EVOSKILL_EVOLVER_SPLIT unset>'} — "
+                "train cannot be told from held-out, so the whole pool is refused."
+            )
+    else:
+        hit = sorted({t for t in found if t in held})
+        if hit:
+            _deny(f"  names held-out task id(s): {hit}")
 
     return 0
 
