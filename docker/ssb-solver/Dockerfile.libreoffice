@@ -1,0 +1,65 @@
+# SpreadsheetBench v2 SOLVER sandbox — LibreOffice arm.
+#
+# Build: scripts/build_ssb_solver_lo.sh     (do NOT `docker build` this by hand —
+#        the script asserts the base tag resolves to the pinned baseline image)
+#
+# WHAT THIS FIXES. the maintainer caught it in a live Phoenix trace on 2026-08-02: the
+# solver probes `which libreoffice soffice`, gets nothing, tries
+# `formulas|pycel|xlcalculator|schedula`, gets a traceback, and concludes "No
+# formula engine. I'll need to do the analysis manually/computationally with
+# Python." Meanwhile the SCORER recalculates the solver's workbook with
+# /usr/bin/soffice and compares VALUES against golden. openpyxl returns None for
+# a formula with no cached value, so the solver could not evaluate the one thing
+# it is graded on — and burned ~2 turns of a 45-turn budget in EVERY rollout
+# rediscovering that absence. Verified across the 265 seeded cap-45 records: 260
+# mention LibreOffice/soffice, 0 show it present, 151 explicitly show it absent.
+#
+# WHY `FROM` THE PINNED BASELINE AND NOT `FROM python:3.11-slim`. This image is
+# one arm of a two-arm comparison whose claim is "the ONLY difference is a
+# recalculation engine". Re-running `pip install openpyxl==3.1.3 pandas==2.2.0
+# numpy==1.26.4` would give byte-different wheels/transitive deps at a later
+# date and quietly turn a one-variable arm into a two-variable one. Layering on
+# the frozen baseline makes the python/pandas/numpy layers bit-identical by
+# construction.
+ARG BASE=ssb-solver:no-libreoffice-0715
+FROM ${BASE}
+
+# MIRRORS ssb-verifier EXACTLY — libreoffice-calc AND python3-uno.
+#
+# python3-uno is not optional decoration here. The scorer's Data-Table solve
+# (docker_scripts/run_datatable_fix.sh) drives soffice through UNO from
+# /usr/bin/python3, Debian's python, the only one with UNO bindings. Omitting it
+# from the verifier's own recipe on 2026-07-15 broke every Data-Table solve with
+# a silent exit-127 fallback. If the solver's environment is to be a faithful
+# preview of what the grader will compute, it needs the same two packages, not
+# just the headless converter.
+#
+# DELIBERATELY NOT INSTALLED: `formulas`, `pycel`, `xlcalculator`, `schedula`.
+# The solver reached for those in the trace, but they are independent evaluators
+# with their own semantics — verifying against them would mean agreeing with an
+# engine that does not grade this benchmark. LibreOffice is what the scorer runs,
+# so LibreOffice is what the solver gets.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libreoffice-calc python3-uno && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# PATH ORDER MATTERS AND IS ASSERTED IN THE BUILD SCRIPT. python3-uno pulls in
+# Debian's /usr/bin/python3, which has NO openpyxl/pandas/numpy. The base image's
+# PATH puts /usr/local/bin first, so a solver typing `python3` still gets 3.11
+# with the spreadsheet stack — but that is a property of an inherited ENV, which
+# is exactly the kind of thing that is true until it isn't. build_ssb_solver_lo.sh
+# checks it rather than trusting it.
+
+# Pre-seed the LibreOffice user profile at build time.
+#
+# soffice creates ~/.config/libreoffice on first use. Doing that lazily inside a
+# rollout costs the solver seconds on its first verification and, worse, makes
+# the FIRST recalculation behave differently from later ones — a confound in a
+# run whose whole point is measuring whether self-verification helps. Warm it
+# once here, in a layer, so every rollout starts from the same state.
+RUN printf 'x\n' > /tmp/seed.csv && \
+    soffice --headless --calc --convert-to xlsx --outdir /tmp /tmp/seed.csv >/dev/null 2>&1 && \
+    test -f /tmp/seed.xlsx && \
+    rm -f /tmp/seed.csv /tmp/seed.xlsx
+
+WORKDIR /workspace

@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+*.log
+
+# Virtual environments / local config
+.venv
+.env
+.DS_Store
+
+# Run artifacts and caches
+outputs/
+results/
+.cache/
+scratch/
+
+# Note: *.txt is deliberately NOT ignored wholesale — several agent profiles
+# load prompt.txt at runtime and it must stay tracked.
+
+# Vendored third-party benchmark repos (cloned, not committed — see
+# third_party/README.md for provenance + setup command to reproduce).
+third_party/*/
+!third_party/README.md

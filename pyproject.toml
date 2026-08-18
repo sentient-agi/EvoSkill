@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evoskill"
+version = "2.0.0"
+description = "EvoSkill v2 — an evolver agent rewrites a solver agent's skills from its own failed rollouts, orchestrated end-to-end by an agent orchestrator (AO)"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+    "claude-agent-sdk>=0.1.16",
+    "click>=8.1.8",
+    "pandas>=2.3.3",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
+    "pyyaml>=6.0",
+    # Module-scope import in the SpreadsheetBench v2 scorer; the test suite
+    # cannot even be collected without it.
+    "openpyxl>=3.1",
+    "questionary>=2.1.1",
+    "rich>=14.2.0",
+    "tomli-w>=1.2.0",
+    "llm-sandbox[docker]>=0.3.36",
+    # wrapt 2.x removed the `module=` kwarg from wrap_function_wrapper,
+    # which breaks openinference-instrumentation-anthropic auto-instrumentation.
+    # Pin to <2.0 until openinference upgrades.
+    "wrapt<2.0",
+]
+
+[project.scripts]
+evoskill = "src.orchestrator.cli:main"
+evoskill-loop = "src.orchestrator.loop:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.0",
+    "pytest-cov>=7.1.0",
+    "pyflakes>=3.2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "src/evaluation/eval_full.py",
+    "src/evaluation/evaluate.py",
+    "src/agent_profiles/*",
+]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
