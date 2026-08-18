@@ -189,6 +189,24 @@ TASKS_CACHE = PROJECT_ROOT / ".cache" / f"ssbv2_{TAG}_tasks"
 OUT = PROJECT_ROOT / "outputs" / "ssbv2_base30" / f"{TAG}.json"
 
 
+def _docker_scripts_sha12() -> str:
+    """One hash over every file bind-mounted into the grading container."""
+    import hashlib
+    from src.agent_profiles.ssbv2_agent.scorer import _DATATABLE_DOCKER_SCRIPTS_DIR
+    root = Path(_DATATABLE_DOCKER_SCRIPTS_DIR)
+    h = hashlib.sha256()
+    # SOURCE ONLY. __pycache__/*.pyc are interpreter- and run-dependent, so hashing them
+    # would make this marker differ between two machines running identical code and fire
+    # a cache-environment mismatch that means nothing. Caught by the first test of this
+    # function, which reported a changed hash after mutating a .pyc.
+    for f in sorted(root.rglob("*")):
+        if not f.is_file() or f.suffix == ".pyc" or "__pycache__" in f.parts:
+            continue
+        h.update(f.relative_to(root).as_posix().encode())
+        h.update(f.read_bytes())
+    return h.hexdigest()[:12]
+
+
 def _probe_grading_image() -> dict:
     """Identity of the image that produces the VERDICT, not the answer.
 
@@ -211,12 +229,15 @@ def _probe_grading_image() -> dict:
     import subprocess
     out = {"grading_image": GRADING_IMAGE, "grading_image_id": "ABSENT",
            "grading_libreoffice": "ABSENT"}
-    idq = subprocess.run(["docker", "images", "--format", "{{.ID}}", GRADING_IMAGE],
+    # `docker image inspect` resolves the SAME image `docker run` would. `docker images`
+    # filtered by tag can return several rows (retags, dangling layers), and taking [0] is
+    # a guess about which one the scorer will actually execute.
+    idq = subprocess.run(["docker", "image", "inspect", GRADING_IMAGE, "--format", "{{.Id}}"],
                          capture_output=True, text=True)
-    ids = [x for x in (idq.stdout or "").strip().splitlines() if x]
-    if not ids:
+    iid = (idq.stdout or "").strip().removeprefix("sha256:")[:12]
+    if idq.returncode != 0 or not iid:
         return out
-    out["grading_image_id"] = ids[0]
+    out["grading_image_id"] = iid
     ver = subprocess.run(
         ["docker", "run", "--rm", "--entrypoint", "cat", GRADING_IMAGE,
          "/etc/evoskill_libreoffice_version"],
@@ -466,6 +487,11 @@ async def main() -> int:
         # the GRADING half — see _probe_grading_image
         "grading_image_id": _grader["grading_image_id"],
         "grading_libreoffice": _grader["grading_libreoffice"],
+        # THE BIND-MOUNTED SCRIPTS ARE PART OF THE GRADER. docker_scripts/ is mounted into
+        # the grading container (the =TABLE() UNO fix runs from there), so editing one
+        # changes verdicts while leaving the image id, the scorer hash, and therefore the
+        # whole marker byte-identical.
+        "grading_scripts_sha256_12": _docker_scripts_sha12(),
         "turn_budget": BUDGET,
         "model": MODEL,
         "solver_prompt_sha256_12": sha12(CACHE_SYS),

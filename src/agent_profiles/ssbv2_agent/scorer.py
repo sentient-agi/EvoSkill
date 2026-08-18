@@ -155,8 +155,10 @@ def _recalculate_with_libreoffice(xlsx_path: str) -> str:
                 f"stdout={result.stdout[-500:]!r} stderr={result.stderr[-500:]!r}. "
                 f"Scoring cannot proceed: every formula cell of an un-recalculated workbook "
                 f"reads None under data_only=True, which scores 0.0 and is indistinguishable "
-                f"from a wrong answer. Check that ssb-verifier:latest exists and runs "
-                f"(scripts/build_ssb_solver_lo.sh builds it)."
+                f"from a wrong answer. Check that {GRADING_IMAGE} exists and runs; build it "
+                f"with `docker build -t ssb-verifier:latest docker/ssb-verifier/` (README "
+                f"setup). Note scripts/build_ssb_solver_lo.sh builds the SOLVER image, not "
+                f"this one -- naming it here sent operators to the wrong command."
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             raise RecalculationFailed(
