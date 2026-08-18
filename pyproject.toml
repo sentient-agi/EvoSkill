@@ -23,6 +23,10 @@ dependencies = [
     "rich>=14.2.0",
     "tomli-w>=1.2.0",
     "llm-sandbox[docker]>=0.3.36",
+    # Module-scope imports in src/harness (span plumbing). Phoenix itself stays
+    # optional — arize-phoenix is only imported lazily when tracing is enabled.
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
     # wrapt 2.x removed the `module=` kwarg from wrap_function_wrapper,
     # which breaks openinference-instrumentation-anthropic auto-instrumentation.
     # Pin to <2.0 until openinference upgrades.
