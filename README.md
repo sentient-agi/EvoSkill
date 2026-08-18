@@ -115,6 +115,40 @@ When both base result JSONs exist, declare them once in
 train result JSON — the runner records the real directory names there, and
 the driver refuses to re-derive them.
 
+**The same bootstrap for SpreadsheetBench v2.** Same shape, different
+launcher, and two env vars that must be present on *every* later
+`evoskill-loop` invocation as well (`SSBV2_ROOT` locates the dataset;
+`EVOSKILL_CACHE_DIR` names the one run-cache dir — the SSB v2 default is a
+per-tag dir that is empty for a new tag, so leaving it unset silently
+re-buys every episode):
+
+```bash
+export SSBV2_ROOT=/path/to/SpreadsheetBench-v2/data
+export EVOSKILL_CACHE_DIR=$PWD/.cache/<cache tag from the freeze receipt>_cache
+export EVOSKILL_TAU3_RUN_DIR=outputs/my_ssb_run       # the loop's var names
+export EVOSKILL_TAU3_SPLIT=$PWD/outputs/my_ssb_run/split.json  # predate SSB v2
+scripts/ssbv2_leg.sh my_ssb_run_base_train train ""   # "" = no skills = BASE
+scripts/ssbv2_leg.sh my_ssb_run_base_val   val   ""
+
+EVOSKILL_SSBV2_ORACLE_SPLIT=$PWD/outputs/my_ssb_run/split.json \
+EVOSKILL_SSBV2_ORACLE_DIR=$PWD/outputs/my_ssb_run/oracle \
+    python scripts/make_ssbv2_oracle.py               # then --verify
+```
+
+Its `RUNTIME.json` additionally names the launcher, and `digest_caches`
+holds exactly ONE directory (SSB v2 uses a single cache dir, not tau3's
+per-sample dirs):
+
+```json
+{
+ "leg_script": "scripts/ssbv2_leg.sh",
+ "base_leg": "outputs/my_ssb_run/my_ssb_run_base_train.json",
+ "base_leg_val": "outputs/my_ssb_run/my_ssb_run_base_val.json",
+ "digest_caches": [".cache/<cache tag>_cache"],
+ "oracle": "outputs/my_ssb_run/oracle"
+}
+```
+
 ### Drive the epoch
 
 ```bash
