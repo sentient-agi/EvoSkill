@@ -867,6 +867,37 @@ else
   echo "  sync agents: DISABLED by EVOSKILL_TAU3_ASYNC_AGENTS=1 — subagent results will"
   echo "               arrive on later turns; only a Claude-family evolver handles that."
 fi
+# A DENY PROBE MUST REQUIRE EXIT 2, NOT MERELY NON-ZERO.
+#
+# Under Claude Code a PreToolUse hook blocks ONLY on exit code 2. Every other non-zero
+# code is a NON-BLOCKING error: the message goes to the transcript and the tool call
+# PROCEEDS. So `if <hook>; then REFUSE; fi` — refusing only when the hook exits 0 —
+# accepts a CRASHING hook as proof of protection.
+#
+# That is not hypothetical. Until 2026-08-18 this tree's evolver_leak_hook.py imported
+# `evolver_leak_audit`, a module that had never been ported here. Every invocation died
+# ModuleNotFoundError -> exit 1, the probe read "not 0, therefore blocked", and the
+# launcher printed "leak hook : ARMED and probe-verified" on BOTH release smoke runs
+# while providing zero enforcement. The receipt was the only thing that worked.
+#
+# _hook_rc runs a probe and yields the hook's exit code, so the caller can compare it to
+# the ONE code that means "blocked" instead of to the set of codes that means "something
+# happened". Stderr is captured and surfaced on refusal — a crash's traceback is the
+# fastest possible diagnosis, and discarding it is how the original failure stayed hidden.
+#
+# It reports through globals rather than an exit status on purpose: this script runs under
+# `set -e`, so a helper that RETURNED the hook's non-zero code would abort the launcher at
+# the call site — and the whole point is to inspect that code.
+_HOOK_RC=0
+_HOOK_ERR=""
+_hook_rc() {  # _hook_rc <payload_json> <hook_path>  -> sets _HOOK_RC, _HOOK_ERR
+  local _payload="$1" _hook="$2" _errf
+  _errf=$(mktemp)
+  _HOOK_RC=0
+  printf '%s' "$_payload" | python3 "$_hook" >/dev/null 2>"$_errf" || _HOOK_RC=$?
+  _HOOK_ERR=$(cat "$_errf")
+  rm -f "$_errf"
+}
 # Prove the hook DENIES before trusting it to. A hook that silently fails open is
 # worse than none: the launcher would report protection it is not providing, which
 # is the vacuous-guard shape that has bitten this codebase repeatedly (#154).
@@ -881,23 +912,48 @@ else
   _probe_target="$ROOT/third_party/tau3-bench/data/tau2/domains/$EVO_DOMAIN/tasks.json"
 fi
 _probe='{"tool_name":"Bash","tool_input":{"command":"cat '"$_probe_target"'"}}'
-if printf '%s' "$_probe" | EVOSKILL_EVOLVER_SPLIT="$EVO_SPLIT" \
-     EVOSKILL_LEAK_DENY_PATHS="${EVOSKILL_LEAK_DENY_PATHS:-}" \
-     python3 "$ROOT/scripts/evolver_leak_hook.py" >/dev/null 2>&1; then
+export EVOSKILL_EVOLVER_SPLIT="$EVO_SPLIT"
+export EVOSKILL_LEAK_DENY_PATHS="${EVOSKILL_LEAK_DENY_PATHS:-}"
+_hook_rc "$_probe" "$ROOT/scripts/evolver_leak_hook.py"
+if [ "$_HOOK_RC" -ne 2 ]; then
   echo "REFUSING: the leak hook did NOT block a read of the full task pool." >&2
-  echo "  Expected exit 2 from scripts/evolver_leak_hook.py; got 0. Held-out" >&2
-  echo "  specs would be reachable by Bash. Fix the hook before dispatching." >&2
+  echo "  Expected exit 2 from scripts/evolver_leak_hook.py; got $_HOOK_RC." >&2
+  if [ "$_HOOK_RC" -eq 0 ]; then
+    echo "  Exit 0 = the hook examined the payload and ALLOWED it. Held-out specs" >&2
+    echo "  would be reachable by Bash. The matcher is wrong for this benchmark." >&2
+  else
+    echo "  A non-zero code that is NOT 2 is a NON-BLOCKING error under Claude Code:" >&2
+    echo "  the message is shown and the tool call proceeds anyway. The hook is" >&2
+    echo "  crashing, so it enforces NOTHING. Its stderr was:" >&2
+    printf '%s\n' "$_HOOK_ERR" | sed 's/^/    /' >&2
+  fi
   exit 13
+fi
+# ... and prove it ALLOWS ordinary environment reads. Without a must-ALLOW case the
+# matcher can be widened until it denies everything, which LOOKS like maximal safety and
+# is in fact a dead evolver: a blocked read is invisible in the result, the model simply
+# works around it. Same reason the peer-skill hook carries #215's must-allow probes below.
+_lprobe='{"tool_name":"Bash","tool_input":{"command":"ls -la '"$DIGESTS"'"}}'
+_hook_rc "$_lprobe" "$ROOT/scripts/evolver_leak_hook.py"
+if [ "$_HOOK_RC" -ne 0 ]; then
+  echo "REFUSING: the leak hook denies a read of this run's OWN evidence dir." >&2
+  echo "  Expected exit 0; got $_HOOK_RC. The evolver could not read the material it" >&2
+  echo "  is supposed to learn from. Its stderr was:" >&2
+  printf '%s\n' "$_HOOK_ERR" | sed 's/^/    /' >&2
+  exit 21
 fi
 # #213: prove the PEER-SKILL hook denies too. The probe is the EXACT command the DSV4F
 # epoch-1 evolver used to read the Opus reference arm's accepted skill bodies, so this
 # check fails if that specific hole ever reopens — not merely if the hook is importable.
 _pprobe='{"tool_name":"Bash","tool_input":{"command":"cd '"$ROOT"'/outputs/tau3_banking_2525 && for f in skills_v1/*/SKILL.md; do cat \"$f\"; done"}}'
-if printf '%s' "$_pprobe" | EVOSKILL_EVOLVER_STAGING="$STAGING" \
-     python3 "$ROOT/scripts/evolver_peer_skill_hook.py" >/dev/null 2>&1; then
+export EVOSKILL_EVOLVER_STAGING="$STAGING"
+_hook_rc "$_pprobe" "$ROOT/scripts/evolver_peer_skill_hook.py"
+if [ "$_HOOK_RC" -ne 2 ]; then
   echo "REFUSING: the peer-skill hook did NOT block a read of another run's skills_v1." >&2
+  echo "  Expected exit 2; got $_HOOK_RC (only 2 blocks a tool call; see the note above)." >&2
   echo "  Another optimizer's answers to THESE SAME train tasks would be readable, which" >&2
   echo "  measures copying rather than evolution (#213). Fix the hook before dispatching." >&2
+  if [ "$_HOOK_RC" -ne 0 ]; then printf '%s\n' "$_HOOK_ERR" | sed 's/^/    /' >&2; fi
   exit 17
 fi
 # ... and prove it still ALLOWS this run's own staging, or the evolver cannot revise.
@@ -912,10 +968,12 @@ fi
 # cannot see. It must stay denied — the #215 fix narrowed the matcher and this is the case
 # a careless narrowing would drop.
 _pprobe2='{"tool_name":"Bash","tool_input":{"command":"cd '"$ROOT"'/outputs/tau3_banking_2525 && for d in skills_v1 skills_v2; do ls -la $d; done"}}'
-if printf '%s' "$_pprobe2" | EVOSKILL_EVOLVER_STAGING="$STAGING" \
-     python3 "$ROOT/scripts/evolver_peer_skill_hook.py" >/dev/null 2>&1; then
+_hook_rc "$_pprobe2" "$ROOT/scripts/evolver_peer_skill_hook.py"
+if [ "$_HOOK_RC" -ne 2 ]; then
   echo "REFUSING: the peer-skill hook did NOT block the bare 'skills_v1 skills_v2' form." >&2
+  echo "  Expected exit 2; got $_HOOK_RC (only 2 blocks a tool call; see the note above)." >&2
   echo "  This is #213's second command; the #215 narrowing must not have dropped it." >&2
+  if [ "$_HOOK_RC" -ne 0 ]; then printf '%s\n' "$_HOOK_ERR" | sed 's/^/    /' >&2; fi
   exit 19
 fi
 # #215: the two commands this hook WRONGLY denied on 2026-08-08. Both read the run's own
@@ -940,7 +998,8 @@ do
 done
 echo "  peer skills: ARMED and probe-verified (other runs' skills_v* denied, #213)"
 HOOKFLAG=(--settings "$HOOK_SETTINGS")
-echo "  leak hook  : ARMED and probe-verified (held-out specs denied to Bash)"
+echo "  leak hook  : ARMED, deny-probe returned exit 2 (held-out specs denied to Bash),"
+echo "               allow-probe returned exit 0 (own evidence dir still readable)"
 # Kept OUT of GRANTS on purpose: the Phoenix branch below asserts "exactly 4
 # grants" and GRANTS is what the dry run prints as the add-dir set. Folding a
 # --settings pair in would make both of those quietly wrong.
