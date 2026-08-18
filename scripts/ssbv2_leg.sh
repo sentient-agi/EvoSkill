@@ -71,7 +71,7 @@ case "$KEY" in train) PRIO=${EVO_PRIO:-10};; *) PRIO=${EVO_PRIO:-5};; esac
 # model nobody chose.
 MODEL=${EVOSKILL_SOLVER_MODEL:-deepseek/deepseek-v4-flash-0731}
 # EXPLICIT ALLOW-LIST of dated snapshots, so no rolling tag can ever slip through. Extend it
-# only for a snapshot an operator named explicitly (the maintainer 0815: deepseek-v4-pro-0813).
+# only for a snapshot an operator named explicitly (the maintainer, 0815: deepseek-v4-pro-0813).
 case "$MODEL" in
   *-0731|*-0813) : ;;
   *) echo "REFUSING: solver model '$MODEL' is not an allow-listed dated snapshot (*-0731, *-0813)" >&2; exit 4;;

@@ -16,23 +16,31 @@ TAG=$1; KEY=$2; SK=$3
 RUNDIR=$R/outputs/tau3_banking_2525
 mkdir -p "$RUNDIR"
 
-# ── ORG KEY. Scripts silently fall back to or.txt (personal, ~10x different pricing), so the
-#    org key is exported here and its last 4 are echoed by the runner's own [KEY] line.
-# The env file location is overridable via EVOSKILL_ENV_FILE. The first version of this
-# guarded on "$R/.env" (repo root), which does not exist -- so the whole block was a silent
-# no-op and the key came from whatever happened to be in the ambient environment. That worked
-# only by luck; `OPENROUTER_API_KEY` is in fact UNSET in the launching shell. REFUSE rather
-# than fall back, because the failure mode is spending on the PERSONAL key, whose pricing
-# differs ~10x and which the standing directive forbids for experiment spend.
+# ── THE KEY. Read from an env FILE, never guessed from the ambient environment: the first
+# version guarded on a path that did not exist, so the block was a silent no-op and the key
+# came from whatever happened to be exported. REFUSE rather than fall back — the failure mode
+# is spending on the wrong account.
+# EVOSKILL_ENV_FILE overrides the location. OPENROUTER_ORG_KEY, when set, wins over
+# OPENROUTER_API_KEY: a machine that holds several keys can point experiment spend at one of
+# them without editing anything.
 ENVF="${EVOSKILL_ENV_FILE:-$R/.env}"
 [ -f "$ENVF" ] || { echo "no env file at $ENVF — refusing to guess the key" >&2; exit 4; }
 set +u; . "$ENVF"; set -u
 export OPENROUTER_API_KEY="${OPENROUTER_ORG_KEY:-${OPENROUTER_API_KEY:-}}"
 [ -n "${OPENROUTER_API_KEY:-}" ] || { echo "OPENROUTER_API_KEY empty after sourcing $ENVF" >&2; exit 4; }
-case "${OPENROUTER_API_KEY: -4}" in
-  <org-key-suffix>) : ;;   # ORG key, the only one permitted for experiment spend
-  *) echo "REFUSING: key ...${OPENROUTER_API_KEY: -4} is not the ORG key ...<org-key-suffix>" >&2; exit 4;;
-esac
+# OPTIONAL SPEND FENCE, off unless you ask for it. Set EVOSKILL_REQUIRE_KEY_SUFFIX to the last
+# characters of the key you intend to spend on, and this leg refuses to launch under any other.
+# Useful when one machine holds a shared/billed key and a personal one whose pricing differs;
+# the runner echoes the served key's last 4 on its own [KEY] line so the two can be told apart
+# after the fact. Unset = no fence, which is the right default for anyone but the author.
+if [ -n "${EVOSKILL_REQUIRE_KEY_SUFFIX:-}" ]; then
+  _n=${#EVOSKILL_REQUIRE_KEY_SUFFIX}
+  if [ "${OPENROUTER_API_KEY: -$_n}" != "$EVOSKILL_REQUIRE_KEY_SUFFIX" ]; then
+    echo "REFUSING: key ...${OPENROUTER_API_KEY: -4} does not end in the required" >&2
+    echo "  EVOSKILL_REQUIRE_KEY_SUFFIX (...${EVOSKILL_REQUIRE_KEY_SUFFIX})" >&2
+    exit 4
+  fi
+fi
 
 # ── WHAT IS BEING MEASURED ──────────────────────────────────────────────────────────
 export EVOSKILL_TAU3_SPLIT=${EVOSKILL_TAU3_SPLIT:-$RUNDIR/split_252547.json}

@@ -1051,7 +1051,7 @@ class Tau2Solver:
             # EACH PARTICIPANT GETS ITS OWN VIEW.
             # Agent turn: the agent's system prompt + the full causal stream.
             # User turn:  the FILTERED stream, and the USER SIMULATOR'S OWN system prompt
-            #   (#198, the maintainer 2026-08-07). This block previously showed NO system prompt on user
+            #   (#198, the maintainer, 2026-08-07). This block previously showed NO system prompt on user
             #   turns, reasoning that `system_prompt` is the AGENT's and attaching it would
             #   assert the user simulator had been given the agent's policy -- false, and the
             #   #146 failure mode exactly. That reasoning was right about the agent's prompt and

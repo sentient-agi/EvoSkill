@@ -2740,7 +2740,19 @@ def selftest() -> int:
         # held-out material in the digests must FAIL
         dg = ctx.paths.digests
         dg.mkdir(parents=True)
-        sp = json.loads(Path(spec.split_path).read_text())
+        # THE SELFTEST SUPPLIES ITS OWN SPLIT. It used to read spec.split_path — the fixture
+        # spec names the author's own run (outputs/tau3_banking_2525/split_252547.json), which
+        # exists on no other machine, so `--selftest` died with FileNotFoundError on every fresh
+        # clone: a self-check that cannot run anywhere but one laptop. The ids here are
+        # synthetic and the checks below only need "some train ids" and "some val ids".
+        if Path(spec.split_path).is_file():
+            sp = json.loads(Path(spec.split_path).read_text())
+        else:
+            sp = {"train": [f"task_{i:03d}" for i in range(1, 26)],
+                  "val": [f"task_{i:03d}" for i in range(26, 51)]}
+            _sp_path = ctx.run_dir / "selftest_split.json"
+            _sp_path.write_text(json.dumps(sp))
+            object.__setattr__(ctx.spec, "split_path", str(_sp_path))
         tr = sp["train"] if isinstance(sp["train"][0], str) else [x["id"] for x in sp["train"]]
         va = sp["val"] if isinstance(sp["val"][0], str) else [x["id"] for x in sp["val"]]
         for t in tr[:5]:
