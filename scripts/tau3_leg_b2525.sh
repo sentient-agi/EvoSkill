@@ -21,6 +21,12 @@ TAG=$1; KEY=$2; SK=$3
 # EVOSKILL_ENV_FILE overrides the location. OPENROUTER_ORG_KEY, when set, wins over
 # OPENROUTER_API_KEY: a machine that holds several keys can point experiment spend at one of
 # them without editing anything.
+# REQUIRED, not defaulted -- see scripts/ssbv2_leg.sh for the full note. run_tau3_banking.py
+# falls back to a hardcoded deepseek-v4-flash-0731 when this is unset, so a hand-run base leg
+# could be measured on a different model than the evolved legs it is compared against.
+: "${EVOSKILL_SOLVER_MODEL:?set EVOSKILL_SOLVER_MODEL to the solver model from the freeze receipt}"
+export EVOSKILL_SOLVER_MODEL
+
 ENVF="${EVOSKILL_ENV_FILE:-$R/.env}"
 [ -f "$ENVF" ] || { echo "no env file at $ENVF — refusing to guess the key" >&2; exit 4; }
 # An EXPORTED value wins over the file (scripts/lib/load_env.sh); the previous

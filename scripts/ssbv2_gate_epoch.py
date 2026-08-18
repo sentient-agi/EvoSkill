@@ -102,9 +102,32 @@ def compare(a: dict, b: dict, label: str, gate: dict, is_gate: bool) -> dict:
     if ta != tb:
         raise SystemExit(f"REFUSING: {label} — the two legs did not run the same task set")
 
+    # SAME TASKS IS NOT SAME COMPARISON -- THE SAMPLE COUNT HAS TO MATCH TOO.
+    # load_leg validates each leg against its OWN n_samples and never against the
+    # other's, and both loops below use zip(), which truncates in silence. With a
+    # base leg at N=3 and a skill leg at N=1 the episode-paired test then compares
+    # slot 0 only (10 pairs out of a declared 30-episode leg) while the cluster test
+    # sums 3 samples against 1 -- so the two PRE-REGISTERED tests are computed over
+    # different pairings of the same pair of legs, and the reader still emits a
+    # verdict. Measured: episode test cleared at p=0.0020 while the cluster test went
+    # the other way, from the same two files.
+    na, nb = a.get("n_samples"), b.get("n_samples")
+    if na != nb:
+        raise SystemExit(
+            f"REFUSING: {label} — the legs ran different sample counts "
+            f"(base n_samples={na}, skill n_samples={nb}). The paired tests would be "
+            f"computed over different pairings of the same legs.")
+    for i, (ra, rb) in enumerate(zip(va, vb)):
+        if len(ra) != len(rb):
+            raise SystemExit(
+                f"REFUSING: {label} — task {ta[i]!r} has {len(ra)} base samples and "
+                f"{len(rb)} skill samples; zip() would drop the excess in silence.")
+
     ep_up = ep_down = 0
+    ep_pairs = 0
     for ra, rb in zip(va, vb):
         for x, y in zip(ra, rb):
+            ep_pairs += 1
             if y > x:
                 ep_up += 1
             elif y < x:
@@ -123,12 +146,18 @@ def compare(a: dict, b: dict, label: str, gate: dict, is_gate: bool) -> dict:
         "label": label,
         "is_gate": is_gate,
         "alpha_corrected": alpha,
+        # `paired` is REPORTED, not just computed: it is the denominator each test
+        # actually ran over. When zip() could still truncate (before the n_samples
+        # refusal above) the two tests silently used different pairings of the same
+        # two legs, and nothing in the output said so.
         "episode_paired_sign": {
             "up": ep_up, "down": ep_down, "discordant": ep_up + ep_down,
+            "paired": ep_pairs,
             "p": sign_test_two_sided(ep_up, ep_down),
         },
         "cluster_pass_count_sign": {
             "up": cl_up, "down": cl_down, "discordant": cl_up + cl_down,
+            "paired": len(va),
             "p": sign_test_two_sided(cl_up, cl_down),
         },
     }

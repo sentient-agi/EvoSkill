@@ -127,6 +127,7 @@ export EVOSKILL_ENV_FILE=$PWD/.env             # holds OPENROUTER_API_KEY
 export EVOSKILL_TAU3_SPLIT=$PWD/outputs/my_run/split_325.json   # EXACT name from the receipt
 export EVOSKILL_TAU3_RUN_DIR=outputs/my_run
 export EVOSKILL_TAU3_CACHE_TAG=<cache tag from the freeze receipt>
+export EVOSKILL_SOLVER_MODEL=<solver model from the freeze receipt>   # same model as the evolved legs
 scripts/tau3_leg_b2525.sh my_run_base_train train BASE
 scripts/tau3_leg_b2525.sh my_run_base_val   val   BASE
 
@@ -136,7 +137,8 @@ EVOSKILL_TAU3_ORACLE_DIR=$PWD/outputs/my_run/oracle \
     uv run python scripts/make_tau3_oracle.py   # then --verify
 ```
 
-All three `EVOSKILL_TAU3_*` exports are mandatory — the launcher refuses
+All three `EVOSKILL_TAU3_*` exports **and `EVOSKILL_SOLVER_MODEL`** are
+mandatory — the launcher refuses
 without them rather than defaulting, because a defaulted cache tag would mix
 this run's episodes into another run's cache bucket.
 

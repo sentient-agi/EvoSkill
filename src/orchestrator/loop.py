@@ -1135,18 +1135,60 @@ def _v_leg_loaded_promoted(ctx: Ctx, key: str):
     return True, f"{key}: loaded {want.name}"
 
 
+def _require_ssbv2_root() -> str:
+    """The SSB v2 held-out data root, or refuse.
+
+    This was `os.environ.get("SSBV2_ROOT", "")`, so an unexported root produced an
+    affirmative EMPTY deny-list rather than an error -- and the launcher's own deny
+    probe could not see it: with EVOSKILL_LEAK_DENY_PATHS empty, tau3_evolver.sh
+    substitutes a TAU3 probe target, so on an SSB v2 run it could print "leak hook:
+    ARMED" having proved nothing about the SSB v2 reference workbooks, which are the
+    held-out material on that benchmark. An empty deny-list is not a configuration,
+    it is a missing one.
+    """
+    root = os.environ.get("SSBV2_ROOT", "").strip()
+    if not root:
+        raise RuntimeError(
+            "SSBV2_ROOT is not set, and this run declares benchmark=ssbv2. It names the "
+            "held-out data root handed to the evolver's leak hook as its deny list; "
+            "empty means the hook would guard nothing while still reporting ARMED. "
+            "Export SSBV2_ROOT (see README, SSB v2 bootstrap).")
+    if not Path(root).is_dir():
+        raise RuntimeError(
+            f"SSBV2_ROOT={root!r} is not a directory. The leak hook would be handed a "
+            f"deny path that matches nothing.")
+    return root
+
+
 def _v_no_infra_exclusions(ctx: Ctx, key: str):
     """An excluded episode is a silently smaller denominator. Neither exclusion nor
-    timeout-zeroing may be nonzero without a human deciding what it means."""
+    timeout-zeroing may be nonzero without a human deciding what it means.
+
+    CALLED, NOT REIMPLEMENTED. This used to carry its own copy of the rule, with
+    `d.get(field, 0) or 0` — so a leg that records NEITHER field, which is every SSB
+    v2 leg (only run_tau3_banking.py writes them), produced the affirmative "0
+    excluded, 0 timeout-zeroed" over a JSON holding no evidence either way. The
+    identical defect was found and fixed in invariants.check_no_infra_exclusions on
+    2026-08-18 — and the fix landed in only ONE of the two copies, which is exactly
+    what having two copies is for. The live orchestrator step, the one an operator
+    actually sees, kept the vacuous version.
+
+    A SKIP IS A FAILURE HERE, same as the contamination step below: the invariants
+    layer returns SKIP when the leg carries no evidence, which is honest per-check
+    and dishonest in aggregate.
+    """
+    from src.orchestrator.invariants import check_no_infra_exclusions
     p = ctx.paths.leg(key)
     if not p.exists():
         return False, f"no result json at {p.name}"
-    d = json.loads(p.read_text())
-    ex = d.get("episodes_excluded_infra", 0) or 0
-    tz = d.get("episodes_timeout_scored_zero", 0) or 0
-    if ex or tz:
-        return False, f"{key}: {ex} infra-excluded, {tz} timeout-zeroed — denominator moved"
-    return True, f"{key}: 0 excluded, 0 timeout-zeroed"
+    c = check_no_infra_exclusions(p)
+    if c.status == "PASS":
+        return True, f"{key}: {c.detail}"
+    if c.status == "SKIP":
+        return False, (f"{key}: {c.detail} — this step cannot be satisfied by a leg that "
+                       f"records no exclusion fields; make the runner write them, or declare "
+                       f"the comparison unmeasured rather than passing it")
+    return False, f"{key}: {c.detail}"
 
 
 def _v_skills_were_consulted(ctx: Ctx):
@@ -1937,7 +1979,7 @@ def _run_evolver(ctx: Ctx) -> None:
         # one. The hook's patterns knew tau3 paths and tau3 ids only, so on this run it
         # matched nothing and protected nothing; the launcher's deny-probe refused dispatch
         # (exit 13) rather than proceeding, which is why this was found before an evolver ran.
-        **({"EVOSKILL_LEAK_DENY_PATHS": os.environ.get("SSBV2_ROOT", "")}
+        **({"EVOSKILL_LEAK_DENY_PATHS": _require_ssbv2_root()}
            if getattr(ctx.spec, "benchmark", "") == "ssbv2" else {}),
         "EVOSKILL_TAU3_PHOENIX_PROJECT": f"{run_id(ctx)}-e{ctx.epoch}",
     })

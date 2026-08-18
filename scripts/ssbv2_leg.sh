@@ -73,7 +73,13 @@ case "$KEY" in train) PRIO=${EVO_PRIO:-10};; *) PRIO=${EVO_PRIO:-5};; esac
 # two are different models. The RunCache keys on the model STRING, so the wrong one here does not
 # corrupt an existing bucket — it silently opens a new one and re-buys every episode under a
 # model nobody chose.
-MODEL=${EVOSKILL_SOLVER_MODEL:-deepseek/deepseek-v4-flash-0731}
+# REQUIRED, not defaulted. `evoskill-loop` exports spec.solver_model for every leg it
+# launches (#320), but a HAND-RUN base leg -- which is how the README says to build the
+# comparator -- silently fell back to this hardcoded snapshot. So whenever the frozen spec
+# names any other solver, the base legs were measured on a different model from the evolved
+# legs, the driver compared them anyway, and nothing in the tree noticed. A defaulted model
+# is the same class of error as a defaulted cache tag, which this launcher already refuses.
+MODEL=${EVOSKILL_SOLVER_MODEL:?set EVOSKILL_SOLVER_MODEL to the solver model from the freeze receipt — a base leg measured on a different model than the evolved legs is not a comparator}
 # EXPLICIT ALLOW-LIST of dated snapshots, so no rolling tag can ever slip through. Extend it
 # only for a snapshot an operator named explicitly (the maintainer, 0815: deepseek-v4-pro-0813).
 case "$MODEL" in
