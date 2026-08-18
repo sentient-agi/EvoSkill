@@ -53,7 +53,11 @@ fi
 # ── OPENROUTER KEY. Taken from the environment; EVOSKILL_ENV_FILE (default <repo>/.env) is
 #    sourced as a fallback. Refuse to run without a key rather than guess.
 ENVF="${EVOSKILL_ENV_FILE:-$R/.env}"
-if [ -f "$ENVF" ]; then set +u; . "$ENVF"; set -u; fi
+# An EXPORTED value wins over the file -- see scripts/lib/load_env.sh for why this is not
+# a plain `. "$ENVF"` any more (the shipped template's empty OPENROUTER_API_KEY= used to
+# blank an exported key, and the launcher then refused).
+. "$R/scripts/lib/load_env.sh"
+evoskill_load_env "$ENVF"
 export OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
 [ -n "${OPENROUTER_API_KEY:-}" ] || { echo "OPENROUTER_API_KEY not set (env or $ENVF)" >&2; exit 4; }
 

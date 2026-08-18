@@ -23,7 +23,11 @@ TAG=$1; KEY=$2; SK=$3
 # them without editing anything.
 ENVF="${EVOSKILL_ENV_FILE:-$R/.env}"
 [ -f "$ENVF" ] || { echo "no env file at $ENVF — refusing to guess the key" >&2; exit 4; }
-set +u; . "$ENVF"; set -u
+# An EXPORTED value wins over the file (scripts/lib/load_env.sh); the previous
+# unconditional source let the template's empty OPENROUTER_API_KEY= blank an exported key
+# and made EVOSKILL_REQUIRE_KEY_SUFFIX fence a key the run did not spend.
+. "$R/scripts/lib/load_env.sh"
+evoskill_load_env "$ENVF"
 export OPENROUTER_API_KEY="${OPENROUTER_ORG_KEY:-${OPENROUTER_API_KEY:-}}"
 [ -n "${OPENROUTER_API_KEY:-}" ] || { echo "OPENROUTER_API_KEY empty after sourcing $ENVF" >&2; exit 4; }
 # OPTIONAL SPEND FENCE, off unless you ask for it. Set EVOSKILL_REQUIRE_KEY_SUFFIX to the last
