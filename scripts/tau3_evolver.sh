@@ -148,6 +148,65 @@ if not set(d.get("train", [])):
 print(f"  split      : {p.name} - {len(set(d['train']))} train, {len(held)} held-out [OK]")
 SPLITPY
 
+# ── THE ALLOWLIST THE HOOK WILL BE GIVEN, AND THE SHAPE GATE THAT NARROWS IT ──────────
+# The launcher is OUTSIDE the sandbox and may read the split; the hook is INSIDE and may
+# not (the profile hides the run dir precisely because the split lists every held-out id).
+# So the launcher derives, from the split, only values that are derivable FROM THE TRAIN
+# ARM ALONE -- train ids, and a regex describing their shape -- and hands those to the
+# hook in band. Nothing held-out crosses the boundary.
+_TRAIN_IDS=$(python3 - "$EVO_SPLIT" <<'IDPY'
+import json, re, sys
+d = json.loads(open(sys.argv[1]).read())
+ids = sorted(set(d["train"]))
+bad = [i for i in ids if not re.fullmatch(r"[A-Za-z0-9_/.-]+", i)]
+if bad:
+    # The value is interpolated into a single-quoted shell prefix in the settings JSON;
+    # a quote or space would truncate the allowlist into a SMALLER one, i.e. silently
+    # over-block and produce a dead evolver.
+    print(f"REFUSING: train ids contain shell-unsafe characters: {bad[:4]}", file=sys.stderr)
+    raise SystemExit(1)
+print(" ".join(ids))
+IDPY
+) || exit 14
+
+# THE SHAPE GATE. Inverting to an allowlist inverts the cost of a false positive: under a
+# denylist a token that merely LOOKS like an id hits nothing; under an allowlist it is
+# DENIED, and a denied read is silent (the evolver just works around it). TASK_RE's second
+# alternative is `[A-Za-z][A-Za-z_]*[/_]\d+_\d+`, which matches ordinary filenames like
+# results_08_18.json or notes_10_20.md. So narrow the candidate pattern to the shape the
+# TRAIN ids actually take -- including their literal category prefixes, which are train-only
+# information -- and then PROVE, against the split, that every held-out id still matches it.
+# If the proof fails we do NOT narrow (the hook falls back to the full TASK_RE): safety is
+# never traded for precision, and the pattern is never derived from a held-out id.
+_ID_RE=$(python3 - "$EVO_SPLIT" <<'REPY'
+import json, re, sys
+d = json.loads(open(sys.argv[1]).read())
+train = sorted(set(d["train"])); held = sorted(set(d.get("val", [])) | set(d.get("test", [])))
+if all(re.fullmatch(r"task_\d+", i) for i in train):
+    cand = r"task_\d+"
+else:
+    prefixes = sorted({i.split("/")[0] for i in train if "/" in i})
+    if not prefixes:
+        raise SystemExit(0)
+    cand = r"(?:%s)[/_]\d+_\d+" % "|".join(re.escape(x) for x in prefixes)
+missed = [i for i in held
+          if not (re.fullmatch(cand, i) or re.fullmatch(cand, i.replace("/", "_")))]
+if missed:
+    print(f"  shape gate : NOT narrowed — {len(missed)} held-out id(s) would escape "
+          f"(e.g. {missed[:2]}); falling back to the full id pattern", file=sys.stderr)
+    raise SystemExit(0)
+print(cand)
+REPY
+)
+# JSON-ESCAPED FOR EMBEDDING. The narrowed pattern contains backslashes (task_\d+), and
+# `\d` is not a valid JSON escape — pasting it raw into leak_hook_settings.json makes the
+# file unparseable, which the settings guard below catches and refuses on. Keep the RAW
+# value for the shell and hand the escaped one to the heredoc.
+_ID_RE_JSON=$(printf '%s' "$_ID_RE" | sed 's/\\/\\\\/g')
+if [ -n "$_ID_RE" ]; then
+  echo "  shape gate : candidate ids narrowed to /$_ID_RE/ (validated: every held-out id matches)"
+fi
+
 if [ "${EVOSKILL_ORACLE_ABSENT:-0}" = "1" ]; then
   echo "ORACLE DECLARED ABSENT — this benchmark exposes no golden specifications."
   echo "  granted + self-describing: $ORACLE/README.md"
@@ -830,7 +889,7 @@ cat > "$HOOK_SETTINGS" <<EOF
         "matcher": "Bash|Read|Grep|Glob",
         "hooks": [
           {"type": "command",
-           "command": "EVOSKILL_EVOLVER_SPLIT='$EVO_SPLIT' EVOSKILL_LEAK_DENY_PATHS='${EVOSKILL_LEAK_DENY_PATHS:-}' python3 '$ROOT/scripts/evolver_leak_hook.py'"}
+           "command": "EVOSKILL_EVOLVER_TRAIN_IDS='$_TRAIN_IDS' EVOSKILL_EVOLVER_ID_RE='$_ID_RE_JSON' EVOSKILL_LEAK_DENY_PATHS='${EVOSKILL_LEAK_DENY_PATHS:-}' python3 '$ROOT/scripts/evolver_leak_hook.py'"}
         ]
       },
       {
@@ -955,7 +1014,11 @@ else
   _probe_target="$ROOT/third_party/tau3-bench/data/tau2/domains/$EVO_DOMAIN/tasks.json"
 fi
 _probe='{"tool_name":"Bash","tool_input":{"command":"cat '"$_probe_target"'"}}'
-export EVOSKILL_EVOLVER_SPLIT="$EVO_SPLIT"
+# The child is NOT given the split path any more: it cannot read the file (the profile
+# hides the run dir) and advertising its location to a process forbidden to read it was
+# only ever an invitation. The hook receives the train allowlist instead.
+export EVOSKILL_EVOLVER_TRAIN_IDS="$_TRAIN_IDS"
+export EVOSKILL_EVOLVER_ID_RE="$_ID_RE"
 export EVOSKILL_LEAK_DENY_PATHS="${EVOSKILL_LEAK_DENY_PATHS:-}"
 _hook_rc "$_probe" "$ROOT/scripts/evolver_leak_hook.py"
 if ! _denied_ok "BLOCKED"; then
@@ -1002,37 +1065,64 @@ case "$_leakcmd" in
     echo "  CC reports only a per-call 'hook error' the model never surfaces (#212)." >&2
     exit 13;;
 esac
+# ── P1 HELD-OUT ID AND P2 TRAIN ID, BOTH UNDER THE CHILD'S OWN PROFILE ───────────────
+# The probe that would have caught the 2026-08-18 defect differs from the shipped one in
+# TWO ways, and it needs both:
+#   (a) it names an ID from the split, not a path. The path probe above is satisfied by
+#       LEAK_PATH_RE alone, which is why it stayed green while the id detector was dead.
+#   (b) it runs under ${SB[@]} -- the SAME profile the evolver child gets. The previous
+#       version ran in the LAUNCHER, which is deliberately unsandboxed, so it measured a
+#       process in a different world from the one the hook runs in: rc=2 there, rc=1
+#       (PermissionError, NON-blocking) in the child. Measuring the wrong world is how a
+#       dead guard got certified twice.
+# SB=() when EVOSKILL_EVOLVER_SANDBOX=0, so one body covers both configurations. The
+# ${SB[@]+"${SB[@]}"} form is required: a bare "${SB[@]}" is an unbound-variable error
+# under `set -u` when the array is empty.
 _heldid=$(python3 -c "
 import json
 d = json.load(open('$EVO_SPLIT'))
 h = sorted(set(d.get('val', [])) | set(d.get('test', [])))
 print(h[0].replace('/', '_'))")
-_iprobe='{"tool_name":"Read","tool_input":{"file_path":"/tmp/'"$_heldid"'.json"}}'
-_IRC=0
-_ierrf=$(mktemp)
-# `bash -c`, NOT `eval`: measured 2026-08-18, a bare `eval` as the last stage of a
-# pipeline under this script's `set -e` reports 1 even when the hook exits 2 and prints
-# BLOCKED — i.e. it turns a WORKING guard into a refusal, and would have turned a
-# fail-open into "1" too, which this probe treats as not-blocked. A fresh `bash -c` does
-# not inherit errexit, returns the hook's real code, and still runs the settings file's
-# own command string, which is the property that matters (#212).
-printf '%s' "$_iprobe" | bash -c "$_leakcmd" >/dev/null 2>"$_ierrf" || _IRC=$?
-_IERR=$(cat "$_ierrf"); rm -f "$_ierrf"
-_denyseen=0; case "$_IERR" in (*BLOCKED*) _denyseen=1;; esac
-if [ "$_IRC" -ne 2 ] || [ "$_denyseen" -ne 1 ]; then
+_trainid=$(python3 -c "
+import json
+d = json.load(open('$EVO_SPLIT'))
+print(sorted(set(d['train']))[0].replace('/', '_'))")
+
+_probe_hook () {   # $1 = payload -> _IRC/_IERR, from the WIRED command, under the profile
+  _pf=$(mktemp); _IRC=0
+  printf '%s' "$1" | ${SB[@]+"${SB[@]}"} bash -c "$_leakcmd" >/dev/null 2>"$_pf" || _IRC=$?
+  _IERR=$(cat "$_pf"); rm -f "$_pf"
+}
+
+_probe_hook '{"tool_name":"Read","tool_input":{"file_path":"/tmp/'"$_heldid"'.json"}}'
+_denyseen=0;  case "$_IERR" in (*BLOCKED*) _denyseen=1;; esac
+_blindseen=0; case "$_IERR" in (*"LEAK GUARD BLIND"*) _blindseen=1;; esac
+if [ "$_IRC" -ne 2 ] || [ "$_denyseen" -ne 1 ] || [ "$_blindseen" -eq 1 ]; then
   echo "REFUSING: the leak hook did NOT block held-out task id '$_heldid'." >&2
-  [ "$_denyseen" -eq 1 ] || echo "  (no BLOCKED banner on stderr — exit $_IRC may just be a missing file.)" >&2
-  echo "  Expected exit 2; got $_IRC, running the settings file's own command:" >&2
+  echo "  Expected exit 2, a BLOCKED banner, and NO BLIND banner; got exit $_IRC." >&2
+  echo "  Command (from the settings file), run under the child's own profile:" >&2
   echo "    $_leakcmd" >&2
-  echo "  Held-out ids are nameable to the evolver. If the split is unusable the hook" >&2
-  echo "  drops to denying EVERY id, so a 0 here means the wiring itself is wrong." >&2
-  if [ "$_IRC" -ne 0 ]; then
-    echo "  A non-zero code that is NOT 2 does not block under Claude Code — the hook is" >&2
-    echo "  crashing and enforces NOTHING. Its stderr was:" >&2
-    printf '%s\n' "$_IERR" | sed 's/^/    /' >&2
-  fi
+  [ "$_denyseen" -eq 1 ] || echo "  No BLOCKED banner — exit 2 alone proves nothing, python3 exits 2 for a missing file." >&2
+  [ "$_blindseen" -eq 0 ] || echo "  BLIND banner — the hook is denying EVERYTHING. That is not enforcement, it is a dead evolver." >&2
+  printf '%s\n' "$_IERR" | sed 's/^/    /' >&2
   exit 13
 fi
+
+# P2 -- THE MUST-ALLOW THAT MAKES FAIL-CLOSED SURVIVABLE. The other must-allow probes
+# `ls -la $DIGESTS`, a directory path containing NO task id, so it returns 0 even when the
+# hook denies every id. A blind hook therefore passed BOTH shipped probes while producing
+# exactly the dead evolver this launcher warns about. Naming a real TRAIN id closes that,
+# and it is the case the allowlist design makes load-bearing: digest filenames ARE task ids.
+_probe_hook '{"tool_name":"Bash","tool_input":{"command":"cat '"$DIGESTS"'/'"$_trainid"'.md"}}'
+if [ "$_IRC" -ne 0 ]; then
+  echo "REFUSING: the leak hook DENIES this run's own train evidence ('$_trainid')." >&2
+  echo "  Expected exit 0; got $_IRC. The evolver could not read the digests it exists to" >&2
+  echo "  learn from, and an over-block is SILENT -- a denied read looks like an evolver" >&2
+  echo "  that simply chose not to look." >&2
+  printf '%s\n' "$_IERR" | sed 's/^/    /' >&2
+  exit 21
+fi
+
 # ... and prove it ALLOWS ordinary environment reads. Without a must-ALLOW case the
 # matcher can be widened until it denies everything, which LOOKS like maximal safety and
 # is in fact a dead evolver: a blocked read is invisible in the result, the model simply
