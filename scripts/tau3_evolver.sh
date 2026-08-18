@@ -929,6 +929,18 @@ _hook_rc() {  # _hook_rc <payload_json> <hook_path>  -> sets _HOOK_RC, _HOOK_ERR
   _HOOK_ERR=$(cat "$_errf")
   rm -f "$_errf"
 }
+# EXIT 2 IS NOT SELF-CERTIFYING, so a deny probe must also see the hook SPEAK.
+# `python3 <missing file>` exits 2. So does `python3 <file with a syntax error>`. A probe
+# that accepts "rc == 2" therefore passes on a hook that DOES NOT EXIST -- which is the
+# exact failure this whole guard exists to catch: the leak hook was importing a module
+# that had never been ported, and the launcher printed ARMED anyway. Requiring the hook's
+# own deny banner on stderr distinguishes "the hook ran and refused" from "the interpreter
+# could not start". Both conditions, every time.
+_denied_ok () {  # $1 = expected marker; uses _HOOK_RC/_HOOK_ERR from _hook_rc
+  [ "$_HOOK_RC" -eq 2 ] || return 1
+  case "$_HOOK_ERR" in (*"$1"*) return 0;; esac
+  return 1
+}
 # Prove the hook DENIES before trusting it to. A hook that silently fails open is
 # worse than none: the launcher would report protection it is not providing, which
 # is the vacuous-guard shape that has bitten this codebase repeatedly (#154).
@@ -946,8 +958,12 @@ _probe='{"tool_name":"Bash","tool_input":{"command":"cat '"$_probe_target"'"}}'
 export EVOSKILL_EVOLVER_SPLIT="$EVO_SPLIT"
 export EVOSKILL_LEAK_DENY_PATHS="${EVOSKILL_LEAK_DENY_PATHS:-}"
 _hook_rc "$_probe" "$ROOT/scripts/evolver_leak_hook.py"
-if [ "$_HOOK_RC" -ne 2 ]; then
+if ! _denied_ok "BLOCKED"; then
   echo "REFUSING: the leak hook did NOT block a read of the full task pool." >&2
+  case "$_HOOK_ERR" in (*BLOCKED*) : ;; (*)
+    echo "  (its stderr carries no BLOCKED banner, so exit $_HOOK_RC did not come from the" >&2
+    echo "   hook refusing -- python3 exits 2 for a MISSING or unparseable file too.)" >&2;;
+  esac
   echo "  Expected exit 2 from scripts/evolver_leak_hook.py; got $_HOOK_RC." >&2
   if [ "$_HOOK_RC" -eq 0 ]; then
     echo "  Exit 0 = the hook examined the payload and ALLOWED it. Held-out specs" >&2
@@ -1002,8 +1018,10 @@ _ierrf=$(mktemp)
 # own command string, which is the property that matters (#212).
 printf '%s' "$_iprobe" | bash -c "$_leakcmd" >/dev/null 2>"$_ierrf" || _IRC=$?
 _IERR=$(cat "$_ierrf"); rm -f "$_ierrf"
-if [ "$_IRC" -ne 2 ]; then
+_denyseen=0; case "$_IERR" in (*BLOCKED*) _denyseen=1;; esac
+if [ "$_IRC" -ne 2 ] || [ "$_denyseen" -ne 1 ]; then
   echo "REFUSING: the leak hook did NOT block held-out task id '$_heldid'." >&2
+  [ "$_denyseen" -eq 1 ] || echo "  (no BLOCKED banner on stderr — exit $_IRC may just be a missing file.)" >&2
   echo "  Expected exit 2; got $_IRC, running the settings file's own command:" >&2
   echo "    $_leakcmd" >&2
   echo "  Held-out ids are nameable to the evolver. If the split is unusable the hook" >&2
@@ -1034,7 +1052,7 @@ fi
 _pprobe='{"tool_name":"Bash","tool_input":{"command":"cd '"$ROOT"'/outputs/tau3_banking_2525 && for f in skills_v1/*/SKILL.md; do cat \"$f\"; done"}}'
 export EVOSKILL_EVOLVER_STAGING="$STAGING"
 _hook_rc "$_pprobe" "$ROOT/scripts/evolver_peer_skill_hook.py"
-if [ "$_HOOK_RC" -ne 2 ]; then
+if ! _denied_ok "BLOCKED"; then
   echo "REFUSING: the peer-skill hook did NOT block a read of another run's skills_v1." >&2
   echo "  Expected exit 2; got $_HOOK_RC (only 2 blocks a tool call; see the note above)." >&2
   echo "  Another optimizer's answers to THESE SAME train tasks would be readable, which" >&2
@@ -1055,7 +1073,7 @@ fi
 # a careless narrowing would drop.
 _pprobe2='{"tool_name":"Bash","tool_input":{"command":"cd '"$ROOT"'/outputs/tau3_banking_2525 && for d in skills_v1 skills_v2; do ls -la $d; done"}}'
 _hook_rc "$_pprobe2" "$ROOT/scripts/evolver_peer_skill_hook.py"
-if [ "$_HOOK_RC" -ne 2 ]; then
+if ! _denied_ok "BLOCKED"; then
   echo "REFUSING: the peer-skill hook did NOT block the bare 'skills_v1 skills_v2' form." >&2
   echo "  Expected exit 2; got $_HOOK_RC (only 2 blocks a tool call; see the note above)." >&2
   echo "  This is #213's second command; the #215 narrowing must not have dropped it." >&2

@@ -31,12 +31,21 @@ def resolve_base(data_root) -> Path:
     that rewrites host golden paths into container paths. Under the first layout the prefix
     matched nothing, the replace was a silent no-op, and every task meta file shipped a HOST
     path into the container. A second copy of a convention is a second chance to disagree.
+    ALWAYS CANONICAL. This returns a RESOLVED path, because the one place that decides the
+    layout must also decide the spelling. task_workspace.py calls .resolve() on the result
+    before using it as the str.replace() prefix that rewrites host golden paths into
+    container paths, while TASK_INDEX's golden paths are built from what this returns. So
+    any SSBV2_ROOT containing `..`, a symlink, or a relative segment yielded two different
+    spellings of the same directory: the prefix matched nothing and the rewrite silently
+    no-oped -- and now that the no-op raises, it hard-fails while blaming a second root that
+    does not exist, with README.md's own verification step still printing OK. Resolving here
+    makes the two agree by construction instead of by both sides remembering to.
     """
-    data_root = Path(data_root)
+    data_root = Path(data_root).resolve()
     for cand in (data_root / "data" / "spreadsheetbench-v2",
                  data_root / "spreadsheetbench-v2"):
         if cand.exists():
-            return cand
+            return cand.resolve()
     return data_root
 
 
