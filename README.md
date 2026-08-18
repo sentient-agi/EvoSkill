@@ -18,9 +18,15 @@ graded cell-by-cell against a reference workbook).
 - **Docker** — native on Linux; on macOS use [colima](https://github.com/abiosoft/colima)
   (`colima start --cpu 8 --memory 12` or larger; keep `/Users` shared, the default).
 - **Claude Code CLI** (`npm install -g @anthropic-ai/claude-code`). The AO and
-  the evolver run through the `claude` binary. Authenticate with either
-  a Claude subscription (`claude login`) or an Anthropic API key
-  (`ANTHROPIC_API_KEY`).
+  the evolver run through the `claude` binary, and they need a **Claude
+  subscription** — run `claude login`. An `ANTHROPIC_API_KEY` will NOT work for
+  these two steps: `subscription_env()` in `src/orchestrator/quota_scope.py`
+  deliberately removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and
+  `ANTHROPIC_BASE_URL` from every `claude` child that runs a Claude-family
+  model. That is not an oversight (#307): the quota gate reads the subscription
+  window, so if the child silently spent API credit instead, the gate would be
+  guarding a budget the run does not use. The key is still needed for solver
+  models that reach Anthropic through a gateway.
 - An **OpenRouter API key** (`OPENROUTER_API_KEY`) for the solver model.
 - `git`.
 

@@ -85,6 +85,55 @@ class EvolverJob:
 
 # ── containment ─────────────────────────────────────────────────────────────────────────────
 
+def _cli_install_allows() -> list[str]:
+    """Read grants for wherever the `claude` CLI actually lives on THIS machine.
+
+    Returns the resolved binary, its bin dir, and -- for a node install -- the package
+    tree next to it, since the launcher script only re-execs into node_modules. Silent
+    when the CLI is absent: preflight reports that separately, and a profile is still
+    emittable on a machine that has not installed it yet.
+    """
+    out: list[str] = []
+    exe = shutil.which("claude")
+    if not exe:
+        return out
+    real = Path(exe).resolve()
+    roots = {Path(exe).parent, real.parent}
+    # npm -g layout: <prefix>/bin/claude -> <prefix>/lib/node_modules/@anthropic-ai/...
+    for cand in (real.parent.parent, Path(exe).parent.parent):
+        for sub in ("lib/node_modules", "libexec"):
+            q = cand / sub
+            if q.is_dir():
+                roots.add(q)
+    node = shutil.which("node")
+    if node:
+        # BOTH the symlink's directory and its target's: sandbox-exec resolves an exec
+        # through every path component, so granting only the realpath tree still failed at
+        # /opt/homebrew/bin/node with "execvp() ... Operation not permitted".
+        roots.add(Path(node).parent)
+        roots.add(Path(node).resolve().parent)
+        roots.add(Path(node).resolve().parent.parent)
+
+    # A PACKAGE-MANAGER PREFIX, GRANTED ONLY IF THE CLI ACTUALLY LIVES IN ONE.
+    # Homebrew's node loads a web of sibling dylibs (@rpath/libnode.*, then
+    # /opt/homebrew/opt/llhttp/lib/libllhttp.*, and onward), so granting the node package
+    # alone gets past execvp and dies in dyld one symptom later. Enumerating those
+    # libraries is unbounded and version-specific. The trade taken here: if -- and only
+    # if -- the resolved CLI or its interpreter sits under a known prefix, grant that
+    # prefix for READ. It is the operator's own toolchain directory; the containment that
+    # matters is over the benchmark's held-out material, which lives under $HOME and the
+    # repo and is denied by name elsewhere in this profile. On a machine where the CLI is
+    # self-contained (the ~/.local install) no prefix is granted at all.
+    for pref in (Path("/opt/homebrew"), Path("/usr/local"), Path("/opt/local")):
+        if any(str(r).startswith(str(pref)) for r in roots):
+            roots.add(pref)
+    out.append("; the `claude` CLI as installed on THIS machine, derived not assumed (#291)")
+    out.append(f'(allow file-read* (literal "{real}"))')
+    for r in sorted({str(x) for x in roots}):
+        out.append(f'(allow file-read* (subpath "{r}"))')
+    return out
+
+
 def build_evolver_sandbox_profile(job: EvolverJob) -> str:
     """Deny-read by default; grant ONLY what the evolver is entitled to.
 
@@ -173,8 +222,17 @@ def build_evolver_sandbox_profile(job: EvolverJob) -> str:
     # ~/.local for exactly this reason — I read that line while deciding not to reuse the profile
     # and did not carry the requirement across. Granting the interpreter tree is safe: it is
     # outside the repository, so held-out specs stay denied.
+    # ...AND THE UNRESOLVED PATH, WHICH IS THE ONE THAT GETS EXEC'D. resolve() maps
+    # .venv/bin/python to its conda target, so only the conda tree was granted, while the
+    # exec itself names the venv symlink inside the REPO -- denied by design. Result:
+    #     execvp() of '<repo>/.venv/bin/python' failed: Operation not permitted
+    # which is the #250 failure again, one indirection out. Caught 2026-08-18 by this
+    # module's own selftest reporting "9 checks, 1 bad" while the launcher still dispatched.
+    # A read grant on .venv/bin does not widen access to the repo's content: the src/ and
+    # scripts/ content grants are separate and held-out material is denied by name.
     _exe = Path(sys.executable).resolve()
-    _interp = sorted({str(_exe.parents[1]), str(Path.home() / ".local")})
+    _interp = sorted({str(_exe.parents[1]), str(Path.home() / ".local"),
+                      str(Path(sys.executable).parent)})
     interp_allows = "\n".join(f'(allow file-read* (subpath "{d}"))' for d in _interp)
 
     # #250b. THE RUNNER MODULE LIVES IN THE REPO, AND THE REPO IS DENIED BY DESIGN. Granting the
@@ -277,11 +335,20 @@ def build_evolver_sandbox_profile(job: EvolverJob) -> str:
          "; `Not logged in` and exits 1 — the write grant on ~/.claude is not sufficient.",
          f'(allow file-read* (subpath "{Path.home() / ".local"}"))',
          f'(allow file-read* (subpath "{_home_claude}"))',
+         # #291 FOURTH SITE. The grants above cover ~/.local, which is where the CLI lands
+         # for the installer this repo's authors happen to use -- so the profile worked here
+         # and nowhere else. README.md tells operators to `npm install -g`, which under
+         # Homebrew on Apple Silicon puts the binary at /opt/homebrew/bin/claude with its
+         # modules under /opt/homebrew/lib/node_modules, and /opt is DENIED a few lines
+         # below. The child then dies at execvp while the launcher prints "containment:
+         # sandbox-exec ...". Derive the location instead of assuming it, the same way #250
+         # derives the interpreter from sys.executable rather than hardcoding a path.
          f'(allow file-read* (literal "{Path.home() / ".claude.json"}"))',
          f'(allow file-read* (subpath "{Path.home() / "Library" / "Keychains"}"))',
          "; ... but NOT other sessions' transcripts. Granted above by the ~/.claude subpath;",
          "; taken back here, because that tree holds every past run's conversation on this host.",
-         f'(deny file-read* (subpath "{_home_claude / "projects"}"))'])
+         f'(deny file-read* (subpath "{_home_claude / "projects"}"))']
+        + _cli_install_allows())
 
     # #296. RULE ORDER IS THE WHOLE PROFILE, and it was inverted. SBPL takes the LAST matching
     # rule, and the broad "minimum needed to run a shell" allow -- which includes
@@ -414,6 +481,22 @@ def preflight(job: EvolverJob) -> list[str]:
                            capture_output=True, text=True, timeout=60)
         if r.returncode:
             bad.append(f"cannot EXEC {sys.executable}: {(r.stderr or '').strip()[:120]}")
+        # 1b. THE `claude` CLI MUST EXEC. Preflight covered the interpreter and the runner
+        # but never the binary the AO and the evolver actually run through, so the one gap
+        # it could not see was the one that hit operators who installed the CLI where
+        # README.md tells them to (npm -g -> /opt/homebrew, a DENIED tree). This probe is
+        # the reason the grant above can stay narrow: if a machine puts the CLI somewhere
+        # neither is derived, this says so before a dispatch is spent rather than after.
+        cli = shutil.which("claude")
+        if cli is None:
+            bad.append("`claude` is not on PATH — the AO and the evolver both exec it "
+                       "(README: npm install -g @anthropic-ai/claude-code)")
+        else:
+            r = subprocess.run(["sandbox-exec", "-f", prof, cli, "--version"],
+                               capture_output=True, text=True, timeout=60)
+            if r.returncode:
+                bad.append(f"cannot EXEC the claude CLI at {cli} under the profile: "
+                           f"{(r.stderr or '').strip()[:160]}")
         # 2. the runner module must IMPORT
         r = subprocess.run(["sandbox-exec", "-f", prof, sys.executable, "-c",
                             "import src.orchestrator.evolver_direct_runner"],
