@@ -122,6 +122,11 @@ SOFF=$(dex 'command -v soffice || true')
 [ -n "$SOFF" ] || fail "soffice is not on PATH — this is the whole point of the image"
 ok "soffice -> $SOFF"
 
+LOVER=$(dex 'cat /etc/evoskill_libreoffice_version 2>/dev/null || soffice --version')
+ok "LibreOffice ${LOVER:-UNKNOWN}  (the grading engine; not version-pinned — see the note
+        in Dockerfile.libreoffice. Record this next to any number produced on this image:
+        results graded by two different LibreOffice versions are not strictly comparable.)"
+
 LIBRE=$(dex 'command -v libreoffice || true')
 [ -n "$LIBRE" ] || fail "libreoffice is not on PATH.
   The scorer invokes the command as \`libreoffice\`, not \`soffice\`

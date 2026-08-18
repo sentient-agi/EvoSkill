@@ -28,7 +28,13 @@
 # persists in the Colima VM until a restart and WILL make this build fail on
 # apt/pip. Check with `colima ssh -- sudo iptables -L DOCKER-USER -n` first.
 
-FROM python:3.11-slim
+# BASE PINNED BY DIGEST, not by tag. `python:3.11-slim` is a moving pointer: two builds
+# a month apart inherit different OS packages, so an image built from a tag is not the
+# image the numbers were produced on, and nothing in the pipeline would say so. Refresh
+# deliberately with:
+#     docker manifest inspect -v python:3.11-slim | python3 -c "import json,sys; print(json.load(sys.stdin)['Descriptor']['digest'])"
+# Resolved 2026-08-18.
+FROM python:3.11-slim@sha256:ff05d1a05204fb9f7444c435db8e8ec104e587a413280dc9ffc27a4797554182
 
 # Pinned exactly as the 2026-07-15 image: openpyxl is the only spreadsheet
 # library, and it is a READER/WRITER, not an evaluator.

@@ -41,7 +41,17 @@ FROM ${BASE}
 # so LibreOffice is what the solver gets.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libreoffice-calc python3-uno && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    soffice --version > /etc/evoskill_libreoffice_version
+# LIBREOFFICE IS THE GRADING ENGINE, AND IT IS NOT VERSION-PINNED. It cannot honestly be:
+# apt has exactly one libreoffice-calc per Debian release and older builds leave the
+# archive, so a hard `=version` pin turns into an unbuildable image rather than a
+# reproducible one. What IS possible is refusing to be vague about it — the version that
+# was actually installed is written into the image above, build_ssb_solver_lo.sh prints it,
+# and `docker run <img> cat /etc/evoskill_libreoffice_version` recovers it for any image
+# whose numbers are being compared. Two results computed by different LibreOffice versions
+# are not strictly comparable; this makes that checkable after the fact instead of
+# unknowable.
 
 # PATH ORDER MATTERS AND IS ASSERTED IN THE BUILD SCRIPT. python3-uno pulls in
 # Debian's /usr/bin/python3, which has NO openpyxl/pandas/numpy. The base image's

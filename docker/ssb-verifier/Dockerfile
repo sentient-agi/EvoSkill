@@ -10,9 +10,21 @@
 # /usr/bin/python3 — Debian's python, the only one with UNO bindings. Without it
 # every Data-Table UNO solve fails exit-127 and silently falls back to a plain
 # recalc, which cannot compute =TABLE() cells.
-FROM python:3.11-slim
+# BASE PINNED BY DIGEST, not by tag. `python:3.11-slim` is a moving pointer: two builds
+# a month apart inherit different OS packages, so an image built from a tag is not the
+# image the numbers were produced on, and nothing in the pipeline would say so. Refresh
+# deliberately with:
+#     docker manifest inspect -v python:3.11-slim | python3 -c "import json,sys; print(json.load(sys.stdin)['Descriptor']['digest'])"
+# Resolved 2026-08-18.
+FROM python:3.11-slim@sha256:ff05d1a05204fb9f7444c435db8e8ec104e587a413280dc9ffc27a4797554182
 RUN apt-get update && apt-get install -y --no-install-recommends libreoffice-calc python3-uno && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    soffice --version > /etc/evoskill_libreoffice_version
+# The grading engine's version, recorded because it cannot be pinned (apt carries one
+# libreoffice-calc per Debian release). Recover it from any built image with
+# `docker run --rm ssb-verifier:latest cat /etc/evoskill_libreoffice_version`; two results
+# graded by different versions are not strictly comparable, and this is what makes that
+# answerable rather than unknowable. Same treatment in Dockerfile.libreoffice.
 RUN pip install --no-cache-dir openpyxl==3.1.3 pandas==2.2.0 numpy==1.26.4
 WORKDIR /app
 RUN mkdir -p /app/spreadsheets /app/output /logs/verifier /tests
