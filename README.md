@@ -74,17 +74,66 @@ evoskill new --brief brief.txt \
 The AO reads the repository, resolves what the brief means, asks you about
 anything it refuses to pick on its own (split sizes, budgets), and freezes
 the experiment: the train/validation/test split, the models, the budgets,
-and the scorer. Then drive it one step at a time:
+and the scorer. (Headless: pass unproposed answers as
+`--script '{"seed": 801, "n_samples": 3}'`.)
+
+### Bootstrap epoch 1: base legs, oracle, declarations
+
+The driver measures an epoch against a no-skills BASE comparator, and it
+does not run that comparator for you — the base legs are yours, so that
+what everything is compared against was launched and read by a person.
+For a tau3 run (env vars shown are the ones the smoke run actually used;
+the split/cache-tag values come from the AO's freeze receipt):
+
+```bash
+export EVOSKILL_ENV_FILE=$PWD/.env             # holds OPENROUTER_API_KEY
+export EVOSKILL_TAU3_SPLIT=$PWD/outputs/my_run/split.json
+export EVOSKILL_TAU3_RUN_DIR=outputs/my_run
+export EVOSKILL_TAU3_CACHE_TAG=<cache tag from the freeze receipt>
+scripts/tau3_leg_b2525.sh my_run_base_train train BASE
+scripts/tau3_leg_b2525.sh my_run_base_val   val   BASE
+
+# The evolver's ground-truth oracle (train tasks only, by construction):
+EVOSKILL_TAU3_ORACLE_SPLIT=$PWD/outputs/my_run/split.json \
+EVOSKILL_TAU3_ORACLE_DIR=$PWD/outputs/my_run/oracle \
+    python scripts/make_tau3_oracle.py          # then --verify
+```
+
+When both base result JSONs exist, declare them once in
+`outputs/my_run/RUNTIME.json` — the driver reads it on every invocation:
+
+```json
+{
+ "base_leg": "outputs/my_run/my_run_base_train.json",
+ "base_leg_val": "outputs/my_run/my_run_base_val.json",
+ "digest_caches": [".cache/<the cache_dirs recorded in the base train JSON>"],
+ "oracle": "outputs/my_run/oracle"
+}
+```
+
+`digest_caches` must be copied from the `cache_dirs` field of the base
+train result JSON — the runner records the real directory names there, and
+the driver refuses to re-derive them.
+
+### Drive the epoch
 
 ```bash
 evoskill-loop --run-dir outputs/my_run --epoch 1 --drive --step \
     --note "first epoch"
 ```
 
-Each `--drive --step` invocation advances exactly one step of the epoch
-(base legs, evolver dispatch, evolved legs, verification gates) and stops.
-Run it repeatedly — or in a shell loop — and read what it printed before
+Each `--drive --step` invocation advances one or more steps of the epoch
+(evidence surface, AO-authored evolver prompt, evolver dispatch, evolved
+legs, verification gates) and stops at the first HALT, question, or
+operator gate. Run it repeatedly and read what it printed before
 continuing. `--drive` without `--step` deliberately exits with code 64.
+
+Expect to be stopped **twice at the human gate**: once to read the
+AO-authored evolver prompt, and once more to read the evolved skills. Each
+time, write `outputs/my_run/e1_PROOFREAD.json` with what you checked plus
+the sha256 of the prompt (and, the second time, of the staging dir). The
+gate is deliberately not automatable; the HALT message names the exact
+keys it wants.
 
 ## Model routing notes
 
