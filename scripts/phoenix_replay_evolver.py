@@ -39,10 +39,18 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from openinference.semconv.trace import SpanAttributes as SA
-from opentelemetry import trace as otel_trace
-from opentelemetry.trace import StatusCode
-from phoenix.otel import register as phoenix_register
+# Replay is retroactive — no live pipe, so a missing tracing stack is a clean refusal,
+# not a hazard. Name the remedy: the caller (loop.py prints "REPLAY FAILED") re-runs this
+# by hand after installing the extra, and the stream log it reads is still on disk.
+try:
+    from openinference.semconv.trace import SpanAttributes as SA
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.trace import StatusCode
+    from phoenix.otel import register as phoenix_register
+except ImportError as _e:
+    raise SystemExit(f"phoenix replay needs the tracing extra ({_e}). Install it with: "
+                     f"uv sync --extra phoenix — the stream log is untouched; re-run this "
+                     f"script afterwards.")
 
 
 def iso_to_ns(ts: str | None) -> int | None:

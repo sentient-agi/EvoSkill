@@ -140,7 +140,14 @@ mkdir -p "$LOGDIR"
 LOG=$LOGDIR/${TAG}.log
 # The pid file follows the run dir too. It used to land in the hardcoded $RUNDIR, so a
 # redirected arm wrote its pids into the published 0807 run's directory alongside that run's.
-P=$(python3 "$T/detach.py" "$LOG" "$RUN_ABS/${TAG}.pid" python3 scripts/run_tau3_banking.py)
+# THE REPO VENV'S PYTHON, NOT PATH LUCK. Bare `python3` resolves to whatever interpreter
+# the shell finds first — on the dev machine that was an anaconda install carrying every
+# dep from months of use, so the leg "worked" while never exercising the shipped venv; on
+# a fresh machine it is a system python without the repo's deps and the leg dies at
+# import. EVOSKILL_PYTHON overrides for exotic setups.
+PYBIN="${EVOSKILL_PYTHON:-$R/.venv/bin/python}"
+[ -x "$PYBIN" ] || PYBIN=python3
+P=$("$PYBIN" "$T/detach.py" "$LOG" "$RUN_ABS/${TAG}.pid" "$PYBIN" scripts/run_tau3_banking.py)
 # NON-NEGOTIABLE: keep the box awake for the whole leg, and never pipe this launch --
 # caffeinate inherits stdout, so a pipe holds the foreground and the 2-min tool timeout
 # kills the child.

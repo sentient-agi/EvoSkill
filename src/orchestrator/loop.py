@@ -1750,10 +1750,29 @@ def _run_build_digests(ctx: Ctx) -> None:
         return                                       # idempotent
     spec = ctx.spec
     caches = _digest_caches_for_epoch(ctx)           # #257: per EPOCH, not per run
+    # THE VARIANT DESCRIBES THE ROLLOUTS BEING DIGESTED, NOT THIS RUN'S DECLARATION. It names
+    # the cache dir (it is NOT in the cache key), and the intake does not yet capture it — the
+    # leg script pins its own — so a spec frozen from a brief that never said "bm25_grep"
+    # carries variant="" and this env var reached the builder empty (refused, 2026-08-17 smoke,
+    # epoch 1 step 1). Read what the runner RECORDED in the leg result json instead (#194: never
+    # re-derive what the producing process wrote). Spec, when set, still wins — but only if it
+    # AGREES with the record; a disagreement means the surface would describe a different
+    # instrument than declared, which is a HALT, not a preference.
+    variant = getattr(spec, "variant", "") or ""
+    src_leg = (Path(ctx.base_leg) if ctx.epoch <= 1 and ctx.base_leg
+               else EpochPaths(ctx.run_dir, ctx.epoch - 1).leg("train") if ctx.epoch > 1
+               else None)
+    if src_leg is not None and src_leg.is_file():
+        recorded = json.loads(src_leg.read_text()).get("retrieval_variant", "") or ""
+        if variant and recorded and variant != recorded:
+            raise Halt(f"spec.variant={variant!r} but {src_leg.name} records "
+                       f"retrieval_variant={recorded!r} — refusing to build a surface that "
+                       f"describes a different instrument than the spec declares")
+        variant = variant or recorded
     env = dict(os.environ)
     env.update({
         "EVOSKILL_TAU3_DOMAIN": spec.domain,
-        "EVOSKILL_TAU3_VARIANT": getattr(spec, "variant", "") or "",
+        "EVOSKILL_TAU3_VARIANT": variant,
         "EVOSKILL_TAU3_DIGEST_OUT": str(out),
         "EVOSKILL_TAU3_DIGEST_SPLIT_FILE": str(spec.split_path),
         "EVOSKILL_TAU3_DIGEST_SPLIT_KEY": "train",

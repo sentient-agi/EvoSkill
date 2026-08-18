@@ -31,6 +31,9 @@ Copy `.env.example` to `.env` and fill in your keys.
 ```bash
 git clone <this-repo> EvoSkill && cd EvoSkill
 uv sync                          # main venv
+# Optional — Phoenix tracing (live evolver spans + AO session replay into a
+# local Phoenix server at :6006). Everything degrades gracefully without it:
+#   uv sync --extra phoenix
 
 # 1. Vendor the benchmark repos (clone-don't-vendor policy; exact pins,
 #    clone commands, and why: third_party/README.md)

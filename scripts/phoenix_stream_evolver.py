@@ -40,10 +40,22 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from openinference.semconv.trace import SpanAttributes as SA
-from opentelemetry import trace as otel_trace
-from opentelemetry.trace import StatusCode
-from phoenix.otel import register as phoenix_register
+# TRACING IMPORTS ARE OPTIONAL. This process is first a TEE — the verbatim stream log is
+# the load-bearing artifact every downstream audit reads — and only second a Phoenix
+# emitter. A module-scope import of the tracing stack made the tee die at import on any
+# machine without the `phoenix` extra, and because `claude` writes stream-json into this
+# process's stdin, a dead tee SIGPIPEs the evolver itself: missing observability killing
+# the run it observes. main() already degrades to tee-only when the tracer cannot
+# construct; these guards make a missing package reach that same path.
+try:
+    from openinference.semconv.trace import SpanAttributes as SA
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.trace import StatusCode
+    from phoenix.otel import register as phoenix_register
+    _TRACING_IMPORT_ERROR = None
+except ImportError as _e:
+    SA = otel_trace = StatusCode = phoenix_register = None
+    _TRACING_IMPORT_ERROR = _e
 
 
 def ns(ts: str | None) -> int | None:
@@ -84,6 +96,9 @@ def blocks_text(content) -> str:
 
 class LiveTracer:
     def __init__(self, project: str, endpoint: str, prompt: str | None, epoch: str | None):
+        if _TRACING_IMPORT_ERROR is not None:
+            raise ImportError(f"tracing deps unavailable ({_TRACING_IMPORT_ERROR}); "
+                              f"install them with: uv sync --extra phoenix")
         tp = phoenix_register(project_name=project, endpoint=f"{endpoint}/v1/traces",
                               set_global_tracer_provider=False, batch=True)
         self.tp = tp

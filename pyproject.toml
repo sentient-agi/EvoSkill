@@ -33,6 +33,17 @@ dependencies = [
     "wrapt<2.0",
 ]
 
+[project.optional-dependencies]
+# Phoenix observability (live evolver span tee + retroactive replay + AO session
+# emission). Everything degrades without it: the stream tee still writes the verbatim
+# log, the replay script refuses with this extra's name, and the loop's trace check
+# reports UNMEASURED when Phoenix is unreachable. Requires a Phoenix server at
+# PHOENIX_ENDPOINT (default http://localhost:6006).
+phoenix = [
+    "arize-phoenix-otel>=0.6",
+    "openinference-semantic-conventions>=0.1.21",
+]
+
 [project.scripts]
 evoskill = "src.orchestrator.cli:main"
 evoskill-loop = "src.orchestrator.loop:main"
