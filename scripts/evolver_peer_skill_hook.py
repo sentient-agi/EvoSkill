@@ -137,6 +137,19 @@ def _allowed_roots() -> list[str]:
     return sorted(out)
 
 
+def _owned(tok: str, allowed: list) -> bool:
+    """True only if `tok` names THIS run's staging dir.
+
+    Bare name (no separator) -> must equal the staging basename exactly.
+    Anything with a path component -> must equal, or sit under, an ABSOLUTE allowed root.
+    """
+    abs_roots = [a for a in allowed if a.startswith("/")]
+    names = [a for a in allowed if not a.startswith("/")]
+    if "/" not in tok:
+        return tok in names
+    return any(tok == a or tok.startswith(a.rstrip("/") + "/") for a in abs_roots)
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -155,9 +168,17 @@ def main() -> int:
         for tok in re.split(r"[\s;|&()<>\"']+", val):
             if not tok or not _is_peer_skill_token(tok):
                 continue
-            # Its own staging path (absolute, resolved, or bare basename) is fine.
-            if any(a and (tok == a or tok.startswith(a.rstrip("/") + "/") or a in tok)
-                   for a in allowed):
+            # ITS OWN STAGING ONLY -- AND `a in tok` DID NOT MEAN THAT.
+            # `allowed` carries the bare basename (legitimately: the dir is usually named
+            # after a `cd` into its parent). Combined with a SUBSTRING test, that allowed
+            # any path merely CONTAINING it -- and every arm names its staging dir
+            # skills_v{N}_staging, so a PEER arm's same-epoch staging, another optimizer's
+            # in-progress answers to these very train tasks, read as "its own". Measured:
+            # /runs/OTHER_RUN/skills_v1_staging/a/SKILL.md returned 0 while the same run's
+            # skills_v1 was correctly denied.
+            # A token WITH a directory component must match an absolute allowed root by
+            # prefix; only a bare basename may match by name.
+            if _owned(tok, allowed):
                 continue
             _deny(f"  tool={payload.get('tool_name')} field={field}\n  offending path: {tok}")
     return 0

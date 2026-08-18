@@ -290,6 +290,22 @@ def check_legs_paired_comparably(base_json: Path, skill_json: Path, want_samples
                         f"the spec's value is not reaching the leg script, whose own default won.",
                      "#251", ran=bn, spec=want_samples)
     bt, st = set((b.get("per_task") or {})), set((s.get("per_task") or {}))
+    # POSITIONAL KEYS CANNOT WITNESS A TASK SET. run_ssbv2_base30_dsv4f_n3.py writes
+    # `per_task` as {str(i): v for i, v in scores.items()} -- the keys are ORDINALS, not
+    # task ids. So for every SSB v2 leg this comparison is {"0".."n"} vs {"0".."n"}, which
+    # is equal whenever the two legs have the same COUNT, and the "same task set" half of
+    # #251 silently proves nothing. Two legs could run disjoint tasks and pass. Say so
+    # rather than claim it: SKIP is a halt in loop.py, which is the right response to "I
+    # could not check", and the fix is to key per_task by task id at the writer.
+    def _positional(keys: set) -> bool:
+        return bool(keys) and all(k.isdigit() for k in keys) and \
+            {int(k) for k in keys} == set(range(len(keys)))
+    if _positional(bt) and _positional(st):
+        return _skip(n, f"both legs key per_task by POSITION ({len(bt)} ordinals), not by task "
+                        f"id, so the task-set half of this check cannot witness anything — "
+                        f"identical counts always compare equal. N and episode counts DID "
+                        f"check out (N={bn}, {b.get('episodes')} vs {s.get('episodes')} "
+                        f"episodes). Fix at the writer: key per_task by task id.", "#251")
     if bt != st:
         only_b, only_s = sorted(bt - st)[:4], sorted(st - bt)[:4]
         return _fail(n, f"the two legs ran different task sets — {len(bt-st)} only in "
@@ -390,7 +406,19 @@ def check_no_peer_artifacts_read(evolver_log: Path, own_run_dir: Path) -> Check:
                 _outside = [p for p in _cds + re.findall(r"outputs/[\w.-]+", blob)
                             if "outputs/" in p and own not in p]
                 for m in re.findall(r"[\w./-]*skills(?:_[\w.-]+)?[\w./-]*", blob):
-                    if own in m or "staging" in m:
+                    # `or "staging" in m` used to sit here and it exempted a PEER arm's
+                    # staging dir. Every arm names its staging skills_v{N}_staging, so the
+                    # substring identified the KIND of directory, not its OWNER -- and a
+                    # peer's same-epoch staging is another optimizer's in-progress answers
+                    # to these very train tasks, which is worse than reading its accepted
+                    # skills. `own in m` already exempts this run's own staging by path, and
+                    # a bare relative reference to it never reaches the branches below
+                    # because `_outside` only binds when the command touched ANOTHER run's
+                    # outputs/. The live hook had the identical hole (`a in tok`, substring)
+                    # and is fixed in the same commit -- the backstop must not share the
+                    # blind spot of the thing it backs up. Fourth generation of this defect
+                    # after #229, #248 and #260.
+                    if own in m:
                         continue
                     if re.search(r"outputs/|\.claude/skills", m):
                         hits.append((c.get("name"), m))
@@ -595,6 +623,17 @@ def check_no_infra_exclusions(result_json: Path) -> Check:
     if not result_json.is_file():
         return _skip(n, "no result json")
     d = json.loads(result_json.read_text())
+    # ABSENT IS NOT ZERO. `.get(...) or 0` made a leg that records none of these fields --
+    # which is every SSB v2 leg -- return the affirmative "0 excluded, 0 timeout-zeroed".
+    # That is a positive claim about a property this function never observed, and it is the
+    # #154 shape in the module written to prevent it. If the leg carries no evidence either
+    # way, the honest answer is that the check did not run.
+    _FIELDS = ("episodes_excluded_infra", "episodes_timeout_scored_zero",
+               "tasks_fully_unscored", "episodes_scored", "episodes_dispatched")
+    if not any(f in d for f in _FIELDS):
+        return _skip(n, f"{result_json.name} records none of {list(_FIELDS)} — this leg "
+                        f"carries no evidence about infra exclusions, so 'none happened' "
+                        f"cannot be asserted from it")
     ex = d.get("episodes_excluded_infra") or 0
     tz = d.get("episodes_timeout_scored_zero") or 0
     un = len(d.get("tasks_fully_unscored") or [])
