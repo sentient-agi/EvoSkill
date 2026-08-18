@@ -14,9 +14,20 @@
 # a month apart inherit different OS packages, so an image built from a tag is not the
 # image the numbers were produced on, and nothing in the pipeline would say so. Refresh
 # deliberately with:
-#     docker manifest inspect -v python:3.11-slim | python3 -c "import json,sys; print(json.load(sys.stdin)['Descriptor']['digest'])"
+# REFRESH IT WITH THIS, AND NOTHING ELSE:
+#     docker buildx imagetools inspect python:3.11-slim --format '{{.Manifest.Digest}}'
+#
+# NOT `docker manifest inspect -v ... .Descriptor.digest`, which is what produced the
+# previous pin here and was WRONG: on a multi-arch tag that returns one PLATFORM manifest
+# (it picked linux/amd64), so the pin silently switched every build on this arm64 host to
+# an emulated amd64 image -- an architecture change shipped under the name "reproducibility".
+# The value below is the multi-arch INDEX (mediaType application/vnd.oci.image.index.v1+json,
+# 16 platforms incl. arm64), so each host still resolves to its own native image while the
+# CONTENT stays pinned. Verify a candidate before committing it:
+#     docker buildx imagetools inspect python:3.11-slim@<digest> --format '{{.Manifest.MediaType}}'
+#   must print application/vnd.oci.image.index.v1+json
 # Resolved 2026-08-18.
-FROM python:3.11-slim@sha256:ff05d1a05204fb9f7444c435db8e8ec104e587a413280dc9ffc27a4797554182
+FROM python:3.11-slim@sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7
 RUN apt-get update && apt-get install -y --no-install-recommends libreoffice-calc python3-uno && \
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
     soffice --version > /etc/evoskill_libreoffice_version

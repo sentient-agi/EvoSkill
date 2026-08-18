@@ -22,6 +22,8 @@ set -euo pipefail
 ROOT="${EVOSKILL_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 BASE_TAG="ssb-solver:no-libreoffice-0715"
 BASE_ID_EXPECTED="974b00f17fbe"      # the 2026-07-15 image every past SSB v2 number was produced on
+BASE_LOCAL_TAG="ssb-solver:no-libreoffice-local"   # a base THIS machine built; never the archival name
+BASE_USED="$BASE_TAG"                # which of the two the LibreOffice layer is built FROM
 IMAGE="ssb-solver-lo:latest"
 DF="$ROOT/docker/ssb-solver/Dockerfile.libreoffice"
 
@@ -81,12 +83,21 @@ if [ -z "$BASE_ID" ]; then
   echo "        ID on another machine; the library pins asserted below are what make"
   echo "        this base equivalent for running the benchmark."
   echo "        RESULTS FROM THIS BASE ARE NOT BYTE-COMPARABLE TO PUBLISHED NUMBERS."
-  docker build -t "$BASE_TAG" "$ROOT/docker/ssb-solver/" \
+  # TAG IT LOCALLY, NEVER WITH THE ARCHIVAL NAME. Tagging a fresh build as
+  # $BASE_TAG made this script single-use: run 1 built and tagged, run 2 saw that
+  # tag holding a non-frozen id and refused at exit 9 ("expected 974b00f17fbe").
+  # Since every acceptance failure here exits 9, re-running is the normal operator
+  # action, so a fresh machine bricked on the second invocation. The archival tag
+  # now means exactly one thing — the frozen image — and a local build gets its
+  # own name that the next run can safely rebuild.
+  docker build -t "$BASE_LOCAL_TAG" "$ROOT/docker/ssb-solver/" \
     || fail "could not build the base image from docker/ssb-solver/Dockerfile"
-  BASE_ID=$(docker images --no-trunc --format '{{.ID}}' "$BASE_TAG" | head -1 | sed 's/^sha256://' | cut -c1-12)
-  [ -n "$BASE_ID" ] || fail "base build reported success but $BASE_TAG does not exist"
-  ok "base $BASE_TAG = $BASE_ID (freshly built; NOT the frozen 2026-07-15 image)"
+  BASE_ID=$(docker images --no-trunc --format '{{.ID}}' "$BASE_LOCAL_TAG" | head -1 | sed 's/^sha256://' | cut -c1-12)
+  [ -n "$BASE_ID" ] || fail "base build reported success but $BASE_LOCAL_TAG does not exist"
+  BASE_USED="$BASE_LOCAL_TAG"
+  ok "base $BASE_LOCAL_TAG = $BASE_ID (freshly built; NOT the frozen 2026-07-15 image)"
 elif [ "$BASE_ID" = "$BASE_ID_EXPECTED" ]; then
+  BASE_USED="$BASE_TAG"
   ok "base $BASE_TAG = $BASE_ID (the frozen 2026-07-15 solver image)"
 else
   # Present but different: someone retagged or rebuilt it. Refuse, because this is
@@ -100,7 +111,7 @@ fi
 
 echo
 echo "== build =="
-docker build ${1:-} -f "$DF" -t "$IMAGE" --build-arg "BASE=$BASE_TAG" "$ROOT/docker/ssb-solver/" \
+docker build ${1:-} -f "$DF" -t "$IMAGE" --build-arg "BASE=$BASE_USED" "$ROOT/docker/ssb-solver/" \
   || fail "docker build failed"
 NEW_ID=$(docker images --format '{{.ID}}' "$IMAGE" | head -1)
 echo "built $IMAGE = $NEW_ID"
