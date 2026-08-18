@@ -238,7 +238,10 @@ def clarify_loop(claim: BenchmarkClaim, a: Answers, max_rounds: int = 6, *, comp
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["new", "selftest"])
-    ap.add_argument("--script", default="", help="JSON of pre-recorded answers")
+    # "JSON of pre-recorded answers" read as "pass JSON here" and the README
+    # documented it that way; the code has always done Path(args.script).read_text().
+    ap.add_argument("--script", default="",
+                    help="PATH to a JSON file of pre-recorded answers (not inline JSON)")
     ap.add_argument("--run-dir", default="", help="where this experiment's artifacts go")
     ap.add_argument("--split-out", default="", help="path for the split file")
     ap.add_argument("--split", default="",

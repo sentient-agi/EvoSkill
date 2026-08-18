@@ -18,6 +18,28 @@ CATEGORIES = ["Debugging", "Financial_Model", "Template"]
 TASK_INDEX: dict[str, dict] = {}
 
 
+def resolve_base(data_root) -> Path:
+    """The directory the category dirs live directly under, for a given SSBV2_ROOT.
+
+    Two checkout layouts are in the wild -- `<root>/data/spreadsheetbench-v2/<Category>` and
+    `<root>/spreadsheetbench-v2/<Category>` -- and the README has documented both. This is the
+    ONE place that decides, because everything downstream must agree with the golden paths in
+    TASK_INDEX, which are built from whatever this returns.
+
+    That agreement was broken until 2026-08-18: task_workspace.py had its own copy of the
+    rule, hardcoded to the second layout, and used it as the prefix for a plain str.replace()
+    that rewrites host golden paths into container paths. Under the first layout the prefix
+    matched nothing, the replace was a silent no-op, and every task meta file shipped a HOST
+    path into the container. A second copy of a convention is a second chance to disagree.
+    """
+    data_root = Path(data_root)
+    for cand in (data_root / "data" / "spreadsheetbench-v2",
+                 data_root / "spreadsheetbench-v2"):
+        if cand.exists():
+            return cand
+    return data_root
+
+
 def load_ssbv2(
     data_root: Path,
     *,
@@ -33,12 +55,7 @@ def load_ssbv2(
         (train_items, val_items, test_items) where each item is
         (question_json, ground_truth_json, category)
     """
-    data_root = Path(data_root)
-    base = data_root / "data" / "spreadsheetbench-v2"
-    if not base.exists():
-        base = data_root / "spreadsheetbench-v2"
-    if not base.exists():
-        base = data_root
+    base = resolve_base(data_root)
 
     all_tasks = []
     for cat in CATEGORIES:

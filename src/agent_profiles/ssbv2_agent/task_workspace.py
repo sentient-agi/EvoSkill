@@ -89,12 +89,15 @@ def build_oracle_spec(ssbv2_root: Path, allowed_task_ids=None):
     from src.loop.oracle import OracleSpec
 
     scorer_src = Path(__file__).parent / "scorer.py"
-    # ssbv2_root uses the SSBV2_ROOT env convention — the directory CONTAINING
-    # spreadsheetbench-v2/ — matching load_ssbv2 and the README. An earlier version
-    # appended "data/" (the upstream checkout's layout one level higher), a convention
-    # only the cut run scripts used; with the env-convention root that prefix matches
-    # no golden path and every meta file's container-path translation silently no-ops.
-    data_host_prefix = str((Path(ssbv2_root) / "spreadsheetbench-v2").resolve())
+    # ASK THE LOADER, do not re-derive. Two checkout layouts exist and the golden paths in
+    # TASK_INDEX are built from whichever one load_ssbv2 resolved; a second copy of that rule
+    # here is a second chance to disagree with it, and disagreement is SILENT — the prefix
+    # simply fails to match and the container-path rewrite below no-ops, shipping host paths
+    # into the container. Both copies have been wrong at least once (first `data/` appended
+    # unconditionally, then `data/` dropped unconditionally).
+    from src.agent_profiles.ssbv2_agent.dataset import resolve_base
+
+    data_host_prefix = str(resolve_base(ssbv2_root).resolve())
     return OracleSpec(
         scoring_note=(
             "Only cell VALUES within each task's `answer_position` ranges are "
@@ -180,9 +183,21 @@ def write_all_task_meta(
         # too (stage_split_dataset).
         if allowed_task_ids is not None and task_id not in allowed_task_ids:
             continue
-        golden_ctr = (info.get("golden_path") or "").replace(
-            data_host_prefix, container_data_root
-        )
+        _golden_host = info.get("golden_path") or ""
+        golden_ctr = _golden_host.replace(data_host_prefix, container_data_root)
+        # A str.replace that matched nothing returns its input unchanged and says nothing.
+        # That is the whole failure mode this guards: the meta file then points the solver at
+        # a HOST path that does not exist inside the container, and the only symptom is a task
+        # that cannot find its golden. Refuse instead — an unrewritten path is never valid.
+        if _golden_host and not golden_ctr.startswith(container_data_root):
+            raise RuntimeError(
+                f"golden path was not translated to a container path.\n"
+                f"  host path      : {_golden_host}\n"
+                f"  expected prefix: {data_host_prefix}\n"
+                f"  SSBV2_ROOT resolved to a base that disagrees with the golden paths in "
+                f"TASK_INDEX. Both come from dataset.resolve_base(), so this means the "
+                f"dataset was loaded from a different root than the one passed here."
+            )
         safe_id = task_id.replace("/", "_")
         (meta_dir / f"{safe_id}.json").write_text(
             json.dumps(

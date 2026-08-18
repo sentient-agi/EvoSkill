@@ -7,16 +7,22 @@ each subdirectory is large and fully reproducible from a pinned commit, so it
 doesn't belong in version control.
 
 Both directories below are clones of the same upstream repo,
-`sierra-research/tau2-bench`, at two different pins. They serve different
-roles and both are required for τ³ banking evolution.
+`sierra-research/tau2-bench`, at two different pins. **Only `tau3-bench` is
+required for a τ³ banking evolution**; see the role note below.
 
-## tau2-bench — the runtime engine
+## tau2-bench — the v1.0.0 engine pin (OPTIONAL)
 
-Used by `src/agent_profiles/tau2_agent/` as the execution engine: the solver
-drives tau2 via a subprocess worker
-(`src/agent_profiles/tau2_agent/_tau2_worker.py`) launched with
-`uv run --project third_party/tau2-bench python <worker.py>`, so this clone
-needs its own `.venv`.
+`src/agent_profiles/tau2_agent/solver.py` launches its subprocess worker with
+`uv run --project $TAU2_BENCH_ROOT python <worker.py>`, and the τ³ launchers
+export `TAU2_BENCH_ROOT=third_party/tau3-bench` — so on a τ³ run the episodes
+execute in **tau3-bench's** venv and this clone is never launched. It is kept
+as the exact v1.0.0 provenance pin, and it is what runs if you point
+`TAU2_BENCH_ROOT` here (a plain tau2 run, or a fallback when the variable is
+unset).
+
+Consequence for setup: `uv sync --all-extras` below, and the portaudio
+dependency it drags in, are only needed if you are going to use this clone.
+Skip the whole section for a τ³ banking evolution.
 
 - Repo: `sierra-research/tau2-bench` (NOT `amazon-agi/tau2-bench-verified` —
   that fork is stale; NOT `AGI-Eval-Official/tau2-bench-revised` — unrelated).

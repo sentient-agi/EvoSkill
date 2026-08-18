@@ -13,8 +13,6 @@ R="${EVOSKILL_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"; T=$R/scripts; cd "$R"
 # line that uses it (the detach helper, line ~139) — mid-leg, after spending. Both this
 # script and detach.py now live in scripts/ and are version-controlled.
 TAG=$1; KEY=$2; SK=$3
-RUNDIR=$R/outputs/tau3_banking_2525
-mkdir -p "$RUNDIR"
 
 # ── THE KEY. Read from an env FILE, never guessed from the ambient environment: the first
 # version guarded on a path that did not exist, so the block was a silent no-op and the key
@@ -43,11 +41,19 @@ if [ -n "${EVOSKILL_REQUIRE_KEY_SUFFIX:-}" ]; then
 fi
 
 # ── WHAT IS BEING MEASURED ──────────────────────────────────────────────────────────
-export EVOSKILL_TAU3_SPLIT=${EVOSKILL_TAU3_SPLIT:-$RUNDIR/split_252547.json}
+# THE THREE IDENTITY-BEARING VALUES REFUSE, THEY DO NOT DEFAULT. They used to fall back to
+# one particular run (`outputs/tau3_banking_2525`, split_252547.json, cache tag `b2525`) —
+# a directory and split file that exist on no clone. An operator who set two of the three
+# and forgot the third got no error: the leg ran, and its episodes went into THAT run's cache
+# bucket, since the tag is the only thing separating one configuration's records from
+# another's. Silently measuring into someone else's namespace is worse than not running.
+# The SSB v2 twin already refuses this way (ssbv2_leg.sh: `${EVOSKILL_TAU3_RUN_DIR:?...}`),
+# and the loop supplies all three on every leg it launches.
+export EVOSKILL_TAU3_SPLIT="${EVOSKILL_TAU3_SPLIT:?set it to this runs split file — the exact split_NNN.json named by the freeze receipt}"
 export EVOSKILL_TAU3_DOMAIN=banking_knowledge
 export EVOSKILL_TAU3_VARIANT=bm25_grep
-export EVOSKILL_TAU3_RUN_DIR=${EVOSKILL_TAU3_RUN_DIR:-outputs/tau3_banking_2525}  # #190
-export EVOSKILL_TAU3_CACHE_TAG=${EVOSKILL_TAU3_CACHE_TAG:-b2525}
+export EVOSKILL_TAU3_RUN_DIR="${EVOSKILL_TAU3_RUN_DIR:?set it to this runs directory, e.g. outputs/my_run}"  # #190
+export EVOSKILL_TAU3_CACHE_TAG="${EVOSKILL_TAU3_CACHE_TAG:?set it to this runs cache tag from the freeze receipt — the tag is what keeps these episodes out of another runs cache bucket}"
 export TAU2_BENCH_ROOT=$R/third_party/tau3-bench
 export EVOSKILL_SPLIT_KEY=$KEY
 export EVOSKILL_N_SAMPLES=${EVOSKILL_N_SAMPLES:-3}
