@@ -271,6 +271,21 @@ class AgentTrace(BaseModel, Generic[T]):
             lines.append(transcript)
         else:
             result_str = str(self.result) if self.result else ""
+            # THE CAPS APPLY HERE TOO, BUT ONLY TO UNPARSEABLE OUTPUT. They were
+            # honoured only on the transcript branch above, so a caller that asked
+            # for head/tail limits and hit this fallback (no messages) got the
+            # WHOLE result regardless — on a 200k-character result that is exactly
+            # the prompt bloat the caps exist to prevent, and it failed silently
+            # because the caller cannot tell which branch ran.
+            # Gated on parse_error because a RESULT THAT PARSED is the answer the
+            # caller asked for and must arrive whole; the caps are a guard against
+            # dumping an unbounded blob of garbage, not a general-purpose clamp.
+            if (self.parse_error and head_chars > 0 and tail_chars > 0
+                    and len(result_str) > head_chars + tail_chars):
+                result_str = (result_str[:head_chars] + "\n\n...[truncated]...\n\n"
+                              + result_str[-tail_chars:])
+            elif self.parse_error and head_chars > 0 and len(result_str) > head_chars:
+                result_str = result_str[:head_chars] + "\n\n...[truncated]..."
             lines.append(f"\n## Full Result\n{result_str}")
 
         return "\n".join(lines)
