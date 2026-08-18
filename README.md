@@ -233,6 +233,17 @@ keys it wants.
   the loop rebuilds that variable from the RUNTIME.json value on every
   dispatch, so an export is silently overwritten. It applies only when you run
   `scripts/tau3_evolver.sh` by hand.
+- **The AO front door is also `sandbox-exec`-gated, and it is a SEPARATE gate.**
+  `evoskill new --brief` (via the brief/clarify composer) and the loop's
+  prompt-authoring step both refuse on a host without `sandbox-exec` — which is
+  every Linux host. `"evolver_sandbox": false` does NOT lift this; that key is
+  read only for the evolver dispatch. The opt-out here is
+  `EVOSKILL_AO_ALLOW_UNCONTAINED=1`, and it is a real trade: the AO then runs
+  uncontained, regaining write access to the run directory — including
+  `ANSWERS_e{N}.json` and `e{N}_PROOFREAD.json`, the files a later step reads
+  back as the operator's own answers. Set it as a recorded decision, not a
+  reflex. On Linux, either set it or drive the loop from an existing
+  `RUNTIME.json` instead of the brief front door.
 - **Phoenix tracing is optional.** Without a running Phoenix instance the
   loop's traces-in-phoenix check reports UNMEASURED and everything else runs.
 - `caffeinate` (macOS sleep inhibitor) is used when present, skipped on Linux.

@@ -47,6 +47,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+
+from src.orchestrator.quota_scope import subscription_env
 import sys
 from pathlib import Path
 
@@ -159,7 +161,15 @@ def propose(brief: str, *, root_hint: str = "", model: str = "opus[1m]", timeout
     argv = [*sb_argv, "claude", "-p", msg, "--model", model,
             "--output-format", "json", "--dangerously-skip-permissions"]
     try:
-        r = subprocess.run(argv, cwd=str(repo), capture_output=True, text=True, timeout=timeout_s)
+        # SCRUB THE API-KEY OVERRIDES, like prompt_author.py and loop.py already do.
+        # README.md and .env.example both state that quota_scope.subscription_env()
+        # removes ANTHROPIC_API_KEY/AUTH_TOKEN/BASE_URL from "every `claude` child that
+        # runs a Claude-family model". This call site passed no env= at all, so the AO
+        # front door -- the FIRST command in "Start an evolution" -- inherited all three
+        # and billed API credit behind the subscription quota gate the loop reads (#307).
+        # The documentation was true of two of the four dispatch sites.
+        r = subprocess.run(argv, cwd=str(repo), capture_output=True, text=True,
+                           timeout=timeout_s, env=subscription_env(model))
     except FileNotFoundError as e:
         raise BriefUnavailable("`claude` is not on PATH") from e
     except subprocess.TimeoutExpired as e:
