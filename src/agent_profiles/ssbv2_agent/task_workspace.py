@@ -89,7 +89,12 @@ def build_oracle_spec(ssbv2_root: Path, allowed_task_ids=None):
     from src.loop.oracle import OracleSpec
 
     scorer_src = Path(__file__).parent / "scorer.py"
-    data_host_prefix = str((Path(ssbv2_root) / "data" / "spreadsheetbench-v2").resolve())
+    # ssbv2_root uses the SSBV2_ROOT env convention — the directory CONTAINING
+    # spreadsheetbench-v2/ — matching load_ssbv2 and the README. An earlier version
+    # appended "data/" (the upstream checkout's layout one level higher), a convention
+    # only the cut run scripts used; with the env-convention root that prefix matches
+    # no golden path and every meta file's container-path translation silently no-ops.
+    data_host_prefix = str((Path(ssbv2_root) / "spreadsheetbench-v2").resolve())
     return OracleSpec(
         scoring_note=(
             "Only cell VALUES within each task's `answer_position` ranges are "

@@ -1696,7 +1696,20 @@ def _run_build_digests_ssbv2(ctx: Ctx) -> None:
                 "RUNTIME.json to the ONE run-cache dir the base/skill leg wrote into (SSB v2 uses a "
                 "single dir, not tau3's per-sample dirs). Naming it is not optional: the default is a "
                 "per-tag dir that is EMPTY for a new tag, and an empty cache builds an empty surface.")
-        snaps = Path(str(cache).replace("_cache", "_tasks")) / "_snapshots"
+        # THE SNAPSHOT DIR IS THE RUNNER'S, NOT A NAME TRANSFORM. The runner writes workbooks
+        # to .cache/ssbv2_{TAG}_tasks (its own documented scheme) while the CACHE dir is
+        # whatever the operator declared — the two names only coincide when the cache dir is
+        # the per-tag default. The 0817 smoke declared a shared per-spec cache dir and this
+        # replace() then pointed at a tasks dir that never existed. The leg result json
+        # records the tag (#194: read what the runner recorded); the transform stays only as
+        # the fallback for runs with no declared base leg.
+        snaps = None
+        if ctx.base_leg and Path(ctx.base_leg).is_file():
+            _tag = json.loads(Path(ctx.base_leg).read_text()).get("tag", "")
+            if _tag:
+                snaps = REPO / ".cache" / f"ssbv2_{_tag}_tasks" / "_snapshots"
+        if snaps is None:
+            snaps = Path(str(cache).replace("_cache", "_tasks")) / "_snapshots"
     if not snaps.is_dir():
         raise Halt(f"no snapshots at {snaps}. SSB v2 digests need the PRODUCED WORKBOOKS, which "
                    f"live beside the run cache in <tag>_tasks/_snapshots — the cache holds "

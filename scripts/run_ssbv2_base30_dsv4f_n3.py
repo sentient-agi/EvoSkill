@@ -688,6 +688,9 @@ async def main() -> int:
             + (f"; OVERRIDDEN to {_EFF_WALL} via EVOSKILL_SOLVER_TIMEOUT_SECONDS"
                if _EFF_WALL != _WALL else "")),
         "concurrency": CONCURRENCY, "tag": TAG,
+        # The dirs this leg ACTUALLY used, so downstream steps read them instead of
+        # re-deriving names (#194; the tau3 runner records cache_dirs for the same reason).
+        "cache_dir": CACHE_DIR.name, "tasks_cache": str(TASKS_CACHE),
         "per_task": {str(i): v for i, v in scores.items()},
         # Same list the failure ledger labels with, computed once, so a PARTIAL
         # file and its eventual canonical result can never disagree about which
