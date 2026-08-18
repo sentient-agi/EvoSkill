@@ -1682,11 +1682,24 @@ def _run_build_digests_ssbv2(ctx: Ctx) -> None:
         if not cache.is_dir():
             raise Halt(f"expected the previous epoch's cache at {cache} and it is absent — "
                        f"cannot build the e{ctx.epoch} surface from nothing")
-        # Must mirror the runner's TASKS_CACHE = .cache/ssbv2_{TAG}_tasks
-        # (run_ssbv2_base30_dsv4f_n3.py) under the leg tag scheme {name}_v{N}_{key};
-        # the surface is train-only, so only the train leg's workbooks are needed.
-        snaps = (REPO / ".cache" /
-                 f"ssbv2_{ctx.spec.name}_v{ctx.epoch - 1}_train_tasks" / "_snapshots")
+        # THE TAG COMES FROM THE PREVIOUS EPOCH'S OWN LEG RECORD, exactly as the epoch-1
+        # branch below takes it from the base leg (#194: read what the producing process
+        # recorded). This line used to build the name from `ctx.spec.name`, but the runner's
+        # TAG is `f"{run_dir.name}_v{epoch}_{key}"` (see `tag = out.stem` at _run_leg, and
+        # EpochPaths.leg) — the two coincide only when the experiment's name happens to equal
+        # its run directory's basename, which nothing enforces and which this file's own #309
+        # note explicitly warns against ("THE RUN'S RUNTIME IDENTITY IS ITS RUN DIRECTORY,
+        # NOT `spec.name`"). Where they differ, epoch 2 HALTed with "no snapshots at ..." —
+        # the same failure the epoch-1 branch was fixed for, left in place one branch over.
+        # The 0817 smoke never caught it because it ran a single epoch.
+        _prev = EpochPaths(ctx.run_dir, ctx.epoch - 1).leg("train")
+        _tag = ""
+        if _prev.is_file():
+            _tag = (json.loads(_prev.read_text()) or {}).get("tag", "")
+        if not _tag:
+            # Fall back to the scheme the runner documents, built from the RUN DIR.
+            _tag = f"{ctx.run_dir.name}_v{ctx.epoch - 1}_train"
+        snaps = REPO / ".cache" / f"ssbv2_{_tag}_tasks" / "_snapshots"
     else:
         cache = os.environ.get("EVOSKILL_DIGEST_CACHE") or (ctx.digest_caches[0]
                                                             if ctx.digest_caches else "")
