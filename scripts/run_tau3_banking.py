@@ -487,17 +487,19 @@ def preflight() -> tuple[dict, list[str]]:
     if len(set(want)) != len(want):
         refuse(f"split keys {keys} overlap — a task would be run twice")
 
-    # THE VARIANT CHECK RUNS IN THE TAU2 VENV, NOT THIS INTERPRETER.
-    # tau2's own deps (loguru, rank_bm25, ...) are installed in
-    # third_party/tau2-bench/.venv, not in the interpreter that runs this script, so an
-    # in-process `import tau2...` dies with ModuleNotFoundError before it can tell you
-    # anything about the variant — which is what the first version of this preflight
-    # did. Subprocessing the check also makes it match how the episodes actually
-    # execute (Tau2Solver spawns workers), so a pass here means more than a pass in a
-    # different interpreter would.
-    venv_py = PROJECT_ROOT / "third_party/tau2-bench/.venv/bin/python"
-    if not venv_py.exists():
-        refuse(f"no tau2 venv python at {venv_py} — cannot verify the variant")
+    # THE VARIANT CHECK RUNS IN THE WORKER'S OWN INTERPRETER: `uv run --project
+    # <TAU3_ROOT>` — the exact command Tau2Solver spawns for every episode. An earlier
+    # version probed third_party/tau2-bench/.venv with PYTHONPATH=<TAU3_ROOT>/src: a
+    # DIFFERENT interpreter with a DIFFERENT installed set. On 2026-08-17 that mismatch
+    # false-passed a whole leg: rank_bm25 is a MAIN dependency of the v1.0.0 engine but
+    # upstream later moved it into the optional `knowledge` extra, so the worker's venv
+    # (implicitly synced from main deps only) lacked it while the probed venv had it —
+    # env construction succeeded here and all 9 episodes then died at the first
+    # retrieval tool call. A preflight that runs in a different interpreter than the
+    # thing it preflights is measuring the wrong instrument.
+    if not shutil.which("uv"):
+        refuse("`uv` is not on PATH — the tau2 worker is launched via `uv run` and "
+               "cannot start without it")
     # DOMAIN-PARAMETERISED. Previously both the RETRIEVAL_VARIANTS import and the
     # `get_env_constructor('banking_knowledge')` call were literals, so this preflight
     # would have "verified" banking's env while the leg then ran airline's.
@@ -511,6 +513,12 @@ def preflight() -> tuple[dict, list[str]]:
             "from tau2.registry import registry\n"
             "try:\n"
             f"    registry.get_env_constructor({DOMAIN!r})(retrieval_variant=v)\n"
+            # Constructing the env does NOT import the retrieval stack — bm25's
+            # rank_bm25 import is lazy, inside the first tool call (bm25_indexer.py),
+            # which is exactly how the 2026-08-17 false-pass slipped through. Import it
+            # eagerly here so a missing optional dep refuses before any spend.
+            "    if 'bm25' in v:\n"
+            "        from tau2.knowledge.document_preprocessors import bm25_indexer  # noqa: F401\n"
             "except Exception as e:\n"
             "    print('NOCONSTRUCT:%s: %s' % (type(e).__name__, e)); sys.exit(4)\n"
             "print('OK')\n")
@@ -530,9 +538,10 @@ def preflight() -> tuple[dict, list[str]]:
             "if n == 0:\n"
             "    print('NOCONSTRUCT:ValueError: env built but exposes 0 tools'); sys.exit(4)\n"
             "print('OK')\n")
-    env = dict(os.environ, PYTHONPATH=str(Path(TAU3_ROOT) / "src"))
-    r = subprocess.run([str(venv_py), "-c", probe], capture_output=True, text=True,
-                       env=env, timeout=300)
+    # No PYTHONPATH override: the worker gets none either — its `uv run --project`
+    # venv has the tau2 package installed from <TAU3_ROOT> itself.
+    r = subprocess.run(["uv", "run", "--project", str(TAU3_ROOT), "python", "-c", probe],
+                       capture_output=True, text=True, env=dict(os.environ), timeout=300)
     out = (r.stdout or "").strip().splitlines()
     tail = out[-1] if out else ""
     if r.returncode == 3:
@@ -542,7 +551,10 @@ def preflight() -> tuple[dict, list[str]]:
         refuse(f"variant {VARIANT!r} will not CONSTRUCT here — "
                f"{tail.split(':', 1)[1].strip() if ':' in tail else tail}\n"
                f"  (banking_knowledge: 6 of 21 variants need OPENAI_API_KEY and/or a docker\n"
-               f"  sandbox; this machine has no OPENAI_API_KEY. See tau3_variant_probe.py)")
+               f"  sandbox; this machine has no OPENAI_API_KEY. See tau3_variant_probe.py.\n"
+               f"  A ModuleNotFoundError here means the worker venv is missing an optional\n"
+               f"  extra: `uv sync --project {TAU3_ROOT} --extra knowledge` installs\n"
+               f"  rank_bm25 for the bm25 retrieval variants.)")
     if r.returncode != 0 or tail != "OK":
         refuse(f"variant preflight failed (rc={r.returncode}): "
                f"{(r.stderr or '')[-400:]}")

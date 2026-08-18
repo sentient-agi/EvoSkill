@@ -32,10 +32,11 @@ Copy `.env.example` to `.env` and fill in your keys.
 git clone <this-repo> EvoSkill && cd EvoSkill
 uv sync                          # main venv
 
-# 1. Vendor the benchmark repos (clone-don't-vendor policy; exact pins + why:
-#    third_party/README.md)
-#    - tau2-bench  = the runtime engine (needs its own .venv via uv sync)
-#    - tau3-bench  = the banking task data (data only, no venv)
+# 1. Vendor the benchmark repos (clone-don't-vendor policy; exact pins,
+#    clone commands, and why: third_party/README.md)
+#    - tau2-bench  = the tau2 runtime engine (own .venv: uv sync --all-extras)
+#    - tau3-bench  = the banking domain, tasks + code — episodes run in ITS
+#      venv, so it needs: uv sync --extra knowledge (rank_bm25 for retrieval)
 
 # 2. Build the docker images
 docker build -t evoskill-solver-sandbox:latest docker/solver-sandbox/

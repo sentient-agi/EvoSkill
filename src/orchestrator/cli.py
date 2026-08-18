@@ -65,8 +65,16 @@ class Answers:
             try:
                 v = input(f"{prompt}\n  > ").strip() or default
             except EOFError:
-                raise SystemExit(f"\nno answer available for {key!r} and stdin is closed. "
-                                 f"Add it to the --script file.")
+                # Same remediation text as the scripted-mode branch above. This one prints on
+                # stderr moments before a nonzero exit, which is exactly when a wrapper that
+                # captures only stdout makes the CLI look like it died silently — so the message
+                # must carry everything needed to recover without scrolling back.
+                raise SystemExit(
+                    f"\nHEADLESS INTAKE — no answer for {key!r} and stdin is closed.\n"
+                    f"  I asked: {prompt.strip()}\n"
+                    f"  Provide {key!r} via --script JSON (or, with --brief, state it in the "
+                    f"brief) and re-run. No experiment definition has been written; intake "
+                    f"artifacts already in the run dir remain for audit.")
         self.transcript.append({"key": key, "prompt": prompt, "answer": v})
         return v
 

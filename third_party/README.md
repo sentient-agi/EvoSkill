@@ -41,12 +41,22 @@ needs its own `.venv`.
   to text-mode use and carries real conflict risk for the main venv. The
   subprocess-worker design keeps it contained.
 
-## tau3-bench — the banking task data
+## tau3-bench — the banking domain (tasks + the code that runs them)
 
-The τ³ banking domain (`banking_knowledge`: task specs, split files, and the
-document corpus the solver searches) landed in upstream `tau2-bench` main
-after the v1.0.0 release. It is vendored at a newer pin under a separate
-directory so the engine pin above stays frozen.
+The τ³ banking domain (`banking_knowledge`: task specs, split files, the
+document corpus the solver searches, and the domain/retrieval code) landed in
+upstream `tau2-bench` main after the v1.0.0 release. It is vendored at a
+newer pin under a separate directory so the engine pin above stays frozen.
+
+**This clone is not data-only.** τ³ banking runs set
+`TAU2_BENCH_ROOT=third_party/tau3-bench`, and the episode worker is launched
+with `uv run --project third_party/tau3-bench` — so episodes execute inside
+THIS clone's venv, not tau2-bench's. `uv run` creates that venv implicitly,
+but only with the MAIN dependencies; the `banking_knowledge` bm25 retrieval
+variants need `rank_bm25`, which upstream ships in the optional `knowledge`
+extra. Build the venv with the extra up front, or the first retrieval tool
+call of every episode dies with ModuleNotFoundError (the runner's preflight
+now refuses at launch instead, but only a synced venv actually runs).
 
 - Repo: `sierra-research/tau2-bench` (same upstream).
 - Pinned commit: `363133ada1936491fb5bcec33cd62c3518a99f65`.
@@ -56,8 +66,9 @@ directory so the engine pin above stays frozen.
   git clone https://github.com/sierra-research/tau2-bench.git tau3-bench
   cd tau3-bench
   git checkout 363133ada1936491fb5bcec33cd62c3518a99f65
-  # No venv needed — this clone supplies DATA only
-  # (data/tau2/domains/banking_knowledge/...); the engine above executes it.
+  uv sync --extra knowledge   # main deps + rank_bm25/openai for the
+                              # banking_knowledge retrieval variants
   ```
-- τ³ banking runs point the data root here (see `scripts/run_tau3_banking.py`
-  and the `TAU2_BENCH_ROOT` environment variable).
+- τ³ banking runs point both the data root AND the worker's `--project` here
+  (see `scripts/run_tau3_banking.py` and the `TAU2_BENCH_ROOT` environment
+  variable).
