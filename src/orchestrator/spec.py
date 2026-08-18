@@ -48,7 +48,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import sys
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -486,9 +488,28 @@ def _mut(base: ExperimentSpec, **kw) -> ExperimentSpec:
 def selftest() -> int:
     print("SELFTEST — each rule must FAIL on a known-bad input\n")
     base = tau3_banking_2525()
-    if not (REPO / "outputs/tau3_banking_2525/split_252547.json").exists():
-        print("  [skip] live split file absent; cannot run split-bound checks")
-        return 2
+    # SELF-CONTAINED, because a selftest that only runs on one machine is not a test.
+    # This used to bail with "live split file absent" whenever
+    # outputs/tau3_banking_2525/split_252547.json was missing — i.e. on every clone but the
+    # one this was written in — and return 2 having exercised 0 of the 12 rules below. The
+    # same defect was fixed in loop.py --selftest; this is its twin. Synthesize a split with
+    # the fixture's own shape and re-point the fixture at it, so all 12 rules run anywhere.
+    _tmp = None
+    if not (REPO / base.split_path).exists() and not Path(base.split_path).exists():
+        _tmp = tempfile.mkdtemp(prefix="evoskill_spec_selftest_")
+        _sp = Path(_tmp) / "split_252547.json"
+        _sp.write_text(json.dumps({
+            "train": [f"task_{i:03d}" for i in range(1, base.n_train + 1)],
+            "val": [f"task_{i:03d}" for i in range(base.n_train + 1,
+                                                   base.n_train + base.n_val + 1)],
+            "test": [f"task_{i:03d}" for i in range(base.n_train + base.n_val + 1,
+                                                    base.n_train + base.n_val
+                                                    + base.n_test + 1)],
+        }, indent=1))
+        # Hash it the same way the real generator would be hashed, or the very first rule
+        # ("valid baseline PASSES") would fail on a sha mismatch of our own making.
+        base = _mut(base, split_path=str(_sp), split_sha256=split_digest(_sp))
+        print(f"  [note] live split absent — running against a synthesized split at {_sp}\n")
 
     bad = [
         ("valid baseline PASSES", base, None),
@@ -585,6 +606,8 @@ def selftest() -> int:
               f"({_f}={_v!r} changes what an episode does)")
         fails += 0 if _ch else 1
 
+    if _tmp:
+        shutil.rmtree(_tmp, ignore_errors=True)
     print(f"\n{'ALL CHECKS BEHAVED' if not fails else str(fails) + ' CHECK(S) MISBEHAVED'}")
     return 0 if not fails else 1
 

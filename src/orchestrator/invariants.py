@@ -782,8 +782,22 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--run-dir")
     ap.add_argument("--epoch", type=int)
-    ap.add_argument("--split", default="outputs/tau3_banking_2525/split_252547.json")
-    ap.add_argument("--base-train", default="outputs/tau3_banking_2525/e0_base_train.json")
+    # NO DEFAULTS POINTING AT ONE PARTICULAR RUN. These used to default to
+    # outputs/tau3_banking_2525/{split_252547,e0_base_train}.json — a directory that exists
+    # only in the tree this was developed in. On any other clone both paths were absent, every
+    # check that needs them returned SKIP, and (see below) main() printed "0 FAIL" and exited
+    # 0. Unresolved, they are now derived FROM THE RUN DIR, which is where a run records its
+    # own artifacts; #194 — read what the producing process recorded, never re-derive a name.
+    ap.add_argument("--split", help="default: the split_*.json in --run-dir")
+    ap.add_argument("--base-train",
+                    help="default: RUNTIME.json's base_leg in --run-dir")
+    # The leg filename pattern has the same problem the paths above had: run_epoch's default
+    # is the DSV4F banking arm's naming, and every run named otherwise silently SKIPs the
+    # seven checks that need a result JSON. That is now a visible FAIL (assert_covered runs
+    # below), but a FAIL the operator cannot act on is only half a fix, so derive the pattern
+    # from the files this run ACTUALLY wrote.
+    ap.add_argument("--leg", help="result-JSON pattern with {epoch}/{key}; "
+                                  "default: derived from the *_v<epoch>_train.json in --run-dir")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
@@ -794,14 +808,58 @@ def main() -> int:
     rd = Path(a.run_dir)
     if not rd.is_absolute():
         rd = REPO / rd
-    sp = Path(a.split)
-    if not sp.is_absolute():
-        sp = REPO / sp
-    bt = Path(a.base_train)
-    if not bt.is_absolute():
-        bt = REPO / bt
 
-    checks = run_epoch(rd, a.epoch, sp, bt)
+    def _resolve(val: str | None, derive, what: str) -> Path:
+        if val:
+            p = Path(val)
+            return p if p.is_absolute() else REPO / p
+        p = derive()
+        if p is None:
+            ap.error(
+                f"could not derive {what} from {rd} — pass it explicitly. "
+                f"Deriving is a convenience; guessing is not, because a wrong path here "
+                f"turns every check that needs it into a SKIP.")
+        return p
+
+    def _derive_split():
+        cands = sorted(rd.glob("split_*.json")) or sorted(rd.glob("split.json"))
+        # Exactly one, or refuse: picking the first of several would silently verify an
+        # epoch against another arm's split.
+        return cands[0] if len(cands) == 1 else None
+
+    def _derive_base_train():
+        rt = rd / "RUNTIME.json"
+        if not rt.is_file():
+            return None
+        leg = (json.loads(rt.read_text()) or {}).get("base_leg")
+        if not leg:
+            return None
+        p = Path(leg)
+        return p if p.is_absolute() else REPO / p
+
+    sp = _resolve(a.split, _derive_split, "--split")
+    bt = _resolve(a.base_train, _derive_base_train, "--base-train")
+
+    leg = a.leg
+    if not leg:
+        # Find this epoch's train leg on disk and turn its NAME back into the pattern by
+        # substituting the two known tokens. Deriving from a real filename, rather than
+        # transforming the base leg's name, is the #194 discipline: read what the producing
+        # process wrote. `.PARTIAL.json` files are excluded — a partial leg is a live run's
+        # scratch, not the record.
+        found = [p for p in sorted(rd.glob(f"*_v{a.epoch}_train.json"))
+                 if ".PARTIAL." not in p.name]
+        if len(found) == 1:
+            leg = found[0].name.replace(f"_v{a.epoch}_", "_v{epoch}_").replace(
+                "_train.json", "_{key}.json")
+        else:
+            leg = None  # fall through to run_epoch's default; assert_covered will say so
+    checks = run_epoch(rd, a.epoch, sp, bt, **({"leg": leg} if leg else {}))
+    # THE COVERAGE GUARD MUST ACTUALLY RUN. assert_covered() exists precisely so a mostly
+    # skipped report cannot read as clean (#154) — and until 2026-08-18 main(), the only
+    # caller a human ever invokes, never called it. On a fresh clone that meant this tool
+    # printed "0 FAIL" over a set of checks that had almost all skipped.
+    checks = [*checks, assert_covered(checks)]
     print(f"EPOCH INVARIANTS — {rd.name} epoch {a.epoch}\n")
     for c in checks:
         print(c.line())

@@ -103,6 +103,16 @@ export EVOSKILL_CACHE_DIR
 LOG="$RUNDIR/${TAG}.log"
 mkdir -p "$R/outputs/ssbv2_base30"
 
+# THE REPO VENV'S PYTHON, NOT PATH LUCK — the same fix tau3_leg_b2525.sh got, applied here
+# for harness parity. Bare `python3` resolves to whatever the shell finds first; on the
+# machine this was developed on that was an interpreter carrying every dep from months of
+# use, so the leg "worked" while never exercising the shipped venv. On a fresh machine it
+# is a system python without the repo's deps and the leg dies at the first import — inside
+# a nohup'd subshell, so the only symptom is the DEAD check below. EVOSKILL_PYTHON
+# overrides for exotic setups.
+PYBIN="${EVOSKILL_PYTHON:-$R/.venv/bin/python}"
+[ -x "$PYBIN" ] || PYBIN=python3
+
 # The wrapper: run, then relocate. `exec`-less so the copy happens after the runner exits.
 # Its command line contains `run_ssbv2_base30_dsv4f_n3.py`, which is what the loop's liveness
 # probe matches on — see note 2 in the header.
@@ -123,7 +133,7 @@ nohup env \
   EVOSKILL_SEAT_PRIORITY="$PRIO" \
   EVOSKILL_SOLVER_TIMEOUT_SECONDS="${EVOSKILL_SOLVER_TIMEOUT_SECONDS:-10800}" \
   PHOENIX_PROJECT_NAME="${PHOENIX_PROJECT_NAME:-ssbv2-${TAG}}" \
-  bash -c "python3 scripts/run_ssbv2_base30_dsv4f_n3.py; rc=\$?; \
+  bash -c "'$PYBIN' scripts/run_ssbv2_base30_dsv4f_n3.py; rc=\$?; \
            if [ -f '$RUNNER_OUT' ]; then cp '$RUNNER_OUT' '$FINAL'; fi; exit \$rc" \
   > "$LOG" 2>&1 &
 PID=$!

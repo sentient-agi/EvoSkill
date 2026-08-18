@@ -51,19 +51,52 @@ if [ "$CHAIN_RULES" -gt 0 ]; then
 fi
 ok "DOCKER-USER chain is empty — build egress is open"
 
-# 2. The base must be the exact frozen image, or the arm silently gains a second
-#    variable (different pandas/numpy wheels) on top of LibreOffice.
+# 2. The base. Two situations, and conflating them made this script unrunnable
+#    off the machine the images were first built on.
+#
+#    (a) REPRODUCTION. If the frozen 2026-07-15 image is present, require it by
+#        ID. Every SSB v2 number published to date was produced on that exact
+#        image, so building the LibreOffice arm on anything else would make the
+#        comparison two-variable — which is what the ID pin has always been for.
+#
+#    (b) FRESH MACHINE. If it is absent, the pin cannot be satisfied by any
+#        `docker build`: an image ID is a content hash over layers that include
+#        apt's index of the day. Until 2026-08-18 this script simply failed there,
+#        which meant step 2 of the documented SSB v2 setup could not succeed for
+#        anyone who was not on this laptop. Build the base from its versioned
+#        Dockerfile instead and say plainly what that does and does not buy.
+#
+#    What survives in case (b) is the property that actually matters downstream:
+#    the acceptance suite below pins python/openpyxl/pandas/numpy to the same
+#    versions and proves the recalc round-trip end to end. What does NOT survive
+#    is byte-identity with the historical arm — so a number produced on a fresh
+#    base is comparable within its own run, and is NOT directly comparable to a
+#    published figure. That is stated at build time rather than left to be
+#    rediscovered from a puzzling delta.
 BASE_ID=$(docker images --no-trunc --format '{{.ID}}' "$BASE_TAG" 2>/dev/null | head -1 | sed 's/^sha256://' | cut -c1-12)
-[ -n "$BASE_ID" ] || fail "base tag $BASE_TAG does not exist.
-  It should point at the 2026-07-15 solver image. Recreate with
-    docker tag ssb-solver:latest $BASE_TAG
-  but ONLY after confirming ssb-solver:latest is still $BASE_ID_EXPECTED — if it
-  has been rebuilt, that identity is gone and the historical arm is not
-  reproducible from this machine."
-[ "$BASE_ID" = "$BASE_ID_EXPECTED" ] || fail "base $BASE_TAG is $BASE_ID, expected $BASE_ID_EXPECTED.
-  Every SSB v2 number to date was produced on $BASE_ID_EXPECTED. Building the
-  LibreOffice arm on a different base makes the comparison two-variable."
-ok "base $BASE_TAG = $BASE_ID (the frozen 2026-07-15 solver image)"
+if [ -z "$BASE_ID" ]; then
+  echo "  note  base tag $BASE_TAG is absent — building it from"
+  echo "        docker/ssb-solver/Dockerfile (the versioned recipe for that image)."
+  echo "        The frozen 2026-07-15 image ($BASE_ID_EXPECTED) cannot be reproduced by"
+  echo "        ID on another machine; the library pins asserted below are what make"
+  echo "        this base equivalent for running the benchmark."
+  echo "        RESULTS FROM THIS BASE ARE NOT BYTE-COMPARABLE TO PUBLISHED NUMBERS."
+  docker build -t "$BASE_TAG" "$ROOT/docker/ssb-solver/" \
+    || fail "could not build the base image from docker/ssb-solver/Dockerfile"
+  BASE_ID=$(docker images --no-trunc --format '{{.ID}}' "$BASE_TAG" | head -1 | sed 's/^sha256://' | cut -c1-12)
+  [ -n "$BASE_ID" ] || fail "base build reported success but $BASE_TAG does not exist"
+  ok "base $BASE_TAG = $BASE_ID (freshly built; NOT the frozen 2026-07-15 image)"
+elif [ "$BASE_ID" = "$BASE_ID_EXPECTED" ]; then
+  ok "base $BASE_TAG = $BASE_ID (the frozen 2026-07-15 solver image)"
+else
+  # Present but different: someone retagged or rebuilt it. Refuse, because this is
+  # the one case where the operator probably BELIEVES they have the frozen image.
+  fail "base $BASE_TAG is $BASE_ID, expected $BASE_ID_EXPECTED.
+  That tag is supposed to name the frozen 2026-07-15 solver image, and it does
+  not. Either it was rebuilt (the historical identity is gone — untag it and let
+  this script build a fresh base, accepting that results are not byte-comparable
+  to published numbers), or it was tagged onto the wrong image."
+fi
 
 echo
 echo "== build =="
