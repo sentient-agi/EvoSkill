@@ -426,11 +426,35 @@ if OUT.exists():
             f"a measured baseline (this happened on 2026-08-07). Use a domain-specific tag "
             f"or set EVOSKILL_TAU3_RUN_DIR.")
 
-# ORG key for all OpenRouter spend (standing directive). Read from .env; only the
-# last 4 characters are ever printed.
-_env = Path(os.environ.get("EVOSKILL_ENV_FILE", PROJECT_ROOT / ".env")).read_text()
-_key = _env.split("OPENROUTER_API_KEY=")[1].split("\n")[0].strip().strip('"')
-os.environ["OPENROUTER_API_KEY"] = _key
+# ORG key for all OpenRouter spend (standing directive). Only the last 4 chars are printed.
+#
+# AN EXPORTED KEY WINS. This used to read .env and OVERWRITE os.environ unconditionally,
+# which broke three things at once: the standing "export the org key in every launcher"
+# directive silently did nothing; `EVOSKILL_REQUIRE_KEY_SUFFIX` in tau3_leg_b2525.sh fenced
+# the EXPORTED key while the run then spent the .env one, making the spend fence vacuous;
+# and a missing .env (or one without the variable) died with an IndexError from split()
+# rather than a message. It also contradicted .env.example's own first line, which promises
+# this file is read only when the variables are not already exported.
+#
+# Mirrors run_ssbv2_base30_dsv4f_n3.py, which already had the correct shape -- same
+# precedence, same _WHICH_KEY record (all-harness parity).
+if os.environ.get("OPENROUTER_API_KEY"):
+    _WHICH_KEY = "env"
+else:
+    _envfile = Path(os.environ.get("EVOSKILL_ENV_FILE", PROJECT_ROOT / ".env"))
+    if not _envfile.is_file():
+        raise SystemExit(
+            f"set OPENROUTER_API_KEY, or create {_envfile} with an OPENROUTER_API_KEY= line "
+            f"(override the location with EVOSKILL_ENV_FILE)")
+    _lines = [ln for ln in _envfile.read_text().splitlines()
+              if ln.strip().startswith("OPENROUTER_API_KEY=")]
+    if not _lines:
+        raise SystemExit(f"{_envfile} has no OPENROUTER_API_KEY= line")
+    _key = _lines[-1].split("=", 1)[1].strip().strip('"').strip("'")
+    if not _key:
+        raise SystemExit(f"{_envfile} has an empty OPENROUTER_API_KEY=")
+    os.environ["OPENROUTER_API_KEY"] = _key
+    _WHICH_KEY = "env-file"
 os.environ["EVOSKILL_SANDBOX"] = "none"
 
 PHOENIX_PROJECT = os.environ.get(

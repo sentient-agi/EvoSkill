@@ -20,8 +20,23 @@ from opentelemetry import trace
 # and the TracerProvider import were DEAD — pyflakes flags them as unused, and the
 # tracer actually comes from `phoenix.otel.register` below. Removed rather than
 # corrected, because importing a name nothing uses is how the breakage hid.
-from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
-from opentelemetry.trace import StatusCode
+# TRACING IS OPTIONAL; THE PROXY IS NOT.
+# These two packages live in the OPTIONAL `[phoenix]` extra, but this proxy is a
+# MANDATORY step for DeepSeek-family models through the `claude` CLI -- README's
+# "Model routing notes" says so and scripts/lib/deepseek_pin_guard.sh refuses to
+# launch without it. Importing them at module scope meant that after the documented
+# `uv sync` (no extras) the mandatory component could not start, so the pin guard
+# demanded a proxy the environment could not run. Observability must not be able to
+# take down routing. Absent, the proxy runs and pins exactly as before and only the
+# Phoenix spans are missing -- which it says once, loudly, rather than degrading
+# silently.
+try:
+    from openinference.semconv.trace import SpanAttributes, OpenInferenceSpanKindValues
+    from opentelemetry.trace import StatusCode
+    _TRACING = True
+except ImportError as _e:
+    _TRACING = False
+    _TRACING_ERR = _e
 
 PHOENIX_PROJECT = os.environ.get("CC_PROXY_PHOENIX_PROJECT", "cc-proxy-raw")
 if PHOENIX_PROJECT == "cc-proxy-raw":
@@ -30,13 +45,45 @@ PHOENIX_ENDPOINT = os.environ.get("CC_PROXY_PHOENIX_ENDPOINT", "http://localhost
 TARGET = "https://openrouter.ai/api"
 PORT = int(os.environ.get("CC_PROXY_PORT", "8100"))
 
-# Init Phoenix tracing
-from phoenix.otel import register
-tracer_provider = register(
-    project_name=PHOENIX_PROJECT,
-    endpoint=PHOENIX_ENDPOINT,
-)
-_tracer = trace.get_tracer("cc-proxy")
+# Init Phoenix tracing, if the optional extra is installed.
+if _TRACING:
+    try:
+        from phoenix.otel import register
+        tracer_provider = register(
+            project_name=PHOENIX_PROJECT,
+            endpoint=PHOENIX_ENDPOINT,
+        )
+        _tracer = trace.get_tracer("cc-proxy")
+    except ImportError as _e:
+        _TRACING, _TRACING_ERR = False, _e
+
+if not _TRACING:
+    print(f"cc_proxy: Phoenix tracing DISABLED ({_TRACING_ERR}). The proxy still runs "
+          f"and still pins the provider; only spans are missing. Install the extra with "
+          f"`uv sync --extra phoenix` if you want traces.", flush=True)
+
+    class _NoSpan:
+        def set_attribute(self, *a, **k): pass
+        def set_status(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class _NoTracer:
+        def start_as_current_span(self, *a, **k): return _NoSpan()
+
+    class _NoAttrs:
+        """Any SpanAttributes.X resolves to a harmless key; nothing consumes it."""
+        def __getattr__(self, name): return f"noop.{name}"
+
+    _tracer = _NoTracer()
+    SpanAttributes = _NoAttrs()
+
+    class _NoKind:
+        LLM = type("V", (), {"value": "LLM"})()
+    OpenInferenceSpanKindValues = _NoKind()
+
+    class StatusCode:  # noqa: F811 - deliberate stand-in for the real enum
+        ERROR = "ERROR"
 
 _ctx = ssl.create_default_context()
 _call_num = 0
