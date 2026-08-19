@@ -1170,6 +1170,42 @@ def _require_ssbv2_root() -> str:
     return ":".join(dict.fromkeys([x for x in (str(Path(root).resolve()), base, root) if x]))
 
 
+def _require_tau3_deny_paths(domain: str) -> str:
+    """The tau3 held-out SPEC paths, or refuse.
+
+    tau3 ran with an EMPTY deny list -- the kernel --hide loop in tau3_evolver.sh is
+    guarded on this variable being non-empty, so on tau3 it never executed and
+    containment rested entirely on the text hook. That hook is a string matcher, so
+    `cp -r .../domains/banking_knowledge /tmp/bk` took the specs out without naming
+    any guarded path. leak_patterns.py now matches the bare domain dir, which closes
+    it on Linux; --hide closes it in the kernel, where a shell cannot spell around it.
+
+    Deliberately NOT the domain directory. tau3_evolver.sh grants the evolver
+    documents/ as its corpus and the design note there is explicit that the
+    environment (tools.py, db.json, documents/) stays readable -- hiding the parent
+    would forbid env-aware evolution rather than prevent leakage. Only the specs.
+    """
+    dom = (domain or "").strip()
+    if not dom:
+        raise RuntimeError(
+            "this run declares a tau3 benchmark but spec.domain is empty, so the "
+            "held-out task specs cannot be located to deny them. An empty deny list "
+            "is not a configuration, it is a missing one.")
+    roots = (REPO / "third_party/tau3-bench/data/tau2/domains" / dom,
+             REPO / "third_party/tau3-bench/src/tau2/domains" / dom)
+    # BOTH TREES. src/tau2/domains/telecom/tasks/ holds task CODE (service_issues.py,
+    # create_tasks.py) -- specs, in a directory nobody thinks of as data.
+    found = [str(c) for r in roots
+             for c in (r / "tasks", r / "tasks.json", r / "tasks_voice.json")
+             if c.exists()]
+    if not found:
+        raise RuntimeError(
+            f"no tau3 task-spec path exists for domain {dom!r} under "
+            f"{REPO / 'third_party/tau3-bench'}. Every --hide would be a no-op and the "
+            f"launcher would still print 'leak hook: ARMED'. Check the dataset checkout.")
+    return ":".join(dict.fromkeys(found))
+
+
 def _v_no_infra_exclusions(ctx: Ctx, key: str):
     """An excluded episode is a silently smaller denominator. Neither exclusion nor
     timeout-zeroing may be nonzero without a human deciding what it means.
@@ -1989,8 +2025,13 @@ def _run_evolver(ctx: Ctx) -> None:
         # one. The hook's patterns knew tau3 paths and tau3 ids only, so on this run it
         # matched nothing and protected nothing; the launcher's deny-probe refused dispatch
         # (exit 13) rather than proceeding, which is why this was found before an evolver ran.
+        # tau3's held-out material is the task SPECS, which live in two trees (data/ and,
+        # for telecom, src/). Passing them makes tau3_evolver.sh's --hide loop -- guarded on
+        # this variable being non-empty, so previously dead on every tau3 run -- actually run.
         **({"EVOSKILL_LEAK_DENY_PATHS": _require_ssbv2_root()}
-           if getattr(ctx.spec, "benchmark", "") == "ssbv2" else {}),
+           if getattr(ctx.spec, "benchmark", "") == "ssbv2"
+           else {"EVOSKILL_LEAK_DENY_PATHS": _require_tau3_deny_paths(
+               getattr(ctx.spec, "domain", ""))}),
         "EVOSKILL_TAU3_PHOENIX_PROJECT": f"{run_id(ctx)}-e{ctx.epoch}",
     })
 

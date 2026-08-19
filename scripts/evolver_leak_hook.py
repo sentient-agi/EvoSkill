@@ -111,18 +111,26 @@ def main() -> int:
     if not text.strip():
         return 0
 
-    m = LEAK_PATH_RE.search(text)
-    if m:
-        _deny(f"  matched held-out spec path: {m.group(0)!r}")
-
-    # RUNTIME-SUPPLIED DENY PATHS. A benchmark whose ground truth is a data file keeps that file
-    # wherever the operator put it (SSB v2: $SSBV2_ROOT), so the launcher passes the absolute
-    # directories rather than this module guessing them. Absent is not "nothing to deny" — the
-    # launcher is responsible for setting it, and its own deny-probe fails loudly if the result
-    # does not actually block.
+    # RUNTIME-SUPPLIED DENY PATHS, CHECKED FIRST. A benchmark whose ground truth is a data
+    # file keeps that file wherever the operator put it (SSB v2: $SSBV2_ROOT), so the launcher
+    # passes the absolute directories rather than this module guessing them. Absent is not
+    # "nothing to deny" — the launcher is responsible for setting it, and its own deny-probe
+    # fails loudly if the result does not actually block.
+    #
+    # ORDER IS LOAD-BEARING, and it used to be the other way round. The launcher proves the
+    # deny list is armed by feeding this hook a path under it and requiring a refusal; but the
+    # deny roots on every benchmark sit under paths LEAK_PATH_RE already matches, so with the
+    # pattern check first the probe was answered by the pattern every time and would have
+    # passed identically with EVOSKILL_LEAK_DENY_PATHS unset. That is the vacuous-guard shape
+    # (#154): the probe could not fail. Reporting the operator-declared root first also names
+    # the more specific rule, which is the more useful thing to read in a refusal.
     for d in filter(None, os.environ.get("EVOSKILL_LEAK_DENY_PATHS", "").split(":")):
         if d in text:
             _deny(f"  reads a declared held-out data root: {d!r}")
+
+    m = LEAK_PATH_RE.search(text)
+    if m:
+        _deny(f"  matched held-out spec path: {m.group(0)!r}")
 
     found = id_re.findall(text)
     if blind:

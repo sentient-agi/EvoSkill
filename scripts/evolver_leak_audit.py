@@ -61,8 +61,10 @@ from pathlib import Path
 # ONE DEFINITION, imported. These lived here in triplicate -- this module, the live hook
 # (via this module) and invariants.check_no_heldout_reachable, which had INVENTED its own
 # and missed SSB v2 entirely. A copy is how two guards become one real one. The patterns
-# now live in src/harness/leak_patterns.py; the names are re-exported so this module's
-# existing consumers are untouched.
+# now live in src/leak_patterns.py -- at the TOP level, not under src/harness/, whose
+# __init__ imports pydantic: Claude Code runs the hook under the SYSTEM python3, so a
+# harness-package home silently killed the hook on import (exit 1, which does not block).
+# The names are re-exported so this module's existing consumers are untouched.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.leak_patterns import (                  # noqa: E402
     LEAK_PATH_RE, POOL_RES, TASK_RE, id_forms,
@@ -132,9 +134,19 @@ def main() -> int:
     args = ap.parse_args()
 
     split = json.loads(Path(args.split).read_text())
-    train = set(split["train"])
-    held = set(split.get("val", [])) | set(split.get("test", []))
-    if not held:
+    # BOTH SPELLINGS, for MEMBERSHIP. src/leak_patterns.py says the point of matching both
+    # forms is that an SSB v2 id is "Debugging/05_05" on the split and "Debugging_05_05" as a
+    # filename -- and the consolidation that moved id_forms into the shared module never
+    # converted THIS module's own membership tests. So the post-hoc audit, the artifact an
+    # operator runs to certify an epoch, reported CLEAN on a real held-out spec-content read
+    # written in the filename form, while invariants.check_no_heldout_reachable FAILED the
+    # same log because it kept its own converter. A shared definition that only one consumer
+    # applies is the copy problem wearing a different hat.
+    train_raw = set(split["train"])
+    held_raw = set(split.get("val", [])) | set(split.get("test", []))
+    train = id_forms(train_raw)
+    held = id_forms(held_raw)
+    if not held_raw:
         print("REFUSING: split names no val/test arm — nothing to protect", file=sys.stderr)
         return 2
 
@@ -165,11 +177,16 @@ def main() -> int:
         else:
             fails.append(f"ID-RES {tool}: {sorted(hit)} in output of: {text[:220]}")
 
-    n_train = len({t for _, (_, x) in cmds.items() for t in TASK_RE.findall(x) if t in train})
+    # COUNT CANONICAL IDS, NOT TOKENS. `train` now holds both spellings, so counting matched
+    # tokens against it would double the numerator on SSB v2 and make the ratio below
+    # meaningless. Map each match back to the id it names.
+    _seen = {t for _, (_, x) in cmds.items() for t in TASK_RE.findall(x)}
+    n_train = len({c for c in train_raw
+                   if c in _seen or c.replace("/", "_") in _seen})
     if not args.quiet:
         print(f"  session   : {args.session}")
         print(f"  tool calls: {len(cmds)}  results: {len(results)}")
-        print(f"  protecting: {len(held)} held-out ids; {n_train}/{len(train)} train ids referenced")
+        print(f"  protecting: {len(held_raw)} held-out ids; {n_train}/{len(train_raw)} train ids referenced")
 
     for w in warns:
         print(f"  WARN  {w}")

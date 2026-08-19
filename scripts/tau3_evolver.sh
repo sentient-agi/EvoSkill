@@ -1034,8 +1034,15 @@ _denied_ok () {  # $1 = expected marker; uses _HOOK_RC/_HOOK_ERR from _hook_rc
 # correctly came back "did not block" and refused dispatch. Both halves are now benchmark-aware:
 # SSB v2's ground truth is the reference workbook under $SSBV2_ROOT, so that root is both the
 # probe target and the declared deny path handed to the hook.
+# WHAT THE PROBE MUST PROVE depends on which rule is supposed to stop it. With a declared
+# deny list, the thing under test is THE DENY LIST -- so the probe requires the hook's
+# deny-root banner, not merely "BLOCKED". Requiring only BLOCKED made this vacuous on tau3,
+# whose deny roots sit under paths LEAK_PATH_RE matches anyway: the probe passed on the
+# built-in pattern and would have passed identically with the deny list unset.
+_probe_want="BLOCKED"
 if [ -n "${EVOSKILL_LEAK_DENY_PATHS:-}" ]; then
-  _probe_target="${EVOSKILL_LEAK_DENY_PATHS%%:*}/held_out_answer.xlsx"
+  _probe_target="${EVOSKILL_LEAK_DENY_PATHS%%:*}/__held_out_probe__"
+  _probe_want="reads a declared held-out data root"
 elif [ "${EVOSKILL_ORACLE_ABSENT:-0}" = "1" ]; then
   # A NON-TAU3 RUN WITH AN EMPTY DENY LIST HAS NOTHING TO PROBE, AND MUST SAY SO.
   # This used to fall back to a tau3 pool path, so an SSB v2 run with an unset SSBV2_ROOT
@@ -1059,7 +1066,7 @@ export EVOSKILL_EVOLVER_TRAIN_IDS="$_TRAIN_IDS"
 export EVOSKILL_EVOLVER_ID_RE="$_ID_RE"
 export EVOSKILL_LEAK_DENY_PATHS="${EVOSKILL_LEAK_DENY_PATHS:-}"
 _hook_rc "$_probe" "$ROOT/scripts/evolver_leak_hook.py"
-if ! _denied_ok "BLOCKED"; then
+if ! _denied_ok "$_probe_want"; then
   echo "REFUSING: the leak hook did NOT block a read of the full task pool." >&2
   case "$_HOOK_ERR" in (*BLOCKED*) : ;; (*)
     echo "  (its stderr carries no BLOCKED banner, so exit $_HOOK_RC did not come from the" >&2
@@ -1069,6 +1076,15 @@ if ! _denied_ok "BLOCKED"; then
   if [ "$_HOOK_RC" -eq 0 ]; then
     echo "  Exit 0 = the hook examined the payload and ALLOWED it. Held-out specs" >&2
     echo "  would be reachable by Bash. The matcher is wrong for this benchmark." >&2
+  elif [ "$_HOOK_RC" -eq 2 ]; then
+    # BLOCKED, but by the WRONG RULE. The declared deny list is what this probe is
+    # testing; a refusal that came from the built-in patterns would have happened with
+    # the deny list unset, so it proves nothing about it.
+    echo "  The hook DID refuse (exit 2), but its reason is not the one under test." >&2
+    echo "  Wanted a refusal citing: $_probe_want" >&2
+    echo "  A refusal from a different rule would occur with EVOSKILL_LEAK_DENY_PATHS" >&2
+    echo "  unset, so it does not show the declared deny roots are armed. Its stderr:" >&2
+    printf '%s\n' "$_HOOK_ERR" | sed 's/^/    /' >&2
   else
     echo "  A non-zero code that is NOT 2 is a NON-BLOCKING error under Claude Code:" >&2
     echo "  the message is shown and the tool call proceeds anyway. The hook is" >&2

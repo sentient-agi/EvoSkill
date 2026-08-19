@@ -53,6 +53,15 @@ LEAK_PATH_RE = re.compile(
   | domains/[a-z_]+/tasks_voice\.json
   | domains/[a-z_]+/tasks/task_\d+\.json   # one per-task spec
   | domains/[a-z_]+/tasks(?![\w.])         # ...and the DIRECTORY holding all of them
+    # ...AND THE DOMAIN DIRECTORY NAMED BARE, which is how the specs leave without ever
+    # being named: `cp -r .../domains/banking_knowledge /tmp/bk` then read /tmp/bk/tasks.json,
+    # or `cd .../domains/banking_knowledge` then `cat tasks.json` relative. Neither command
+    # contains any pattern above. On macOS the profile's --hide covers it; on Linux there is
+    # no seatbelt and this line is the only layer. The optional trailing slash is NOT
+    # cosmetic -- `cp -r <dir>/ /tmp/bk` is the same escape one keystroke away -- and the
+    # lookahead forbids `/` so `<dir>/documents` (the corpus the evolver IS given) does not
+    # match by backtracking the `/?` to empty.
+  | tau2/domains/[a-z_]+/?(?![\w./])
   | test_domains?/                         # per-task pytest walkthroughs
   | tests?/.*test_task_\d+
     # ── SSB v2. Its ground truth IS the reference workbook, so the dataset root holds the
