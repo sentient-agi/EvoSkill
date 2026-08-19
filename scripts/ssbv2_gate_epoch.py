@@ -207,7 +207,12 @@ def fmt_block(r: dict) -> str:
         s = r[name]
         mark = "CLEARS" if s["clears"] else "does not clear"
         note = "" if s["floor_met"] else f"  (BELOW discordant floor — p is not interpretable)"
+        # ...AND `paired` GOES IN THE PRINTED LINE, not just the JSON. The comment at the
+        # results dict says it "is REPORTED", and it was computed and stored and then never
+        # rendered -- so the human-readable output, which is what an operator reads, still
+        # said nothing about the denominator each test ran over.
         out.append(f"  {name:24s} +{s['up']:3d} / -{s['down']:3d}  discordant={s['discordant']:3d}"
+                   f"  paired={s['paired']:3d}"
                    f"  p={s['p']:.4f}  vs alpha={r['alpha_corrected']:.4f}  -> {mark}{note}")
     out.append(f"  VERDICT: {r['verdict']}")
     for c, v in r["per_category"].items():
@@ -235,7 +240,20 @@ def main(argv: list[str]) -> int:
     a = ap.parse_args(argv)
 
     rd = Path(a.run_dir)
-    spec = json.loads((rd / "SPEC.json").read_text())["spec"]
+    # A MISSING SPEC IS A REFUSAL, NOT A TRACEBACK. This read was unguarded, so pointing the
+    # gate at a run dir without a frozen spec -- the ordinary mistake -- printed a
+    # FileNotFoundError stack through pathlib internals. Operator-facing scripts in this repo
+    # say what is wrong and what to do; this one just crashed.
+    _spec_path = rd / "SPEC.json"
+    if not _spec_path.is_file():
+        raise SystemExit(
+            f"REFUSING: no SPEC.json in {rd}. The gate reads the PRE-REGISTERED decision rule "
+            f"from the frozen spec; without it there is nothing to gate against. Point "
+            f"--run-dir at a run created by `evoskill new`, or freeze a spec there first.")
+    try:
+        spec = json.loads(_spec_path.read_text())["spec"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        raise SystemExit(f"REFUSING: {_spec_path} is not a readable spec ({type(e).__name__}: {e})")
     g = spec.get("gate")
     if not g:
         raise SystemExit("REFUSING: SPEC.json carries no spec.gate — the decision rule is not pre-registered")
@@ -270,9 +288,17 @@ def main(argv: list[str]) -> int:
     print("\n--- #209 triple per leg (pass / graded-fail / never-graded = total) ---")
     for (v, s), d in legs.items():
         t = triple(d)
-        print(f"  {v:8s} {s:5s}  {t['pass']:3d} / {t['graded_fail']:3d} / {t['never_graded']:3d}"
-              f" = {t['total']:3d}   pass@3={t['pass_at_n']:2d}  all3={t['all_n']:2d}"
-              f"  capped-but-graded={t['capped_but_graded']:3d}"
+        # ABSENT IS NOT ZERO, and it must not be a traceback either. These come from
+        # `.get()` on the leg JSON, so a leg written by a runner that does not record a
+        # field arrives as None and the int format raised
+        # `TypeError: unsupported format string passed to NoneType.__format__`,
+        # killing the gate mid-report. Rendering None as 0 would be worse: this block
+        # exists because a missing count must never read as a measured zero (#209).
+        def _n(x, w=3):
+            return f"{x:{w}d}" if isinstance(x, int) else "?".rjust(w)
+        print(f"  {v:8s} {s:5s}  {_n(t['pass'])} / {_n(t['graded_fail'])} / {_n(t['never_graded'])}"
+              f" = {_n(t['total'])}   pass@3={_n(t['pass_at_n'], 2)}  all3={_n(t['all_n'], 2)}"
+              f"  capped-but-graded={_n(t['capped_but_graded'])}"
               f"  skills={str(t['skills_dir']).split('/')[-1]}")
 
     results = []

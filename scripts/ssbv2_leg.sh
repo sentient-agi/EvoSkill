@@ -87,6 +87,33 @@ case "$MODEL" in
   *) echo "REFUSING: solver model '$MODEL' is not an allow-listed dated snapshot (*-0731, *-0813)" >&2; exit 4;;
 esac
 
+# ...AND IT MUST BE THE MODEL THE SPEC FROZE. Requiring the variable only proves the operator
+# typed SOMETHING; the property this guard is for -- "a base leg measured on a different model
+# than the evolved legs is not a comparator" -- is about agreement with the frozen spec, and
+# nothing compared the two. An operator who exports last week's snapshot gets a full leg,
+# correctly cached under that model, silently incomparable with every leg the loop launches
+# (which exports spec.solver_model itself, #320). Checked only when the spec is reachable: a
+# hand-run against a bare directory is still allowed, it simply cannot be cross-checked.
+if [ -f "$RUNDIR/SPEC.json" ]; then
+  _SPEC_MODEL=$(python3 - "$RUNDIR/SPEC.json" <<'PYEOF'
+import json, sys
+try:
+    print(json.load(open(sys.argv[1]))["spec"].get("solver_model", "") or "")
+except Exception:
+    print("")
+PYEOF
+  )
+  if [ -n "$_SPEC_MODEL" ] && [ "$_SPEC_MODEL" != "$MODEL" ]; then
+    echo "REFUSING: EVOSKILL_SOLVER_MODEL='$MODEL' but $RUNDIR/SPEC.json froze" >&2
+    echo "  solver_model='$_SPEC_MODEL'. These legs would be cached under a model the" >&2
+    echo "  experiment did not declare, and comparing them to the loop's legs (which use" >&2
+    echo "  the frozen value) would compare two different solvers." >&2
+    echo "  Export the frozen model, or freeze a spec that names the one you want." >&2
+    exit 4
+  fi
+  [ -n "$_SPEC_MODEL" ] && echo "  solver model: $MODEL  [matches SPEC.json]"
+fi
+
 # BASE vs SKILL LEG. A base leg must NOT set EVOSKILL_SKILLS_DIR: the runner then points at its
 # own per-tag empty dir and asserts it empty, and the tree_hash keys on skills CONTENT, so every
 # base leg lands in the same bucket regardless of tag. Passing an empty string instead would make
