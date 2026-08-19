@@ -168,3 +168,28 @@ def test_tau3_runs_declare_a_non_empty_deny_list():
     for bad in ("", "nosuchdomain"):
         with pytest.raises(RuntimeError):
             _require_tau3_deny_paths(bad)
+
+
+# ── The deny list must be configured for the benchmarks that have one, and for no others ──
+
+def test_tau3_deny_paths_follow_a_relocated_dataset(monkeypatch):
+    """tau3_evolver.sh takes EVOSKILL_TAU3_CORPUS, so the dataset is relocatable. Deriving
+    the deny roots only from the in-repo checkout meant an operator who moved it got a
+    refusal naming a path they never used — or, worse, no denial of the specs they do have."""
+    from src.orchestrator.loop import _require_tau3_deny_paths
+    docs = REPO / "third_party/tau3-bench/data/tau2/domains/banking_knowledge/documents"
+    if not docs.is_dir():
+        pytest.skip("tau3 dataset not checked out")
+    monkeypatch.setenv("EVOSKILL_TAU3_CORPUS", str(docs))
+    paths = _require_tau3_deny_paths("banking_knowledge").split(":")
+    assert any(p.endswith("banking_knowledge/tasks.json") for p in paths), paths
+
+
+def test_an_unknown_benchmark_is_not_forced_through_the_tau3_path():
+    """`benchmark` is a free-form field the brief front door fills in. A branch reading
+    'ssbv2 ? … : tau3' sent every other value looking for tau2 domain dirs and RAISED, so an
+    evolver for a benchmark unrelated to tau3 could not dispatch at all."""
+    src = (REPO / "src/orchestrator/loop.py").read_text()
+    assert 'if getattr(ctx.spec, "benchmark", "") == "tau3" else {}' in src, (
+        "the deny-path branch is not scoped to a named benchmark; an unknown one will be "
+        "routed through the tau3 dataset lookup")

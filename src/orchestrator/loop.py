@@ -1191,13 +1191,29 @@ def _require_tau3_deny_paths(domain: str) -> str:
             "this run declares a tau3 benchmark but spec.domain is empty, so the "
             "held-out task specs cannot be located to deny them. An empty deny list "
             "is not a configuration, it is a missing one.")
-    roots = (REPO / "third_party/tau3-bench/data/tau2/domains" / dom,
-             REPO / "third_party/tau3-bench/src/tau2/domains" / dom)
+    # THE DATASET IS RELOCATABLE, so this cannot hardcode where it sits. tau3_evolver.sh
+    # takes EVOSKILL_TAU3_CORPUS (the domain's documents/ dir) and defaults to the in-repo
+    # checkout; deriving the domain dir from the same variable means an operator who moved
+    # the dataset gets their specs denied instead of a refusal that names a path they never
+    # used. First version of this function knew only the in-repo location.
+    _corpus = os.environ.get("EVOSKILL_TAU3_CORPUS", "").strip()
+    _data_dom = (Path(_corpus).parent if _corpus
+                 else REPO / "third_party/tau3-bench/data/tau2/domains" / dom)
+    roots = (_data_dom, REPO / "third_party/tau3-bench/src/tau2/domains" / dom)
     # BOTH TREES. src/tau2/domains/telecom/tasks/ holds task CODE (service_issues.py,
     # create_tasks.py) -- specs, in a directory nobody thinks of as data.
-    found = [str(c) for r in roots
-             for c in (r / "tasks", r / "tasks.json", r / "tasks_voice.json")
-             if c.exists()]
+    # GLOBBED, NOT A HANDWRITTEN TRIPLE. The first version named tasks/, tasks.json and
+    # tasks_voice.json; tau2's domains also ship tasks_full.json, tasks_small.json and
+    # split_tasks.json (356 KB of task ids in telecom alone), none of which were denied.
+    # audio_difficulty.json is included too: it keys HELD-OUT task ids to difficulty
+    # labels, which is held-out information about the evaluation even though it is not a
+    # spec. db.json and documents/ stay readable -- they are the environment, identical for
+    # train and held-out, and the design note in tau3_evolver.sh is explicit about that.
+    found = []
+    for r in roots:
+        for c in [r / "tasks", r / "audio_difficulty.json", *sorted(r.glob("*tasks*.json"))]:
+            if c.exists():
+                found.append(str(c))
     if not found:
         raise RuntimeError(
             f"no tau3 task-spec path exists for domain {dom!r} under "
@@ -2028,10 +2044,18 @@ def _run_evolver(ctx: Ctx) -> None:
         # tau3's held-out material is the task SPECS, which live in two trees (data/ and,
         # for telecom, src/). Passing them makes tau3_evolver.sh's --hide loop -- guarded on
         # this variable being non-empty, so previously dead on every tau3 run -- actually run.
+        #
+        # NAMED BENCHMARKS ONLY. The first version of this branch read "ssbv2 ? ssbv2 roots :
+        # tau3 roots", so ANY other benchmark string -- and `benchmark` is a free-form field
+        # the brief front door fills in -- went looking for tau2 domain dirs and raised,
+        # refusing to dispatch an evolver for a benchmark that has nothing to do with tau3.
+        # An unknown benchmark gets no deny list, which is what it had before this change;
+        # the launcher's own probe still decides whether that is acceptable.
         **({"EVOSKILL_LEAK_DENY_PATHS": _require_ssbv2_root()}
            if getattr(ctx.spec, "benchmark", "") == "ssbv2"
            else {"EVOSKILL_LEAK_DENY_PATHS": _require_tau3_deny_paths(
-               getattr(ctx.spec, "domain", ""))}),
+               getattr(ctx.spec, "domain", ""))}
+           if getattr(ctx.spec, "benchmark", "") == "tau3" else {}),
         "EVOSKILL_TAU3_PHOENIX_PROJECT": f"{run_id(ctx)}-e{ctx.epoch}",
     })
 

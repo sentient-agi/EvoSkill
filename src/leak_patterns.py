@@ -49,8 +49,13 @@ def id_forms(ids) -> set:
 # manual look, a false negative costs an epoch.
 LEAK_PATH_RE = re.compile(
     r"""(?x)
-    domains/[a-z_]+/tasks\.json            # the full 97-task pool
-  | domains/[a-z_]+/tasks_voice\.json
+    # ANY tasks-bearing json at the domain level, not two hardcoded names. tau2's own
+    # domains ship tasks.json, tasks_voice.json, tasks_full.json, tasks_small.json and
+    # split_tasks.json -- and only the first two were named, so `cat
+    # domains/telecom/tasks_full.json` (the full pool) and split_tasks.json (356 KB of task
+    # ids) read clean. `tasks\.json` cannot match `tasks_full.json`, and the directory
+    # alternative below cannot either: it requires a non-word character after `tasks`.
+    domains/[a-z_]+/[a-z_]*tasks[a-z_]*\.json
   | domains/[a-z_]+/tasks/task_\d+\.json   # one per-task spec
   | domains/[a-z_]+/tasks(?![\w.])         # ...and the DIRECTORY holding all of them
     # ...AND THE DOMAIN DIRECTORY NAMED BARE, which is how the specs leave without ever
