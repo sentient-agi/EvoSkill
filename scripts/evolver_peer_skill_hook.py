@@ -137,11 +137,47 @@ def _allowed_roots() -> list[str]:
     return sorted(out)
 
 
-def _owned(tok: str, allowed: list) -> bool:
+# `cd` targets, in every spelling a shell accepts before the peer read: at the start of the
+# command or after any of ; && || |, with the target optionally quoted.
+_CD_RE = re.compile(r"""(?:^|[;&|]|\n)\s*cd\s+(?P<t>"[^"]*"|'[^']*'|[^\s;&|<>]*)""")
+
+
+def _relative_base_is_provably_own(text: str, cwd: str, own_run: set) -> bool:
+    """Can a bare-first-segment path in `text` be proven to sit in THIS run?
+
+    This is the question the previous version never asked, and the whole hole. A relative
+    token is resolved by the SHELL against wherever it happens to be standing -- so
+    `skills_v1_staging/a/SKILL.md` is this run's own staging or a peer's depending entirely
+    on a `cd` earlier in the same command string. Every arm names its staging
+    `skills_v{N}_staging` (the file says so 40 lines below), so the first segment carries no
+    information about WHOSE it is. Measured against the previous version, with
+    EVOSKILL_EVOLVER_STAGING=/runs/armB/skills_v1_staging:
+        cd /runs/armA && cat skills_v1_staging/a/SKILL.md              -> rc=0  ALLOWED
+        cat /runs/armA/skills_v1_staging/a/SKILL.md                    -> rc=2  denied
+    -- the same read, two spellings, opposite answers. It is the `cd <peer> && <relative>`
+    shape of #213's original command, and the shape the comment claimed was covered.
+
+    Conservative by construction: anything unresolvable (a bare `cd`, `cd $VAR`, `cd ..`)
+    answers False. Over-blocking here is not silent -- _deny() prints why and names the
+    absolute path to use instead -- whereas under-blocking is silent contamination.
+    """
+    if cwd and not any(cwd == r or cwd.startswith(r.rstrip("/") + "/") for r in own_run):
+        return False                    # the session is already standing somewhere else
+    for m in _CD_RE.finditer(text):
+        target = m.group("t").strip().strip("\"'")
+        if not target.startswith("/"):
+            return False                # bare `cd` ($HOME), `cd ..`, `cd $VAR`, `cd sub`
+        if not any(target == r or target.startswith(r.rstrip("/") + "/") for r in own_run):
+            return False                # an absolute cd out of this run
+    return True
+
+
+def _owned(tok: str, allowed: list, text: str = "", cwd: str = "", own_run=()) -> bool:
     """True only if `tok` names THIS run's staging dir.
 
     Bare name (no separator) -> must equal the staging basename exactly.
-    Anything with a path component -> must equal, or sit under, an ABSOLUTE allowed root.
+    Anything with a path component -> must equal, or sit under, an ABSOLUTE allowed root,
+    OR be relative AND resolvable to this run (see _relative_base_is_provably_own).
     """
     abs_roots = [a for a in allowed if a.startswith("/")]
     names = [a for a in allowed if not a.startswith("/")]
@@ -150,18 +186,15 @@ def _owned(tok: str, allowed: list) -> bool:
         # that keeps a PEER arm's same-epoch staging out -- every arm names its staging dir
         # skills_v{N}_staging, so matching by NAME alone would let /runs/OTHER/... through.
         return any(tok == a or tok.startswith(a.rstrip("/") + "/") for a in abs_roots)
-    # RELATIVE: the FIRST path segment must be this run's staging basename. The hook cannot
-    # see the process's cwd, and the dir is normally referenced after a `cd` into its
-    # parent, so `skills_v1_staging/a/SKILL.md` and `./skills_v1_staging` are its own.
-    #
-    # The first version of this fix required a path component to match an ABSOLUTE root,
-    # which denied exactly those two forms -- an over-block, and over-blocking here is
-    # SILENT (a denied evolver just works around it), so no probe would have caught it.
-    # Measured: `cd <own run> && cat skills_v1_staging/a/SKILL.md` -> rc=2 where it had
-    # been 0. A peer is still denied because its first segment is `..` or a run-dir name,
-    # never the staging basename.
+    # RELATIVE: the first path segment must be this run's staging basename AND the command
+    # must not have moved somewhere this hook cannot vouch for. Requiring an ABSOLUTE root
+    # here instead was the first attempt and it over-blocked the ordinary
+    # `cd <own run> && cat skills_v1_staging/a/SKILL.md` (measured rc=2 where it had been
+    # 0); dropping the cwd question entirely was the second, and that is what let a peer in.
     parts = [x for x in tok.split("/") if x not in ("", ".")]
-    return bool(parts) and parts[0] in names
+    if not (parts and parts[0] in names):
+        return False
+    return _relative_base_is_provably_own(text, cwd, set(own_run))
 
 
 def main() -> int:
@@ -175,6 +208,17 @@ def main() -> int:
         return 0
 
     allowed = _allowed_roots()
+    # THIS RUN'S OWN TERRITORY: the staging dir's parent, both spellings. A relative peer
+    # read is only distinguishable from a relative own read by where the command stands.
+    own_run = set()
+    _stg = os.environ.get("EVOSKILL_EVOLVER_STAGING", "").strip()
+    if _stg:
+        own_run.add(str(Path(_stg).parent))
+        try:
+            own_run.add(str(Path(_stg).resolve().parent))
+        except OSError:
+            pass
+    cwd = payload.get("cwd") or ""
     for field in _FIELDS:
         val = tool_input.get(field)
         if not isinstance(val, str) or not val:
@@ -192,9 +236,16 @@ def main() -> int:
             # skills_v1 was correctly denied.
             # A token WITH a directory component must match an absolute allowed root by
             # prefix; only a bare basename may match by name.
-            if _owned(tok, allowed):
+            if _owned(tok, allowed, text=val, cwd=cwd, own_run=own_run):
                 continue
-            _deny(f"  tool={payload.get('tool_name')} field={field}\n  offending path: {tok}")
+            _why = ""
+            if not tok.startswith("/"):
+                _why = ("\n  This path is RELATIVE, and the command moves (or may move) "
+                        "outside this run,\n  so it cannot be shown to be your own "
+                        "staging dir. Use the absolute path in\n  $EVOSKILL_EVOLVER_STAGING "
+                        "if you meant your own.")
+            _deny(f"  tool={payload.get('tool_name')} field={field}\n"
+                  f"  offending path: {tok}{_why}")
     return 0
 
 

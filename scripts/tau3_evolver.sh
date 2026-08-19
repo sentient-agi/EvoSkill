@@ -1224,6 +1224,23 @@ if ! _denied_ok "BLOCKED"; then
   if [ "$_HOOK_RC" -ne 0 ]; then printf '%s\n' "$_HOOK_ERR" | sed 's/^/    /' >&2; fi
   exit 19
 fi
+# #213 case 3, THE ONE THAT WAS MISSING. Both probes above name `skills_v1`; neither names
+# `skills_v1_staging`, and that is the form that was ALLOWED through two rounds of fixes.
+# Every arm names its staging skills_v{N}_staging, so after `cd <peer run>` the relative
+# path has the same first segment as this run's own — indistinguishable by name alone,
+# which is exactly what the hook was matching on. A peer's IN-PROGRESS answers to these
+# same train tasks are worse to read than its accepted ones.
+_pprobe3='{"tool_name":"Bash","cwd":"'"$WORK"'","tool_input":{"command":"cd '"$ROOT"'/outputs/tau3_banking_2525 && cat skills_v1_staging/a/SKILL.md"}}'
+_hook_rc "$_pprobe3" "$ROOT/scripts/evolver_peer_skill_hook.py"
+if ! _denied_ok "BLOCKED"; then
+  echo "REFUSING: the peer-skill hook did NOT block a RELATIVE read of a peer's staging." >&2
+  echo "  Probe: cd <peer run> && cat skills_v1_staging/a/SKILL.md" >&2
+  echo "  Expected exit 2; got $_HOOK_RC (only 2 blocks a tool call; see the note above)." >&2
+  echo "  The absolute spelling of the same read IS blocked, so a passing run can look" >&2
+  echo "  contained while this shape walks through. See _relative_base_is_provably_own." >&2
+  if [ "$_HOOK_RC" -ne 0 ]; then printf '%s\n' "$_HOOK_ERR" | sed 's/^/    /' >&2; fi
+  exit 19
+fi
 # #215: the two commands this hook WRONGLY denied on 2026-08-08. Both read the run's own
 # evidence and merely contain the word "skills". Without a must-ALLOW case the matcher can
 # be tightened back into over-blocking and nothing would notice — over-blocking is silent,
