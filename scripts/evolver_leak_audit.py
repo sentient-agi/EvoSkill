@@ -67,7 +67,7 @@ from pathlib import Path
 # The names are re-exported so this module's existing consumers are untouched.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.leak_patterns import (                  # noqa: E402
-    LEAK_PATH_RE, POOL_RES, TASK_RE, id_forms,
+    LEAK_PATH_RE, POOL_RES, TASK_RE, id_forms, normalised_paths,
 )
 
 held_forms = id_forms          # historical name; the hook and this module both use it

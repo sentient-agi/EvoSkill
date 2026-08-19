@@ -27,6 +27,7 @@ which is the easier attack and the likelier accident.
 """
 from __future__ import annotations
 
+import posixpath
 import re
 
 # BOTH BENCHMARKS' ID SHAPES. tau3 ids are `task_004`; SSB v2 ids are `Debugging/01_02` on
@@ -92,3 +93,38 @@ POOL_RES = (
     r"[A-Za-z_]+/\d+_\d+/\d+_answer\.xlsx",
     r"\d+_answer\.xlsx",
 )
+
+
+def normalised_paths(text: str) -> str:
+    """`text`, plus a lexically-normalised copy of every path-like token in it.
+
+    WHY. Every matcher in this module compares SPELLINGS, and a shell reaches the same
+    bytes by several. Measured against the patterns above before this existed:
+
+        cat .../domains/telecom/tasks.json                        -> BLOCKED
+        cat .../domains/banking_knowledge/../telecom/tasks.json   -> allowed
+        cat .../domains/./telecom/./tasks.json                    -> allowed
+        cat .../domains//telecom//tasks.json                      -> allowed
+
+    -- the full 97-task pool, three keystrokes away from a guard that says it denies it.
+    `..` also defeats a prefix test, which is how the peer-skill hook let
+    /runs/OWN/skills_v1_staging/../../OTHER/skills_v1/a/SKILL.md through as "its own".
+
+    APPENDED, NEVER SUBSTITUTED. normpath() would mangle a URL's scheme
+    (https://h/a/../b -> https:/h/b) and the hook matches URLs too, so the original text
+    stays first and the normalised forms are added after it. Purely lexical: no
+    filesystem access, because the hook runs inside a sandbox that cannot stat these
+    paths, and resolving symlinks is not what a spelling check is for.
+    """
+    out = [text]
+    for tok in re.split(r"[\s;|&()<>\"']+", text):
+        if "/" not in tok:
+            continue
+        tok = tok.strip(",:")
+        try:
+            n = posixpath.normpath(tok)
+        except (ValueError, TypeError):
+            continue
+        if n and n != tok:
+            out.append(n)
+    return "\n".join(out)

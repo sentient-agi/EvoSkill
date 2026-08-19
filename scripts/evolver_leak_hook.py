@@ -36,7 +36,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from evolver_leak_audit import LEAK_PATH_RE, TASK_RE, held_forms  # noqa: E402
+from evolver_leak_audit import (  # noqa: E402
+    LEAK_PATH_RE, TASK_RE, held_forms, normalised_paths,
+)
 
 # Fields that can carry a path or a pattern, across every tool that reads.
 _FIELDS = ("command", "file_path", "pattern", "path", "glob", "notebook_path", "url")
@@ -110,6 +112,10 @@ def main() -> int:
     text = " ".join(str(ti.get(k, "")) for k in _FIELDS if ti.get(k))
     if not text.strip():
         return 0
+    # EVERY CHECK BELOW COMPARES SPELLINGS, so the text carries its normalised forms too:
+    # `<dom>/../<other>/tasks.json`, `./` noise and `//` all reach the same bytes and
+    # matched nothing. See normalised_paths() for the measurements.
+    text = normalised_paths(text)
 
     # RUNTIME-SUPPLIED DENY PATHS, CHECKED FIRST. A benchmark whose ground truth is a data
     # file keeps that file wherever the operator put it (SSB v2: $SSBV2_ROOT), so the launcher

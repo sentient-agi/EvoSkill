@@ -193,3 +193,43 @@ def test_an_unknown_benchmark_is_not_forced_through_the_tau3_path():
     assert 'if getattr(ctx.spec, "benchmark", "") == "tau3" else {}' in src, (
         "the deny-path branch is not scoped to a named benchmark; an unknown one will be "
         "routed through the tau3 dataset lookup")
+
+
+# ── The same read, spelled to defeat a spelling check ─────────────────────────────────────
+DOMS = "third_party/tau3-bench/data/tau2/domains"
+
+
+@pytest.mark.parametrize("path", [
+    f"{DOMS}/telecom/tasks.json",                                # the plain form
+    f"{DOMS}/banking_knowledge/../telecom/tasks.json",           # .. through a sibling
+    f"{DOMS}/./telecom/./tasks.json",                            # ./ noise
+    f"{DOMS}//telecom//tasks.json",                              # doubled slashes
+    f"{DOMS}/banking_knowledge/../telecom/tasks_full.json",
+])
+def test_traversal_spellings_do_not_defeat_the_matcher(path):
+    """Every matcher here compares SPELLINGS, and a shell reaches the same bytes by
+    several. Measured before normalised_paths(): the plain form BLOCKED, and `..`, `./`
+    and `//` all ALLOWED — the full 97-task pool three keystrokes from a guard that says
+    it denies it."""
+    rc, _ = _hook(f"cat {path}")
+    assert rc == 2, path
+
+
+@pytest.mark.parametrize("command,blocked", [
+    # `..` defeats a PREFIX test as thoroughly as it defeats a pattern: this one starts
+    # with the run's own allowed staging root and reads a PEER's skills.
+    ("cat /runs/armB/skills_v1_staging/../../armA/skills_v1/a/SKILL.md", True),
+    ("cat /runs/armB/../armA/skills_v1_staging/a/SKILL.md", True),
+    ("cat /runs/armB/skills_v1_staging/a/SKILL.md", False),
+    ("cat /runs/armB/./skills_v1_staging/a/SKILL.md", False),
+])
+def test_peer_hook_normalises_before_deciding(command, blocked):
+    import subprocess as sp
+    r = sp.run([sys.executable,
+                str(REPO / "scripts" / "evolver_peer_skill_hook.py")],
+               input=json.dumps({"tool_name": "Bash", "cwd": "/runs/armB",
+                                 "tool_input": {"command": command}}),
+               capture_output=True, text=True,
+               env={"PATH": "/usr/bin:/bin",
+                    "EVOSKILL_EVOLVER_STAGING": "/runs/armB/skills_v1_staging"})
+    assert (r.returncode == 2) is blocked, f"rc={r.returncode}: {command}"

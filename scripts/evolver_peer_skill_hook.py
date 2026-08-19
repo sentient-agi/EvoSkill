@@ -139,6 +139,26 @@ def _allowed_roots() -> list[str]:
 
 # `cd` targets, in every spelling a shell accepts before the peer read: at the start of the
 # command or after any of ; && || |, with the target optionally quoted.
+# ONE DEFINITION of path normalisation, shared with the leak hook. `..` defeats a PREFIX
+# test as thoroughly as it defeats a pattern: /runs/OWN/skills_v1_staging/../../OTHER/
+# skills_v1/a/SKILL.md starts with this run's allowed root, so `_owned` called it its own
+# and returned 0 while it read a PEER's skills. Measured before this line existed.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+try:
+    from src.leak_patterns import normalised_paths      # noqa: E402
+except Exception:                                       # pragma: no cover
+    import posixpath
+
+    def normalised_paths(text: str) -> str:
+        """Fallback only. The hook must never fail OPEN because an import moved; a
+        degraded normaliser still beats none, and the launcher's probes still run."""
+        out = [text]
+        for t in re.split(r"[\s;|&()<>\"']+", text):
+            if "/" in t and posixpath.normpath(t) != t:
+                out.append(posixpath.normpath(t))
+        return "\n".join(out)
+
+
 _CD_RE = re.compile(r"""(?:^|[;&|]|\n)\s*cd\s+(?P<t>"[^"]*"|'[^']*'|[^\s;&|<>]*)""")
 
 
@@ -224,6 +244,13 @@ def main() -> int:
         if not isinstance(val, str) or not val:
             continue
         for tok in re.split(r"[\s;|&()<>\"']+", val):
+            # NORMALISED FIRST. Both the token test and the ownership test below compare
+            # spellings, and `..`/`./`/`//` are three spellings of the same read.
+            if tok and "/" in tok:
+                import posixpath as _pp
+                _n = _pp.normpath(tok)
+                if _n and _n != tok and not tok.startswith(("http://", "https://")):
+                    tok = _n
             if not tok or not _is_peer_skill_token(tok):
                 continue
             # ITS OWN STAGING ONLY -- AND `a in tok` DID NOT MEAN THAT.
