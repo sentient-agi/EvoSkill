@@ -1157,7 +1157,17 @@ def _require_ssbv2_root() -> str:
         raise RuntimeError(
             f"SSBV2_ROOT={root!r} is not a directory. The leak hook would be handed a "
             f"deny path that matches nothing.")
-    return root
+    # BOTH SPELLINGS, colon-joined. The hook's deny test is a literal substring match, and
+    # the paths that actually appear in commands are under the CORPUS base --
+    # <root>/data/spreadsheetbench-v2 or <root>/spreadsheetbench-v2, whichever this checkout
+    # uses (dataset.resolve_base decides). Passing only the bare root matches neither when
+    # the operator's root is spelled differently from the paths in flight.
+    try:
+        from src.agent_profiles.ssbv2_agent.dataset import resolve_base
+        base = str(resolve_base(root))
+    except Exception:
+        base = ""
+    return ":".join(dict.fromkeys([x for x in (str(Path(root).resolve()), base, root) if x]))
 
 
 def _v_no_infra_exclusions(ctx: Ctx, key: str):

@@ -145,9 +145,23 @@ def _owned(tok: str, allowed: list) -> bool:
     """
     abs_roots = [a for a in allowed if a.startswith("/")]
     names = [a for a in allowed if not a.startswith("/")]
-    if "/" not in tok:
-        return tok in names
-    return any(tok == a or tok.startswith(a.rstrip("/") + "/") for a in abs_roots)
+    if tok.startswith("/"):
+        # ABSOLUTE: must equal, or sit under, an allowed absolute root. This is the clause
+        # that keeps a PEER arm's same-epoch staging out -- every arm names its staging dir
+        # skills_v{N}_staging, so matching by NAME alone would let /runs/OTHER/... through.
+        return any(tok == a or tok.startswith(a.rstrip("/") + "/") for a in abs_roots)
+    # RELATIVE: the FIRST path segment must be this run's staging basename. The hook cannot
+    # see the process's cwd, and the dir is normally referenced after a `cd` into its
+    # parent, so `skills_v1_staging/a/SKILL.md` and `./skills_v1_staging` are its own.
+    #
+    # The first version of this fix required a path component to match an ABSOLUTE root,
+    # which denied exactly those two forms -- an over-block, and over-blocking here is
+    # SILENT (a denied evolver just works around it), so no probe would have caught it.
+    # Measured: `cd <own run> && cat skills_v1_staging/a/SKILL.md` -> rc=2 where it had
+    # been 0. A peer is still denied because its first segment is `..` or a run-dir name,
+    # never the staging basename.
+    parts = [x for x in tok.split("/") if x not in ("", ".")]
+    return bool(parts) and parts[0] in names
 
 
 def main() -> int:

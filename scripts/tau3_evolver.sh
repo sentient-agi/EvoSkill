@@ -1010,6 +1010,18 @@ _denied_ok () {  # $1 = expected marker; uses _HOOK_RC/_HOOK_ERR from _hook_rc
 # probe target and the declared deny path handed to the hook.
 if [ -n "${EVOSKILL_LEAK_DENY_PATHS:-}" ]; then
   _probe_target="${EVOSKILL_LEAK_DENY_PATHS%%:*}/held_out_answer.xlsx"
+elif [ "${EVOSKILL_ORACLE_ABSENT:-0}" = "1" ]; then
+  # A NON-TAU3 RUN WITH AN EMPTY DENY LIST HAS NOTHING TO PROBE, AND MUST SAY SO.
+  # This used to fall back to a tau3 pool path, so an SSB v2 run with an unset SSBV2_ROOT
+  # probed a file belonging to a different benchmark, got its exit 2 from LEAK_PATH_RE, and
+  # printed "leak hook: ARMED" having proved nothing about the SSB v2 reference workbooks --
+  # which are the held-out material on that benchmark. loop.py now refuses an unset
+  # SSBV2_ROOT, and this closes the same hole from the launcher side for a hand-run.
+  echo "REFUSING: this run declares a non-tau3 benchmark (EVOSKILL_ORACLE_ABSENT=1) but" >&2
+  echo "  EVOSKILL_LEAK_DENY_PATHS is empty, so there is no held-out data root to probe." >&2
+  echo "  Falling back to a tau3 path would prove nothing about this benchmark's held-out" >&2
+  echo "  material. Export SSBV2_ROOT (the loop does this for you) or set the deny paths." >&2
+  exit 13
 else
   _probe_target="$ROOT/third_party/tau3-bench/data/tau2/domains/$EVO_DOMAIN/tasks.json"
 fi
