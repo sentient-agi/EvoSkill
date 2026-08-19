@@ -472,8 +472,34 @@ def check_no_heldout_reachable(evolver_log: Path, split_file: Path) -> Check:
     held = set(sp.get("val") or []) | set(sp.get("test") or [])
     if not held:
         return _skip(n, "split declares no held-out ids", "#186")
-    txt = evolver_log.read_text(errors="ignore")
-    # the FULL-POOL path is the high-signal one: a single read of it exposes every spec
+    # A BLOCKED ATTEMPT IS THE GUARD WORKING, NOT A LEAK.
+    # The hook writes its deny reason to stderr and Claude Code feeds that back into the
+    # transcript -- deliberately, so the model learns why. The banner QUOTES the offending
+    # path, so once POOL_RES gained a directory alternative this backstop began matching
+    # its own guard's refusal: an epoch in which containment SUCCEEDED failed the audit and
+    # loop.py discarded it. The denied tool call's INPUT is echoed too, so dropping banner
+    # lines alone is not enough -- the attempt and its refusal have to be paired.
+    #
+    # Neither is evidence that held-out material REACHED the evolver, which is the only
+    # thing this check establishes. A tool call whose result carries a deny banner is
+    # dropped along with the banner; the count is reported, so a run full of blocked
+    # attempts is visible rather than silently clean.
+    _DENY_MARKS = ("BLOCKED — this reads", "BLOCKED - this reads", "LEAK GUARD BLIND",
+                   "names task id(s) not in", "matched held-out spec path",
+                   "reads ANOTHER run's skill set", "reads a declared held-out data root")
+    _lines = evolver_log.read_text(errors="ignore").splitlines()
+    _drop = set()
+    for i, ln in enumerate(_lines):
+        if any(m in ln for m in _DENY_MARKS):
+            _drop.add(i)
+            # the refusal follows the attempt; drop the nearest preceding tool_use line
+            for j in range(i - 1, max(-1, i - 4), -1):
+                if '"tool_use"' in _lines[j] or '"input"' in _lines[j]:
+                    _drop.add(j)
+                    break
+    _blocked = len([i for i in _drop if any(m in _lines[i] for m in _DENY_MARKS)])
+    txt = "\n".join(ln for i, ln in enumerate(_lines) if i not in _drop)
+
     # THE POOL PATTERNS ARE PER-BENCHMARK, AND AN UNRECOGNISED BENCHMARK MUST NOT PASS.
     # Until 2026-08-18 this held only the tau3 pattern, so on an SSB v2 run it matched
     # nothing, the id matcher below also matched nothing (SSB v2 ids never take the shapes
@@ -553,8 +579,10 @@ def check_no_heldout_reachable(evolver_log: Path, split_file: Path) -> Check:
         return _skip(n, f"{len(unknown)} held-out id(s) take a shape no detector here "
                         f"understands (e.g. {unknown[:3]}) — this check cannot see this "
                         f"benchmark and must not report it clean", "#186")
+    _blk = (f"; {_blocked} attempt(s) were BLOCKED by the hook and are not counted as "
+            f"reaching the evolver" if _blocked else "")
     return _ok(n, f"0 of {len(held)} held-out ids present ({len(ambiguous)} bare-integer id(s) "
-                  f"matched structurally, not as bare numbers); no full-pool reads", "#186")
+                  f"matched structurally, not as bare numbers); no full-pool reads{_blk}", "#186")
 
 
 def check_prompt_numbers_rederive(prompt: Path, result_json: Path,

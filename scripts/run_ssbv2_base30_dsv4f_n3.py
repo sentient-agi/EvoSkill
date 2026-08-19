@@ -766,6 +766,22 @@ async def main() -> int:
             + (f"; OVERRIDDEN to {_EFF_WALL} via EVOSKILL_SOLVER_TIMEOUT_SECONDS"
                if _EFF_WALL != _WALL else "")),
         "concurrency": CONCURRENCY, "tag": TAG,
+        # ── THE EXCLUSION LEDGER, RECORDED. ─────────────────────────────────────────
+        # These five fields are what invariants.check_no_infra_exclusions (and the
+        # orchestrator step that calls it) read to decide whether this leg's denominator
+        # moved. Until now ONLY the tau3 runner wrote them, so on SSB v2 the check had
+        # no evidence either way -- first it answered an affirmative "0 excluded" over
+        # nothing, and when that was fixed to SKIP, the orchestrator's SKIP-is-a-failure
+        # rule turned it into a hard halt that no SSB v2 operator could satisfy. Neither
+        # is acceptable, and neither was necessary: the runner already HAS these numbers.
+        # Recording them makes the property actually measured on both benchmarks, which
+        # is what the check was for.
+        "episodes_dispatched": len(idx),
+        "episodes_scored": sum(1 for x in flat if x is not None),
+        "episodes_excluded_infra": len(failures),
+        "episodes_timeout_scored_zero": len(wall_killed),
+        "tasks_fully_unscored": [str(i) for i, v in scores.items()
+                                 if all(x is None for x in v)],
         # The dirs this leg ACTUALLY used, so downstream steps read them instead of
         # re-deriving names (#194; the tau3 runner records cache_dirs for the same reason).
         "cache_dir": CACHE_DIR.name, "tasks_cache": str(TASKS_CACHE),

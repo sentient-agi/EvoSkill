@@ -135,6 +135,18 @@ nohup env \
   EVOSKILL_SOLVER_MODEL="$MODEL" \
   EVOSKILL_N_SAMPLES="$NS" \
   EVOSKILL_TURN_BUDGET=45 \
+  # A FAILED RUN MUST NOT INHERIT A PREVIOUS ATTEMPT'S NUMBERS.
+  # The copy was unconditional on the runner's exit code, and the launcher then exited 0 via
+  # the "finished within 5s" branch below. So a runner that died on its first line left the
+  # PREVIOUS attempt's result in place, it was copied in as THIS leg's result, and the
+  # epoch's gate was computed on numbers this run never measured. The orchestrator cannot
+  # catch it: _await_leg polls for the file's existence and never inspects an exit code.
+  # Stamp the start, drop any stale runner output for this TAG, and require rc==0 AND a
+  # file newer than the stamp before copying.
+  STAMP="$(dirname "$FINAL")/.${TAG}.start"
+  : > "$STAMP"
+  rm -f "$RUNNER_OUT"
+
   EVOSKILL_SAMPLE_SEED=730 \
   EVOSKILL_DOCKER_IMAGE=ssb-solver-lo:latest \
   EVOSKILL_CONCURRENCY="$CONC" \
@@ -144,7 +156,7 @@ nohup env \
   EVOSKILL_SOLVER_TIMEOUT_SECONDS="${EVOSKILL_SOLVER_TIMEOUT_SECONDS:-10800}" \
   PHOENIX_PROJECT_NAME="${PHOENIX_PROJECT_NAME:-ssbv2-${TAG}}" \
   bash -c "'$PYBIN' scripts/run_ssbv2_base30_dsv4f_n3.py; rc=\$?; \
-           if [ -f '$RUNNER_OUT' ]; then cp '$RUNNER_OUT' '$FINAL'; fi; exit \$rc" \
+           if [ \$rc -eq 0 ] && [ -f '$RUNNER_OUT' ] && [ '$RUNNER_OUT' -nt '$STAMP' ]; then cp '$RUNNER_OUT' '$FINAL'; fi; exit \$rc" \
   > "$LOG" 2>&1 &
 PID=$!
 command -v caffeinate >/dev/null 2>&1 && caffeinate -i -w "$PID" >/dev/null 2>&1 &
@@ -158,8 +170,10 @@ echo "  result: $FINAL  (copied from $RUNNER_OUT on exit)"
 sleep 5
 if kill -0 "$PID" 2>/dev/null; then
   echo "  verified: pid $PID alive at +5s"
-elif [ -f "$FINAL" ]; then
-  echo "  note: leg finished within 5s — fully cache-replayed, result written"
+  elif [ -f "$FINAL" ] && [ "$FINAL" -nt "$STAMP" ]; then
+    # ...and the result must postdate THIS launch; without the freshness test
+    # this branch reported success for a leftover file from an earlier attempt.
+    echo "  note: leg finished within 5s — fully cache-replayed, fresh result written"
 else
   echo "DEAD: pid $PID exited within 5s and wrote no result. Last log lines:" >&2
   tail -20 "$LOG" >&2
