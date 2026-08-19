@@ -24,8 +24,18 @@ SCORING_FILES = [
     "src/agent_profiles/ssbv2_agent/scorer.py",
     "src/agent_profiles/ssbv2_agent/ssb_v2_agent.py",
     "src/evaluation/evaluate.py",
+    # THE FILE THAT ACTUALLY INVOKES THE SCORER. ssb_v2_agent hands its _score_fn to the
+    # executor, so the executor's own broad handler sat one frame ABOVE the re-raise and
+    # discarded it -- and this list not naming executor.py is why the guard written to
+    # prevent exactly that could not fire on it.
+    "src/harness/direct/executor.py",
 ]
-SCORING_CALLS = ("score_and_diff(", "score_ssbv2(", "scorer(")
+SCORING_CALLS = ("score_and_diff(", "score_ssbv2(", "scorer(",
+                 # ...spelled as the injected callback, which is how the executor calls it
+                 "_score_fn(", "score_fn(",
+                 # ...and the function that actually raises UngradableEpisode, which the
+                 # list omitted, so a broad handler wrapped directly around it was invisible
+                 "compare_workbooks_detailed(")
 
 
 def _catches(handler: ast.ExceptHandler, name: str) -> bool:

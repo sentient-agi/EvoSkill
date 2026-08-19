@@ -471,7 +471,15 @@ def compare_workbooks_detailed(
         max_row = max(ws_gt.max_row or 1, ws_proc.max_row or 1)
         try:
             cell_names = _generate_cell_names(cell_range, max_row=max_row)
-        except Exception:
+        except Exception as e:
+            # A RANGE THIS FUNCTION CANNOT READ IS NOT AN EMPTY RESULT. `continue` dropped
+            # it in silence, and a task whose ranges ALL dropped fell through to
+            # `all_pass` still True with total_cells == 0 and the summary "All cells match"
+            # -- a false PASS. Measured: answer_position 'A1:B2:C3' on workbooks that
+            # differ at A1 returned (True, 0, 0, 'All cells match').
+            all_pass = False
+            if max_mismatches <= 0 or len(mismatches) < max_mismatches:
+                mismatches.append(f"'{sheet_name}'!{cell_range}: UNGRADABLE range ({e})")
             continue
         for cell_name in cell_names:
             total_cells += 1
@@ -494,6 +502,19 @@ def compare_workbooks_detailed(
                         f"got={_transform_value(proc_val)!r}"
                     )
 
+    # ZERO GRADED CELLS IS NOT A PASS, HERE EITHER. `all_pass` starts True and only the
+    # per-cell loop can falsify it, so every path that graded nothing and recorded nothing
+    # reported "All cells match". This copy is handed to the evolver as
+    # ./oracle/spreadsheetbench_scorer.py for what-if checks (task_workspace.py), so a
+    # false PASS here tells the evolver a broken repair works. It raises nothing: the file
+    # is imported standalone from the evolver's workspace, where src.harness is not on the
+    # path, and the authoritative reward comes from the in-container evaluate.py anyway.
+    if total_cells == 0 and not mismatches:
+        all_pass = False
+        mismatches.append(
+            f"graded 0 cells for answer_position={answer_position!r} — nothing was "
+            f"compared, so this is NOT a pass. Check the range spelling against "
+            f"oracle/tasks/<task_id>.json.")
     diff_summary = "; ".join(mismatches) if mismatches else "All cells match"
     return all_pass, total_match, total_cells, diff_summary
 

@@ -841,11 +841,24 @@ def compare_workbooks_detailed(
     if not os.path.exists(proc_file):
         return False, 0, 0, "Output file not found"
 
+    # THE TWO WORKBOOKS FAIL FOR DIFFERENT REASONS AND MUST NOT SHARE A HANDLER.
+    # A proc file that will not open is the solver's doing -- it wrote garbage, and 0.0 is
+    # the right verdict. A GOLDEN that will not open is a dataset or grading-artifact fault
+    # with no verdict at all, and returning False for it reports an infra failure as a
+    # measured wrong answer, in the same function that raises UngradableEpisode 60 lines
+    # below for the structurally identical "graded 0 cells" case. The corpus is known to
+    # contain workbooks openpyxl chokes on (#136), so this is not hypothetical.
     try:
         wb_gt = openpyxl.load_workbook(filename=gt_file, data_only=True)
+    except Exception as e:
+        raise UngradableEpisode(
+            f"golden workbook unreadable: {gt_file}: {e}. No verdict can be computed "
+            f"for this episode; this is a dataset/grading fault, not a solver error."
+        ) from e
+    try:
         wb_proc = openpyxl.load_workbook(filename=proc_file, data_only=True)
     except Exception as e:
-        return False, 0, 0, f"Cannot open workbook: {e}"
+        return False, 0, 0, f"Cannot open output workbook: {e}"
 
     total_match = 0
     total_cells = 0
@@ -861,6 +874,18 @@ def compare_workbooks_detailed(
             sheet_name = wb_gt.sheetnames[0]
             cell_range = sheet_cell_range
         cell_range = cell_range.strip("'")
+
+        # THE GOLDEN IS ASKED FIRST, and the order is the point. `ws_gt = wb_gt[sheet_name]`
+        # below used to be unguarded, so a golden lacking the sheet its own answer_position
+        # names raised a bare KeyError -- which ssb_v2_agent's broad handler turned into
+        # `return 0.0`, the conversion the UngradableEpisode contract exists to stop.
+        # Checking the OUTPUT first instead would misfile the same fault: a sheet absent
+        # from both workbooks would be reported as "missing from output", blaming the
+        # solver for a task whose grading target does not exist.
+        if sheet_name not in wb_gt.sheetnames:
+            raise UngradableEpisode(
+                f"golden workbook {gt_file} has no sheet {sheet_name!r}, which its own "
+                f"answer_position={answer_position!r} grades. Dataset fault, not a verdict.")
 
         if sheet_name not in wb_proc.sheetnames:
             all_pass = False
@@ -911,11 +936,24 @@ def compare_workbooks_detailed(
     # match"). Two measured routes: every range unparseable (now raised above), and
     # every graded cell excluded by the volatile-function skip set. A task that could
     # not be graded has no verdict; it is not a solved task.
-    if total_cells == 0:
+    # ...BUT ONLY WHEN THE OUTPUT DOES NOT ALREADY EXPLAIN THE ZERO. `and not mismatches`
+    # is the whole correction to my first version of this guard, which raised on ANY zero:
+    # a solver that writes a brand-new workbook instead of editing the input produces no
+    # graded cells AND a recorded "Sheet 'X' missing from output" -- a correct, ordinary
+    # FAIL that the guard reclassified as an infra fault, asserting "every range was empty
+    # or entirely excluded" when the range was fine and the OUTPUT was wrong. Measured on
+    # the shipped oracle (Template_14_01, "'DCF_Analysis'!B2:M65") against a fresh
+    # workbook: pre-guard (False, 0, 0, "Sheet 'DCF_Analysis' missing from output"),
+    # post-guard UngradableEpisode. And because an UngradableEpisode lands in the failure
+    # ledger, and a leg with any failed rollout refuses to write its result JSON, that one
+    # wrong sheet name voided an entire leg -- then the advised identical relaunch retried
+    # it, since a failed rollout is never cached.
+    if total_cells == 0 and not mismatches:
         raise UngradableEpisode(
             f"graded 0 cells for answer_position={answer_position!r} — every range was "
-            f"empty or entirely excluded, so there is no verdict to report. This is an "
-            f"infra/dataset fault, not a solved task.")
+            f"empty or entirely excluded, and nothing about the output explains it, so "
+            f"there is no verdict to report. This is an infra/dataset fault, not a "
+            f"solved task.")
     diff_summary = "; ".join(mismatches) if mismatches else "All cells match"
     return all_pass, total_match, total_cells, diff_summary
 

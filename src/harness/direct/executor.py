@@ -31,6 +31,7 @@ from opentelemetry.trace import set_span_in_context
 from pydantic import BaseModel, ValidationError
 
 from ...skill_integrity import assert_text_clean
+from ..errors import UngradableEpisode
 from ..provider_auth import ensure_provider_api_key
 from .._tracing import (
     LiveTranscriptEmitter,
@@ -4221,6 +4222,19 @@ async def execute_query(options: dict[str, Any], query: str, *, agent_name: str 
                           asyncio.to_thread(_score_fn, query, _answer, _gt),
                           "score_running")
                   _inline_score = float(_inline_score)
+              except UngradableEpisode:
+                  # THE FIFTH HANDLER. src/harness/errors.py named four broad
+                  # `except Exception` handlers that turned an ungradable episode back
+                  # into the 0.0 it was written to prevent; this is the one in the file
+                  # that actually INVOKES the scorer, so ssb_v2_agent's own
+                  # `except UngradableEpisode: raise` was being discarded one frame up.
+                  # Swallowing it here does not merely lose the ledger entry: it leaves
+                  # trace.inline_score None, so ssb_v2_agent's fallback pass re-runs
+                  # score_and_diff on a workbook the first pass already mutated in place
+                  # (xlfn prefixes, LibreOffice recalc, UNO data tables), and a transient
+                  # container fault is reported as a verdict computed on a
+                  # doubly-recalculated artifact.
+                  raise
               except Exception:
                   pass
 
