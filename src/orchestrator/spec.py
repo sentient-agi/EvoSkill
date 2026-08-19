@@ -116,6 +116,11 @@ class HeadroomGate:
     min_exploration_rate: float = 0.0       # #206: floored instrumentation looks like a hard domain
 
 
+# THE SSB v2 SOLVER ALLOW-LIST, mirroring scripts/ssbv2_leg.sh's `case "$MODEL" in`.
+# Two dated snapshots, extended only for one an operator named explicitly.
+SSBV2_SOLVER_SNAPSHOTS = ("-0731", "-0813")
+
+
 @dataclass
 class ExperimentSpec:
     # identity
@@ -260,13 +265,20 @@ class ExperimentSpec:
         # the oracle, and only then find that no leg will ever run. The constraint belongs
         # where the choice is made.
         if (self.benchmark or "").lower() == "ssbv2" and self.solver_model:
-            if not re.search(r"-(\d{4})$", self.solver_model):
+            # THE SAME LIST THE LEG REFUSES ON, not merely "looks dated". My first version of
+            # this check accepted any -NNNN suffix, so a spec naming `…-0901` froze cleanly and
+            # scripts/ssbv2_leg.sh then refused it with exit 4 — reproducing at the freeze the
+            # very "find out after paying for the AO run and the oracle" this check exists to
+            # prevent. tests/test_ssbv2_solver_snapshot.py reads the shell case statement and
+            # asserts the two stay identical, because extending one and forgetting the other
+            # is how they drifted in the first place.
+            if not self.solver_model.endswith(SSBV2_SOLVER_SNAPSHOTS):
                 errs.append(
-                    f"benchmark=ssbv2 requires a DATED solver snapshot; got "
-                    f"{self.solver_model!r}. A rolling tag re-buys every episode under a "
-                    f"different model than the one named (scripts/ssbv2_leg.sh refuses it "
-                    f"with exit 4). Name the dated snapshot, e.g. "
-                    f"deepseek/deepseek-v4-flash-0731.")
+                    f"benchmark=ssbv2 accepts only an allow-listed dated solver snapshot "
+                    f"{list(SSBV2_SOLVER_SNAPSHOTS)}; got {self.solver_model!r}. A rolling tag "
+                    f"re-buys every episode under a different model than the one named, and "
+                    f"scripts/ssbv2_leg.sh refuses anything else with exit 4 — so freezing it "
+                    f"would buy an AO run and an oracle for legs that can never run.")
 
         # data
         if self.n_train <= 0 or self.n_val <= 0:
