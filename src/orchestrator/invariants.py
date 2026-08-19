@@ -482,11 +482,11 @@ def check_no_heldout_reachable(evolver_log: Path, split_file: Path) -> Check:
     #   cat .../Debugging/05_05/1_answer.xlsx | ls -R .../Template/16_02 | cp .../04_01/*.xlsx
     # passed. A green receipt over a benchmark this function cannot see is worse than no
     # check: loop.py prints it as a contamination audit that passed.
-    POOL_RES = (
-        r"data/tau2/domains/[a-z_]+/tasks\.json",           # tau3: the 97-task pool
-        r"data/spreadsheetbench-v2/[A-Za-z_]+/\d+_\d+",      # SSB v2: any task dir under the corpus
-        r"[A-Za-z_]+/\d+_\d+/\d+_answer\.xlsx",             # SSB v2: a reference workbook
-    )
+    # ONE DEFINITION, imported -- see src/leak_patterns.py. This function used to carry
+    # its own INVENTED patterns, which is how it came to miss SSB v2 entirely while the
+    # audit module's own patterns missed a whole directory. Three copies of a rule is three
+    # chances for the fix to land on the wrong one, and that has happened twice.
+    from src.leak_patterns import POOL_RES
     pool = [m for rx in POOL_RES for m in re.findall(rx, txt)]
     if pool:
         return _fail(n, f"{len(pool)} reference(s) to held-out task material — the full pool "

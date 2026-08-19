@@ -58,35 +58,18 @@ from pathlib import Path
 # ambiguous (category names contain underscores: "Financial_Model_01_02" could split two ways) and
 # a wrong normalisation would file a held-out task under train — the exact failure being guarded.
 # Membership is checked against the split expressed in BOTH forms instead; see _held_forms.
-TASK_RE = re.compile(r"task_\d+|[A-Za-z][A-Za-z_]*[/_]\d+_\d+")
-
-
-def held_forms(ids) -> set:
-    """Every spelling a held-out id can take in a command line."""
-    out = set()
-    for i in ids:
-        out.add(i)
-        out.add(i.replace("/", "_"))
-    return out
-
-# Paths that carry HELD-OUT spec content. Deliberately broad: a false positive
-# costs one manual look, a false negative costs an epoch.
-LEAK_PATH_RE = re.compile(
-    r"""(?x)
-    domains/[a-z_]+/tasks\.json          # the full 97-task pool
-  | domains/[a-z_]+/tasks_voice\.json
-  | domains/[a-z_]+/tasks/task_\d+\.json  # per-task spec
-  | test_domains/                       # per-task pytest walkthroughs
-  | tests?/.*test_task_\d+
-  # ── SSB v2. Its ground truth IS the reference workbook, so the dataset root holds the answers
-  # for every task including all 120 held out. The root is configurable (SSBV2_ROOT), so the
-  # directory itself is supplied at runtime via EVOSKILL_LEAK_DENY_PATHS rather than hardcoded
-  # here; these cover the shapes that appear regardless of where the root lives.
-  | SpreadsheetBench-v2/                 # the dataset root, answers for all splits
-  | _snapshots(_[a-z]+)?/                # produced-workbook trees, all splits together
-  | /(answer|ground_?truth|reference)[_-]?\w*\.xlsx
-    """
+# ONE DEFINITION, imported. These lived here in triplicate -- this module, the live hook
+# (via this module) and invariants.check_no_heldout_reachable, which had INVENTED its own
+# and missed SSB v2 entirely. A copy is how two guards become one real one. The patterns
+# now live in src/harness/leak_patterns.py; the names are re-exported so this module's
+# existing consumers are untouched.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.leak_patterns import (                  # noqa: E402
+    LEAK_PATH_RE, POOL_RES, TASK_RE, id_forms,
 )
+
+held_forms = id_forms          # historical name; the hook and this module both use it
+
 
 # Directory-listing commands: an id in their output is a filename, not content.
 LISTING_RE = re.compile(r"^\s*(find|ls|tree|basename|dirname)\b|\|\s*(ls|find)\b")

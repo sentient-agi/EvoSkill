@@ -1,0 +1,80 @@
+"""ONE definition of "this text names held-out benchmark material".
+
+IT LIVES AT src/ TOP LEVEL, NOT UNDER src/harness/, AND THAT IS LOAD-BEARING.
+Claude Code invokes the PreToolUse hook as `python3 <path>` -- the SYSTEM interpreter,
+not the project venv. `src/harness/__init__.py` imports pydantic, so putting this module
+there made the hook die on import with ModuleNotFoundError and exit 1, which does not
+block: exactly the defect this whole file exists to close, reintroduced by the fix for
+it. Caught by running the hook. This module and everything it imports must stay
+stdlib-only, and `src/__init__.py` must stay free of eager imports.
+
+Three enforcement points consume these: the live PreToolUse hook
+(scripts/evolver_leak_hook.py), the post-hoc session audit
+(scripts/evolver_leak_audit.py), and the orchestrator's backstop
+(src.orchestrator.invariants.check_no_heldout_reachable). They had THREE separate
+copies of the rule, and a copy is how two guards become one real one: on 2026-08-18
+the backstop was found carrying invented regexes that missed SSB v2 entirely while
+the audit's own patterns missed a whole directory.
+
+THE DIRECTORY HOLE, measured. Every pattern named a spec FILE, so
+    cp -r .../domains/banking_knowledge/tasks /tmp/specs
+copied all 97 specs -- train, val and test -- and returned rc=0 from the hook, while
+the same read naming one id returned rc=2. The backstop then certified the session
+"no full-pool reads". The same shape on SSB v2:
+    cp /.../spreadsheetbench-v2/*/*/*_answer.xlsx /tmp/
+A guard that only recognises the singular case is not a guard against bulk copying,
+which is the easier attack and the likelier accident.
+"""
+from __future__ import annotations
+
+import re
+
+# BOTH BENCHMARKS' ID SHAPES. tau3 ids are `task_004`; SSB v2 ids are `Debugging/01_02` on
+# the split and `Debugging_01_02` as a filename. Both spellings are matched rather than
+# normalising one to the other, because stem -> id is ambiguous (category names contain
+# underscores) and a wrong normalisation would file a held-out task under train.
+TASK_RE = re.compile(r"task_\d+|[A-Za-z][A-Za-z_]*[/_]\d+_\d+")
+
+
+def id_forms(ids) -> set:
+    """Every spelling an id can take in a command line."""
+    out = set()
+    for i in ids:
+        out.add(i)
+        out.add(i.replace("/", "_"))
+    return out
+
+
+# Paths that carry held-out material. Deliberately broad: a false positive costs one
+# manual look, a false negative costs an epoch.
+LEAK_PATH_RE = re.compile(
+    r"""(?x)
+    domains/[a-z_]+/tasks\.json            # the full 97-task pool
+  | domains/[a-z_]+/tasks_voice\.json
+  | domains/[a-z_]+/tasks/task_\d+\.json   # one per-task spec
+  | domains/[a-z_]+/tasks(?![\w.])         # ...and the DIRECTORY holding all of them
+  | test_domains?/                         # per-task pytest walkthroughs
+  | tests?/.*test_task_\d+
+    # ── SSB v2. Its ground truth IS the reference workbook, so the dataset root holds the
+    # answers for every task including all 120 held out. The root is configurable
+    # (SSBV2_ROOT) and supplied at runtime via EVOSKILL_LEAK_DENY_PATHS; these cover the
+    # shapes that appear wherever it lives. resolve_base() supports BOTH <root>/data/
+    # spreadsheetbench-v2 and <root>/spreadsheetbench-v2, so no pattern may require `data/`.
+  | SpreadsheetBench-v2/                   # the dataset root, answers for all splits
+  | spreadsheetbench-v2/                   # the corpus dir under either layout
+  | _snapshots(_[a-z]+)?/                  # produced-workbook trees, all splits together
+  | /(answer|ground_?truth|reference)[_-]?\w*\.xlsx
+  | \d+_answer\.xlsx                       # the reference workbook, any path or glob
+    """
+)
+
+# FULL-POOL reads, for the post-hoc backstop: a single one of these exposes every spec or
+# every reference answer, so it is high-signal and reported separately from id matches.
+POOL_RES = (
+    r"data/tau2/domains/[a-z_]+/tasks\.json",
+    r"domains/[a-z_]+/tasks(?![\w.])",
+    r"spreadsheetbench-v2/[A-Za-z_]+/\d+_\d+",
+    r"spreadsheetbench-v2/[^\s'\"]*\*",          # a glob across the corpus
+    r"[A-Za-z_]+/\d+_\d+/\d+_answer\.xlsx",
+    r"\d+_answer\.xlsx",
+)
