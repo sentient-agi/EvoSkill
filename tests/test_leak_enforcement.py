@@ -160,8 +160,16 @@ def test_launcher_requires_the_deny_root_reason():
 
 
 def test_tau3_runs_declare_a_non_empty_deny_list():
-    """tau3_evolver.sh's --hide loop is guarded on this being non-empty; on tau3 it was not."""
+    """tau3_evolver.sh's --hide loop is guarded on this being non-empty; on tau3 it was not.
+
+    SKIPS WITHOUT THE DATASET, which the release deliberately does not ship (third_party/
+    is a checkout the operator makes). Found by running the suite from `git archive HEAD`
+    rather than from the working tree: this test PASSED here and FAILED on a fresh clone,
+    the one environment that matters. The sibling test below already guarded for it; this
+    one did not, so the guard was in the wrong half of the file."""
     from src.orchestrator.loop import _require_tau3_deny_paths
+    if not (REPO / "third_party/tau3-bench/data/tau2/domains/banking_knowledge").is_dir():
+        pytest.skip("tau3 dataset not checked out (third_party/ is not shipped)")
     paths = _require_tau3_deny_paths("banking_knowledge").split(":")
     assert paths and all(Path(p).exists() for p in paths), paths
     # ...and it refuses rather than handing back an affirmative empty list
