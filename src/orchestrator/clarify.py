@@ -146,11 +146,21 @@ def _message(claim, finding, fields: tuple, round_no: int) -> str:
     ])
 
 
-def _sandbox(root: Path):
-    """Read-only containment for the composer: it may read the dataset and nothing may be written.
+def _sandbox():
+    """WRITE containment for the composer. Reads are NOT restricted — say so plainly.
 
-    Same reasoning as #267/#286 for the prompt author. The composer runs BEFORE any spec is
-    frozen, so an uncontained one could write the very files the front door is about to verify.
+    This took a `root` argument it never used, and both this docstring and brief.py's said the
+    composer "may read the dataset root and the repo", which reads as a confinement. The profile
+    below has no file-read rule at all: under `(allow default)` every read on the host is
+    permitted, and the only thing it constrains is writing. The parameter is gone rather than
+    left as evidence for a claim the code does not make.
+
+    Write containment is the property that actually matters here, and it is real: the composer
+    runs BEFORE any spec is frozen, so an uncontained one could write the very files the front
+    door is about to verify. Read confinement is deliberately not attempted — the operator's
+    dataset can be anywhere, nothing is sealed yet (no split exists to leak), and the evolver
+    profile next door took four attempts to grant a CLI enough to start. Guessing at a read
+    policy here would buy a claim, not a guarantee.
     REFUSES rather than degrading when sandbox-exec is unavailable — a containment layer that
     quietly no-ops is worse than none, and that exact silent `return ([], None)` was a live defect
     in prompt_author until today.
@@ -213,7 +223,7 @@ def compose(claim, finding, *, round_no: int = 1, model: str = "opus[1m]",
     if not fields:
         raise ClarifyUnavailable("the claim exposes no revisable field")
     msg = _message(claim, finding, fields, round_no)
-    sb_argv, sb_prof = _sandbox(Path(getattr(claim, "root", "") or "."))
+    sb_argv, sb_prof = _sandbox()
     argv = [*sb_argv, "claude", "-p", msg, "--model", model,
             "--output-format", "json", "--dangerously-skip-permissions"]
     try:

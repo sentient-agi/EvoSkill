@@ -358,9 +358,19 @@ def build_evolver_sandbox_profile(job: EvolverJob) -> str:
          # derives the interpreter from sys.executable rather than hardcoding a path.
          f'(allow file-read* (literal "{Path.home() / ".claude.json"}"))',
          f'(allow file-read* (subpath "{Path.home() / "Library" / "Keychains"}"))',
-         "; ... but NOT other sessions' transcripts. Granted above by the ~/.claude subpath;",
+         "; ... but NOT other sessions' content. Granted above by the ~/.claude subpath;",
          "; taken back here, because that tree holds every past run's conversation on this host.",
-         f'(deny file-read* (subpath "{_home_claude / "projects"}"))']
+         "; `projects` alone was not enough: its SIBLINGS carry the same material in other",
+         "; shapes -- file-history/ holds snapshots of every file any CC session on this host",
+         "; has edited (on the authors' machine it contains held-out ids from the shipped smoke",
+         "; splits), history.jsonl the prompts, shell-snapshots/ the shell state, and backups/",
+         "; and session-env/ whole copies. A sandboxed evolver read all of them past both hooks.",
+         "; Denied by name so the list is auditable; the CLI needs none of them to authenticate",
+         "; (proved by preflight, which execs it under this very profile)."]
+        + [f'(deny file-read* (subpath "{_home_claude / d}"))'
+           for d in ("projects", "file-history", "backups", "session-env",
+                     "shell-snapshots", "debug", "downloads", "paste-cache", "jobs")]
+        + [f'(deny file-read* (literal "{_home_claude / "history.jsonl"}"))']
         + _cli_install_allows())
 
     # #296. RULE ORDER IS THE WHOLE PROFILE, and it was inverted. SBPL takes the LAST matching
@@ -387,6 +397,15 @@ def build_evolver_sandbox_profile(job: EvolverJob) -> str:
 )
 ; #293 denied BY NAME, so write containment does not depend on where the run dir happens to sit
 {no_writes}
+; PEER ARMS' EVOLVER WORKING DIRECTORIES. Every arm's work dir is
+; $TMPDIR/evoskill_tau3_evolver_e<N>, and $TMPDIR lives under /var/folders -- which the
+; "minimum needed to run a shell" allow above grants as a whole subpath. So one arm's evolver
+; could read AND write a peer's cwd, its dispatched PROMPT.md included: the cross-arm leak the
+; WORK_TAG change was meant to close, reopened by a coarse system grant. Denied by NAME (regex,
+; not location) for the same reason #293 and #295 are; this job's OWN work dir is re-granted
+; below by write_allows and by its explicit read allow, both of which come later and win.
+(deny file-read* (regex #"/evoskill_tau3_evolver_"))
+(deny file-write* (regex #"/evoskill_tau3_evolver_"))
 ; the ONLY writable paths: this job's work dir, its log dir, its declared outputs, CLI state
 {write_allows}
 (deny file-read*

@@ -32,10 +32,13 @@ a hidden author:
      printed field by field, with the brief beside it. `--yes` exists for scripted runs and says
      so in the receipt.
 
-WHAT IT MAY READ. The dataset root and the repo, read-only, contained by `sandbox-exec` — the same
-containment `clarify.compose` uses, for the same reason (#267/#286): this runs BEFORE any spec is
-frozen, so an uncontained composer could write the very files the front door is about to verify.
-It REFUSES rather than degrading if containment is unavailable.
+WHAT IT MAY WRITE — nothing outside /dev, the temp dirs and ~/.claude, contained by `sandbox-exec`,
+the same containment `clarify.compose` uses and for the same reason (#267/#286): this runs BEFORE
+any spec is frozen, so an uncontained composer could write the very files the front door is about
+to verify. It REFUSES rather than degrading if containment is unavailable. READS ARE NOT
+RESTRICTED: the profile carries no file-read rule, so this is write containment and nothing more.
+An earlier version of this paragraph said "the dataset root and the repo, read-only", which
+described a confinement the profile has never had.
 
 WHAT IT MUST NOT DO. Choose the split sizes silently when the brief did not say. A benchmark's
 train/val/test counts are the experiment's power budget, and a model picking them from thin air
@@ -155,7 +158,7 @@ def propose(brief: str, *, root_hint: str = "", model: str = "opus[1m]", timeout
     """Ask the AO to turn `brief` into setup answers. Raises BriefUnavailable, never guesses."""
     msg = _message(brief, root_hint, repo)
     try:
-        sb_argv, sb_prof = _sandbox(Path(root_hint or repo))
+        sb_argv, sb_prof = _sandbox()
     except ClarifyUnavailable as e:
         raise BriefUnavailable(str(e)) from e
     argv = [*sb_argv, "claude", "-p", msg, "--model", model,

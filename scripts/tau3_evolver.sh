@@ -912,14 +912,14 @@ cat > "$HOOK_SETTINGS" <<EOF
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Read|Grep|Glob",
+        "matcher": "Bash|Read|Grep|Glob|WebFetch|WebSearch",
         "hooks": [
           {"type": "command",
            "command": "EVOSKILL_EVOLVER_TRAIN_IDS='$_TRAIN_IDS' EVOSKILL_EVOLVER_ID_RE='$_ID_RE_JSON' EVOSKILL_LEAK_DENY_PATHS='${EVOSKILL_LEAK_DENY_PATHS:-}' python3 '$ROOT/scripts/evolver_leak_hook.py'"}
         ]
       },
       {
-        "matcher": "Bash|Read|Grep|Glob|Write|Edit",
+        "matcher": "Bash|Read|Grep|Glob|Write|Edit|WebFetch|WebSearch",
         "hooks": [
           {"type": "command",
            "command": "EVOSKILL_EVOLVER_STAGING='$STAGING' python3 '$ROOT/scripts/evolver_peer_skill_hook.py'"}
@@ -1224,6 +1224,22 @@ if ! _denied_ok "BLOCKED"; then
   if [ "$_HOOK_RC" -ne 0 ]; then printf '%s\n' "$_HOOK_ERR" | sed 's/^/    /' >&2; fi
   exit 19
 fi
+# THE POOL IS ALSO ON THE INTERNET. tau3's 97-task file is a tracked file in the public
+# upstream repo, and both hooks were wired to Bash|Read|Grep|Glob only -- so `WebFetch` of
+# the upstream tasks.json walked past every guard in this chain, sandbox included (the
+# profile leaves network egress open). The hook already inspects a `url` field; it had
+# simply never been asked. A matcher change with no must-deny probe is the #154 shape, so:
+_wprobe='{"tool_name":"WebFetch","tool_input":{"url":"https://raw.githubusercontent.com/example/tau2-bench/main/data/tau2/domains/'"$EVO_DOMAIN"'/tasks.json"}}'
+_hook_rc "$_wprobe" "$ROOT/scripts/evolver_leak_hook.py"
+if ! _denied_ok "BLOCKED"; then
+  echo "REFUSING: the leak hook did NOT block a WebFetch of the upstream task pool." >&2
+  echo "  The pool is a tracked file in a public repo; a matcher that omits WebFetch/" >&2
+  echo "  WebSearch leaves the network as an unguarded path to the held-out specs." >&2
+  echo "  Expected exit 2; got $_HOOK_RC." >&2
+  if [ "$_HOOK_RC" -ne 0 ]; then printf '%s\n' "$_HOOK_ERR" | sed 's/^/    /' >&2; fi
+  exit 13
+fi
+
 # #213 case 3, THE ONE THAT WAS MISSING. Both probes above name `skills_v1`; neither names
 # `skills_v1_staging`, and that is the form that was ALLOWED through two rounds of fixes.
 # Every arm names its staging skills_v{N}_staging, so after `cd <peer run>` the relative

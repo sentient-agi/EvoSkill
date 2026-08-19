@@ -9,12 +9,18 @@ description = "EvoSkill v2 — an evolver agent rewrites a solver agent's skills
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
+# EVERY ENTRY IS IMPORTED BY THIS CODE, or says why it is here. Eight were not: click,
+# pandas, pydantic-settings, questionary, rich, tomli-w and llm-sandbox[docker] had zero
+# import sites anywhere in src/, scripts/ or tests/ — sediment from the private tree this
+# was carved out of. In a list that carries hand-written justifications for openpyxl and
+# tqdm, a reader reasonably reads every entry as load-bearing, and `llm-sandbox[docker]` in
+# particular misdescribes how this project sandboxes: solver rollouts go through the docker
+# CLI, and the evolver through macOS sandbox-exec (src/orchestrator/evolver_dispatch.py).
+# `pandas` is available to the SOLVER inside its image (see agent_profiles/*/prompt.md) —
+# that is the image's dependency, not the harness's.
 dependencies = [
     "claude-agent-sdk>=0.1.16",
-    "click>=8.1.8",
-    "pandas>=2.3.3",
     "pydantic>=2.12.5",
-    "pydantic-settings>=2.12.0",
     "pyyaml>=6.0",
     # Module-scope import in the SpreadsheetBench v2 scorer; the test suite
     # cannot even be collected without it.
@@ -24,17 +30,14 @@ dependencies = [
     # every leg runner, dies at import without it. Found by the 0817 smoke: the
     # dev machine's ambient python had it, the shipped venv did not.
     "tqdm>=4.66",
-    "questionary>=2.1.1",
-    "rich>=14.2.0",
-    "tomli-w>=1.2.0",
-    "llm-sandbox[docker]>=0.3.36",
     # Module-scope imports in src/harness (span plumbing). Phoenix itself stays
     # optional — arize-phoenix is only imported lazily when tracing is enabled.
     "opentelemetry-api>=1.27",
     "opentelemetry-sdk>=1.27",
-    # wrapt 2.x removed the `module=` kwarg from wrap_function_wrapper,
-    # which breaks openinference-instrumentation-anthropic auto-instrumentation.
-    # Pin to <2.0 until openinference upgrades.
+    # NOT imported here, and kept deliberately: wrapt 2.x removed the `module=` kwarg from
+    # wrap_function_wrapper, which breaks openinference-instrumentation-anthropic's
+    # auto-instrumentation. The ceiling has to sit at top level to bind the resolution for
+    # the phoenix extra's transitive pull. Remove when openinference upgrades.
     "wrapt<2.0",
 ]
 
