@@ -793,12 +793,38 @@ if [ "${EVOSKILL_EVOLVER_SANDBOX:-1}" = "1" ]; then
             --grant "$PROJDIR")
 mkdir -p "$PROJDIR"          # #299: exists before the profile is built, so preflight can probe it
   [ -n "$CORPUS" ] && _sb_args+=(--grant "$CORPUS")
+  # THE PREFLIGHT AND THE PROFILE MUST USE THE INTERPRETER THE RUNNER WILL USE.
+  # Both calls below used bare `python3`. Two consequences, and the second is the one that
+  # matters: the profile embeds `sys.executable` as its interpreter grant, so it granted the
+  # SYSTEM python rather than the project venv; and the preflight probed that same system
+  # interpreter, so its import check was answering a question about the wrong process. The
+  # moment the import probe was pointed at the runner's REAL dependencies it failed with
+  # "No module named 'pydantic'" -- correctly, because the system python has none. Prefer
+  # the repo venv when it exists; fall back to python3 so a venv-less checkout still runs.
+  _PY="$ROOT/.venv/bin/python"
+  [ -x "$_PY" ] || _PY=python3
+  # THE HELD-OUT DATA ROOT MUST BE DENIED BY THE KERNEL, NOT ONLY BY THE TEXT HOOK.
+  # EVOSKILL_LEAK_DENY_PATHS reaches evolver_leak_hook.py, which is a STRING matcher on
+  # tool inputs: it stops a command that NAMES the path and stops nothing that reaches the
+  # same bytes another way. On SSB v2 the held-out material IS the reference workbook under
+  # SSBV2_ROOT, and README lets the operator put that anywhere; outside $HOME (say /tmp) the
+  # profile's coarse denies never covered it either, so containment on that benchmark rested
+  # entirely on where the dataset happened to sit. --hide is deny-by-name in the profile --
+  # the same mechanism that protects the run dir, and measured here to turn a readable
+  # golden into "Operation not permitted".
+  if [ -n "${EVOSKILL_LEAK_DENY_PATHS:-}" ]; then
+    _OLDIFS=$IFS; IFS=:
+    for _dp in ${EVOSKILL_LEAK_DENY_PATHS}; do
+      [ -n "$_dp" ] && _sb_args+=(--hide "$_dp")
+    done
+    IFS=$_OLDIFS
+  fi
   # PREFLIGHT BEFORE SPENDING A DISPATCH. It probes exec, import, every declared read and the
   # log dir's is_dir() under the REAL profile and reports ALL gaps at once — four consecutive
   # attempts once each died on a different single missing grant.
-  ( cd "$ROOT" && python3 -m src.orchestrator.evolver_dispatch --preflight "${_sb_args[@]}" ) \
+  ( cd "$ROOT" && "$_PY" -m src.orchestrator.evolver_dispatch --preflight "${_sb_args[@]}" ) \
     || { echo "REFUSING: evolver containment preflight failed (see above). Nothing spent." >&2; exit 17; }
-  ( cd "$ROOT" && python3 -m src.orchestrator.evolver_dispatch \
+  ( cd "$ROOT" && "$_PY" -m src.orchestrator.evolver_dispatch \
       --emit-profile "$_SBPROF" "${_sb_args[@]}" >/dev/null ) \
     || { echo "REFUSING: could not emit the evolver sandbox profile." >&2; exit 17; }
   [ -s "$_SBPROF" ] || { echo "REFUSING: emitted profile is empty: $_SBPROF" >&2; exit 17; }

@@ -230,10 +230,23 @@ def build_evolver_sandbox_profile(job: EvolverJob) -> str:
     # module's own selftest reporting "9 checks, 1 bad" while the launcher still dispatched.
     # A read grant on .venv/bin does not widen access to the repo's content: the src/ and
     # scripts/ content grants are separate and held-out material is denied by name.
+    # ...AND THE VENV ITSELF, OR THE CHILD SILENTLY LEAVES IT.
+    # CPython activates a venv by reading pyvenv.cfg NEXT TO the executable and then
+    # importing from <prefix>/lib. Granting only .venv/bin and the RESOLVED base prefix
+    # left both denied -- they sit under the repo, which this profile denies apart from
+    # src/ and scripts/ -- so the sandboxed interpreter fell back to the ambient base
+    # install: different package versions than the declared constraints, and an outright
+    # failure on a machine whose base install is clean. Measured by emitting the real
+    # profile and printing sys.prefix under it.
     _exe = Path(sys.executable).resolve()
     _interp = sorted({str(_exe.parents[1]), str(Path.home() / ".local"),
                       str(Path(sys.executable).parent)})
-    interp_allows = "\n".join(f'(allow file-read* (subpath "{d}"))' for d in _interp)
+    _venv_allows = []
+    if sys.prefix != sys.base_prefix:
+        _venv_allows = [f'(allow file-read* (literal "{Path(sys.prefix) / "pyvenv.cfg"}"))',
+                        f'(allow file-read* (subpath "{Path(sys.prefix) / "lib"}"))']
+    interp_allows = "\n".join([f'(allow file-read* (subpath "{d}"))' for d in _interp]
+                              + _venv_allows)
 
     # #250b. THE RUNNER MODULE LIVES IN THE REPO, AND THE REPO IS DENIED BY DESIGN. Granting the
     # interpreter got python to exec; it then died in `_path_importer_cache` with
@@ -498,12 +511,29 @@ def preflight(job: EvolverJob) -> list[str]:
                 bad.append(f"cannot EXEC the claude CLI at {cli} under the profile: "
                            f"{(r.stderr or '').strip()[:160]}")
         # 2. the runner module must IMPORT
+        # IMPORT WHAT THE RUNNER LOADS, NOT ITS ENTRY SHIM. evolver_direct_runner's module
+        # scope is stdlib-only (argparse/json/sys/time/uuid/pathlib/typing); every
+        # third-party import is lazy inside _run(). So this probe passed on a profile under
+        # which the run would die at the first pydantic/httpx import, certified "no
+        # containment gaps", and the dispatch was spent before anything noticed.
         r = subprocess.run(["sandbox-exec", "-f", prof, sys.executable, "-c",
-                            "import src.orchestrator.evolver_direct_runner"],
+                            "import src.harness.direct.executor, src.harness.direct.options"],
                            capture_output=True, text=True, timeout=90,
                            cwd=str(Path(__file__).resolve().parents[2]))
         if r.returncode:
-            bad.append(f"cannot IMPORT the runner: {(r.stderr or '').strip().splitlines()[-1][:120]}")
+            bad.append(f"cannot IMPORT the runner's real dependencies: "
+                       f"{(r.stderr or '').strip().splitlines()[-1][:140]}")
+        # ...and the child must still be IN the venv. A sandboxed interpreter that has
+        # silently fallen back to the base install imports different versions than the
+        # declared constraints, which no import probe alone would reveal.
+        r = subprocess.run(["sandbox-exec", "-f", prof, sys.executable, "-c",
+                            "import sys; print(sys.prefix)"],
+                           capture_output=True, text=True, timeout=60)
+        _got = (r.stdout or "").strip()
+        if r.returncode or _got != sys.prefix:
+            bad.append(f"the sandboxed interpreter left its environment: sys.prefix is "
+                       f"{_got or '<unreadable>'!r}, expected {sys.prefix!r} — it would "
+                       f"import from the ambient install, not this project's venv")
         # 3. every declared READ must succeed
         reads = [job.prompt_path] + list(job.grants) if job.prompt_path else list(job.grants)
         for p in reads:
