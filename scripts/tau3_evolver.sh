@@ -1334,6 +1334,22 @@ if [ "$_GATE_APPLIES" = "0" ]; then
   echo "  quota gate : NOT APPLICABLE — $EVOLVER_MODEL is served through a provider gateway and"
   echo "               consumes credit, not the Claude five-hour window (#304). Spend is bounded"
   echo "               by the run's cost ceiling instead."
+else
+  # ── THE API-KEY SCRUB, ON THE HAND-RUN PATH TOO (#307) ────────────────────────────────
+  # subscription_env() in src/orchestrator/quota_scope.py strips these three from every
+  # Claude-family child, and README.md:25 says so in exactly those words. It is PYTHON, and
+  # this launcher is a documented hand-run entry point that never called it -- so a hand-run
+  # evolver with ANTHROPIC_API_KEY exported authenticated as an API client and spent credit,
+  # while these very lines below gated it on the five-hour SUBSCRIPTION window. The gate
+  # would have been guarding a budget the run does not use, which is the whole defect #307
+  # named. Scoped to the same verdict that decides the gate applies: a gateway-served
+  # evolver (_GATE_APPLIES=0) legitimately needs its key.
+  if [ -n "${ANTHROPIC_API_KEY:-}${ANTHROPIC_AUTH_TOKEN:-}${ANTHROPIC_BASE_URL:-}" ]; then
+    echo "  auth scrub : ANTHROPIC_API_KEY/_AUTH_TOKEN/_BASE_URL removed from this child —"
+    echo "               $EVOLVER_MODEL is gated on the five-hour subscription window, so an"
+    echo "               API key here would spend credit the gate is not watching (#307)."
+  fi
+  unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
 fi
 if [ -z "${EVOSKILL_TAU3_SKIP_QUOTA_GATE:-}" ] && [ "$_GATE_APPLIES" != "0" ]; then
   # ONE implementation, in scripts/quota_fresh_reading.py, so the launcher does
@@ -1420,7 +1436,7 @@ if [ -n "${EVOSKILL_TAU3_PHOENIX_PROJECT:-}" ]; then
     _promptmd=$1; _sbprof=$2; shift 2
     cd "$_work" || exit 9
     _sb=(); [ -n "$_sbprof" ] && _sb=(sandbox-exec -f "$_sbprof")
-    "${_sb[@]}" claude -p "$_prompt" --model "$_model" --session-id "$_sid" \
+    ${_sb[@]+"${_sb[@]}"} claude -p "$_prompt" --model "$_model" --session-id "$_sid" \
       "$@" \
       --settings "$_settings" \
       --thinking-display summarized \
@@ -1443,16 +1459,35 @@ else
   # array's own comment ("One array, expanded everywhere") was false: nothing
   # added to GRANTS reached either real dispatch. Caught while arming the #186
   # hook, whose whole value depends on being on the ACTUAL command line.
-  ( cd "$WORK" && exec nohup "${SB[@]}" claude -p "$PROMPT" \
+  # ${SB[@]+"${SB[@]}"}, NOT "${SB[@]}" -- the rule this file states at the leak-probe
+  # above and then broke at both REAL dispatch sites. macOS ships bash 3.2, where a bare
+  # "${EMPTY[@]}" under `set -u` is an unbound-variable error, and SB is empty exactly when
+  # EVOSKILL_EVOLVER_SANDBOX=0. Measured on the real launcher against outputs/smoke_tau3:
+  # "line 1462: SB[@]: unbound variable" -- the subshell died, and PID=$! below then
+  # reported the corpse as a running evolver. Same trap as #187's unbound GRANTS.
+  # HOOKFLAG gets the same guard: it is empty whenever the hooks are not wired.
+  ( cd "$WORK" && exec nohup ${SB[@]+"${SB[@]}"} claude -p "$PROMPT" \
       --model "$EVOLVER_MODEL" \
       --session-id "$SID" \
-      "${GRANTS[@]}" "${HOOKFLAG[@]}" \
+      ${GRANTS[@]+"${GRANTS[@]}"} ${HOOKFLAG[@]+"${HOOKFLAG[@]}"} \
       --thinking-display summarized \
       --dangerously-skip-permissions \
       --output-format stream-json --verbose \
       > "$LOG" 2>&1 ) &
 fi
 PID=$!
+# A PID IS NOT A LAUNCH. The subshell above is backgrounded, so $! is set even when its
+# very first expansion aborts -- which is exactly what an unbound SB did: the launcher
+# printed "PID=42644 log=..." and wrote the pid file for a process that had already died,
+# and every downstream reader takes that receipt at face value. Confirm the child is
+# actually alive, and if it is not, say so with the log it left behind.
+sleep 1
+if ! kill -0 "$PID" 2>/dev/null && ! grep -q '"type"' "$LOG" 2>/dev/null; then
+  echo "REFUSING to report a launch: pid $PID is already gone and $LOG has no stream" >&2
+  echo "  records, so the dispatch aborted before claude ever started. Its output:" >&2
+  tail -20 "$LOG" 2>/dev/null | sed 's/^/    /' >&2
+  exit 21
+fi
 # Non-negotiable on any background process: the machine must not sleep through it.
 command -v caffeinate >/dev/null 2>&1 && caffeinate -i -w $PID &
 echo "  PID=$PID  log=$LOG"

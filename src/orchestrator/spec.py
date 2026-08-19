@@ -52,6 +52,7 @@ import shutil
 import sys
 import tempfile
 from dataclasses import asdict, dataclass, field
+import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -248,6 +249,24 @@ class ExperimentSpec:
             if not getattr(self, f):
                 errs.append(f"{f} is required — give a model, or 'none' if this benchmark "
                             f"has no such component")
+
+        # ── SSB v2 REFUSES A ROLLING SOLVER TAG, AND THE FREEZE IS WHERE TO SAY SO ─────
+        # scripts/ssbv2_leg.sh:86 accepts only dated snapshots (*-0731, *-0813), because
+        # `deepseek/deepseek-v4-flash` and `deepseek/deepseek-v4-flash-0731` are different
+        # models and the RunCache keys on the model STRING: the rolling tag does not corrupt
+        # an existing bucket, it silently opens a new one and re-buys every episode under a
+        # model nobody chose. That rule lived ONLY in the leg launcher, which is the LAST
+        # step -- an operator could brief the AO with any solver, get a frozen spec, build
+        # the oracle, and only then find that no leg will ever run. The constraint belongs
+        # where the choice is made.
+        if (self.benchmark or "").lower() == "ssbv2" and self.solver_model:
+            if not re.search(r"-(\d{4})$", self.solver_model):
+                errs.append(
+                    f"benchmark=ssbv2 requires a DATED solver snapshot; got "
+                    f"{self.solver_model!r}. A rolling tag re-buys every episode under a "
+                    f"different model than the one named (scripts/ssbv2_leg.sh refuses it "
+                    f"with exit 4). Name the dated snapshot, e.g. "
+                    f"deepseek/deepseek-v4-flash-0731.")
 
         # data
         if self.n_train <= 0 or self.n_val <= 0:

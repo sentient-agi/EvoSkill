@@ -25,8 +25,12 @@ graded cell-by-cell against a reference workbook).
   `ANTHROPIC_BASE_URL` from every `claude` child that runs a Claude-family
   model. That is not an oversight (#307): the quota gate reads the subscription
   window, so if the child silently spent API credit instead, the gate would be
-  guarding a budget the run does not use. The key is still needed for solver
-  models that reach Anthropic through a gateway.
+  guarding a budget the run does not use. Two mechanisms, because there are two
+  entry points: `subscription_env()` covers everything the AO front door and the
+  loop launch, and `scripts/tau3_evolver.sh` — the documented hand-run evolver
+  path, which is not Python and never called it — unsets the same three itself
+  whenever the five-hour gate applies to its model. The key is still needed for
+  solver models that reach Anthropic through a gateway.
 - An **OpenRouter API key** (`OPENROUTER_API_KEY`) for the solver model.
 - `git`.
 
@@ -165,10 +169,16 @@ held-out data root. `EVOSKILL_CACHE_DIR` is required by the leg launcher
 here (its default is a per-tag dir that is empty for a new tag, so leaving it
 unset silently re-buys every episode); the loop sets its own per-epoch value
 when it launches legs itself, so exporting it later is harmless but does
-nothing:
+nothing. `EVOSKILL_SOLVER_MODEL` is mandatory for **both** leg launchers, and on
+SSB v2 it must be a **dated snapshot** (`…-0731`, `…-0813`): the RunCache keys on
+the model string, so a rolling tag re-buys every episode under a model nobody
+chose. `scripts/ssbv2_leg.sh` refuses one with exit 4, and the freeze refuses it
+earlier — `ExperimentSpec.validate()` rejects an undated solver on this
+benchmark, so you find out before paying for the AO run and the oracle:
 
 ```bash
 export EVOSKILL_CACHE_DIR=$PWD/.cache/<cache tag from the freeze receipt>_cache
+export EVOSKILL_SOLVER_MODEL=<solver model from the freeze receipt>
 export EVOSKILL_TAU3_RUN_DIR=outputs/my_ssb_run       # the loop's var names
 export EVOSKILL_TAU3_SPLIT=$PWD/outputs/my_ssb_run/split_325.json  # predate SSB v2
 scripts/ssbv2_leg.sh my_ssb_run_base_train train ""   # "" = no skills = BASE
@@ -244,8 +254,10 @@ keys it wants.
   uncontained, regaining write access to the run directory — including
   `ANSWERS_e{N}.json` and `e{N}_PROOFREAD.json`, the files a later step reads
   back as the operator's own answers. Set it as a recorded decision, not a
-  reflex. On Linux, either set it or drive the loop from an existing
-  `RUNTIME.json` instead of the brief front door.
+  reflex. **On Linux it is the only way through** — for the brief front door and
+  for every driven epoch alike, since the loop's own prompt-authoring step raises
+  the identical refusal. (An earlier version of this bullet offered "drive the
+  loop from an existing `RUNTIME.json`" as an alternative; that is not one.)
 - **Phoenix tracing is optional.** Without a running Phoenix instance the
   loop's traces-in-phoenix check reports UNMEASURED and everything else runs.
 - `caffeinate` (macOS sleep inhibitor) is used when present, skipped on Linux.
