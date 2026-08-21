@@ -2,13 +2,14 @@
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Generic, TypeVar
 
 from src.harness import Agent, AgentTrace, is_claude_sdk, is_opencode_sdk, is_openhands_sdk, is_goose_sdk, is_codex_sdk
 from src.cache import RunCache, CacheConfig
 from src.registry.sdk_utils import options_to_config
+from src.evaluation.rqgm import RQGMController
 
 
 def _log(phase: str, message: str = "", indent: int = 0) -> None:
@@ -99,6 +100,8 @@ class LoopResult:
     best_score: float
     iterations_completed: int
     total_cost_usd: float = 0.0
+    endpoint_status: str = "eligible"
+    specialists: dict[str, str] = field(default_factory=dict)
 
 
 class SelfImprovingLoop:
@@ -122,6 +125,7 @@ class SelfImprovingLoop:
         scorer: Callable[[str, str, str], float] | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         task_constraints: str = "",
+        evaluator_controller: RQGMController | None = None,
     ):
         """Initialize the self-improving loop.
 
@@ -142,6 +146,7 @@ class SelfImprovingLoop:
         self.scorer = scorer or _score_multi_tolerance
         self.on_event = on_event
         self.task_constraints = task_constraints
+        self.evaluator_controller = evaluator_controller
 
         # Round-robin sampling state
         self._category_offset = 0  # Which category to start with next iteration
@@ -269,6 +274,7 @@ class SelfImprovingLoop:
                 continue
 
             # Select parent from frontier using configured strategy
+            await self._refresh_rqgm_frontier()
             parent = self._select_parent(iteration_count)
             self.manager.switch_to(parent)
             self._iter_cost = 0.0  # Reset per-iteration cost
@@ -311,10 +317,8 @@ class SelfImprovingLoop:
                 agent_answer = (
                     trace.output.final_answer if trace.output and trace.output.final_answer else "[PARSE FAILED]"
                 )
-                avg_score = self.scorer(
-                    question,
-                    agent_answer.strip().lower(),
-                    answer.strip().lower(),
+                avg_score = await self._score_feedback_answer(
+                    question, agent_answer, answer, category
                 )
                 status = "[OK]" if avg_score >= 0.8 else "[FAIL]"
                 if self.on_event is None:
@@ -399,24 +403,45 @@ class SelfImprovingLoop:
             self._total_cost += self._iter_cost
             _log("COST", f"Iter {iteration_count} cost: ${self._iter_cost:.4f} | Running total: ${self._total_cost:.4f}")
 
-            # Save checkpoint at end of each successful iteration
             self._save_checkpoint(actual_iteration)
 
         # 3. Return results
         frontier = self.manager.get_frontier_with_scores()
-        best = self.manager.get_best_from_frontier()
-        best_score = frontier[0][1] if frontier else 0.0
+        specialists: dict[str, str] = {}
+        endpoint_status = "eligible"
+        if self.evaluator_controller is not None:
+            generalist, role_specialists = self.evaluator_controller.select_endpoints(
+                self.manager.get_frontier()
+            )
+            if generalist is None:
+                best, best_score, endpoint_status = "", 0.0, "no_eligible_endpoint"
+            else:
+                best, best_score = generalist.node_id, generalist.score
+                specialists = {role: selection.node_id for role, selection in role_specialists.items()}
+        else:
+            best = self.manager.get_best_from_frontier()
+            best_score = frontier[0][1] if frontier else 0.0
 
-        _log("DONE", f"{iteration_count} iterations, best: {best or 'base'} ({best_score:.4f})")
+        final_best = best if self.evaluator_controller is not None else (best or "base")
+        reported_best = final_best if final_best else "<no eligible endpoint>"
+        _log("DONE", f"{iteration_count} iterations, best: {reported_best} ({best_score:.4f})")
         _log("COST", f"Total cost: ${self._total_cost:.4f}")
-        self._emit("loop_done", best=best or "base", best_score=best_score, iterations=iteration_count)
+        self._emit(
+            "loop_done",
+            best=final_best or None,
+            best_score=best_score,
+            iterations=iteration_count,
+            endpoint_status=endpoint_status,
+        )
 
         return LoopResult(
             frontier=frontier,
-            best_program=best or "base",
+            best_program=final_best,
             best_score=best_score,
             iterations_completed=iteration_count,
             total_cost_usd=self._total_cost,
+            endpoint_status=endpoint_status,
+            specialists=specialists,
         )
 
     async def _ensure_base_program(self) -> None:
@@ -452,24 +477,178 @@ class SelfImprovingLoop:
         Returns:
             Accuracy score (0.0 to 1.0).
         """
+        node_id = self.manager.get_current_name()
+        if self.evaluator_controller is not None:
+            current = self.evaluator_controller.node_selection(node_id)
+            if current is not None:
+                return current.score
+
         # Convert to (question, answer) format for evaluate_agent_parallel
         qa_data = [(q, a) for q, a, _ in data]
         results = await evaluate_agent_parallel(
             self.agents.base, qa_data, max_concurrent=self.config.concurrency, cache=self.cache
         )
 
-        score = 0.0
-        for result in results:
+        if self.evaluator_controller is None:
+            score = 0.0
+            for result in results:
+                if result.trace is not None:
+                    self._iter_cost += result.trace.total_cost_usd
+                if result.trace is None or result.trace.output is None:
+                    continue
+                score += self.scorer(
+                    result.question, result.trace.output.final_answer, result.ground_truth
+                )
+            return score / len(results) if results else 0.0
+
+        # Agent artifacts are generated once and retained in RunCache.  Only
+        # evaluator judgments are repeated after a transition.
+        artifacts: list[tuple[Any, tuple[str, str, str]]] = []
+        for result, row in zip(results, data):
             if result.trace is not None:
                 self._iter_cost += result.trace.total_cost_usd
-            if result.trace is None or result.trace.output is None:
-                continue  # Timeout/error/parse failed = 0 score
-            score += self.scorer(
-                result.question,
-                result.trace.output.final_answer,
-                result.ground_truth,
+            artifacts.append((result, row))
+
+        artifact_indices: dict[str, list[int]] = {}
+        for index, (_result, (_question, _ground_truth, category)) in enumerate(artifacts):
+            cell = self.evaluator_controller.role_task_for(category)
+            artifact_indices.setdefault(cell.task_id, []).append(index)
+        cell_cursors = {task_id: 0 for task_id in artifact_indices}
+
+        max_judgments = max(
+            len(artifacts),
+            self.evaluator_controller.minimum_node_outcomes
+            * max(1, len(self.evaluator_controller.role_tasks)) * 4,
+        )
+        judgments = 0
+        while artifacts and judgments < max_judgments:
+            cell = self.evaluator_controller.least_measured_cell(
+                node_id, artifact_indices.keys()
             )
-        return score / len(results)
+            indices = artifact_indices[cell.task_id]
+            row_index = indices[cell_cursors[cell.task_id] % len(indices)]
+            cell_cursors[cell.task_id] += 1
+            result, (question, ground_truth, category) = artifacts[row_index]
+            if self.evaluator_controller.batch_capacity(1) == 0:
+                await self._run_rqgm_checkpoint()
+                continue
+            predicted = (
+                result.trace.output.final_answer
+                if result.trace is not None and result.trace.output is not None
+                else "[TASK AGENT FAILED]"
+            )
+            await self._record_search_outcome(
+                node_id=node_id,
+                question=question,
+                predicted=predicted,
+                ground_truth=ground_truth,
+                category=category,
+                artifact_id=f"{node_id}:{row_index}:judgment:{judgments}",
+            )
+            judgments += 1
+            if self.evaluator_controller.checkpoint_due():
+                await self._run_rqgm_checkpoint()
+            selection = self.evaluator_controller.node_selection(node_id)
+            if selection is not None:
+                return selection.score
+        raise RuntimeError(
+            f"no eligible RQGM endpoint evidence for {node_id!r} after {judgments} judgments"
+        )
+
+    async def _record_search_outcome(
+        self,
+        *,
+        node_id: str,
+        question: str,
+        predicted: str,
+        ground_truth: str,
+        category: str,
+        artifact_id: str,
+    ) -> float:
+        assert self.evaluator_controller is not None
+        cell = self.evaluator_controller.role_task_for(category)
+        if cell.criterion_kind == "fixed":
+            raw = float(self.scorer(question, predicted, ground_truth))
+            self.evaluator_controller.record_fixed_outcome(
+                node_id=node_id,
+                role_id=cell.role_id,
+                task_id=cell.task_id,
+                raw_score=raw,
+                artifact_id=artifact_id,
+            )
+            return raw
+        record = await self.evaluator_controller.evaluate_learned(
+            slot_id=cell.slot_id or "",
+            node_id=node_id,
+            role_id=cell.role_id,
+            task_id=cell.task_id,
+            artifact=predicted,
+            expected=ground_truth,
+            artifact_id=artifact_id,
+            context={"question": question, "category": category, "validation": True},
+        )
+        return record.raw_score
+
+    async def _score_feedback_answer(
+        self, question: str, predicted: str, ground_truth: str, category: str
+    ) -> float:
+        """Score training feedback without adding validation/search evidence."""
+        if self.evaluator_controller is None:
+            return float(
+                self.scorer(
+                    question,
+                    predicted.strip().lower(),
+                    ground_truth.strip().lower(),
+                )
+            )
+        cell = self.evaluator_controller.role_task_for(category)
+        if cell.criterion_kind == "fixed":
+            return float(
+                self.scorer(
+                    question,
+                    predicted.strip().lower(),
+                    ground_truth.strip().lower(),
+                )
+            )
+        return await self.evaluator_controller.judge_learned(
+            slot_id=cell.slot_id or "",
+            artifact=predicted,
+            expected=ground_truth,
+            context={"question": question, "category": category, "validation": False},
+        )
+
+    async def _run_rqgm_checkpoint(self) -> None:
+        assert self.evaluator_controller is not None
+        event = await self.evaluator_controller.checkpoint()
+        replaced = [slot_id for slot_id, summary in event["slots"].items() if summary["replacement"]]
+        if replaced:
+            self.manager.invalidate_scores(self.evaluator_controller.pending_revaluation)
+        self._emit(
+            "evaluator_selection",
+            checkpoint_index=event["checkpoint_index"],
+            outcome_budget=event["outcome_budget"],
+            epoch_vector=event["epoch_vector"],
+            replaced_slots=replaced,
+        )
+
+    async def _refresh_rqgm_frontier(self) -> None:
+        """Lazily restore current-epoch evidence before parent selection."""
+        if self.evaluator_controller is None:
+            return
+        frontier = self.manager.get_frontier()
+        attempts = 0
+        while attempts < max(1, len(frontier) * 3):
+            stale = [name for name in frontier if self.evaluator_controller.node_selection(name) is None]
+            if not stale:
+                return
+            name = stale[0]
+            self.manager.switch_to(name)
+            score = await self._evaluate(self.val_data)
+            self.manager.set_score(name, score)
+            attempts += 1
+        remaining = [name for name in frontier if self.evaluator_controller.node_selection(name) is None]
+        if remaining:
+            raise RuntimeError(f"RQGM frontier could not be re-ranked under current epochs: {remaining}")
 
     async def _mutate(
         self,

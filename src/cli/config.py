@@ -48,6 +48,34 @@ class EvolutionConfig:
 
 
 @dataclass
+class EvaluatorEvolutionConfig:
+    """Optional RQGM controlled evaluator-evolution configuration."""
+    enabled: bool = False
+    epsilon: float = 0.05
+    minimum_anchor_outcomes: int = 5
+    minimum_node_outcomes: int = 5
+    checkpoint_start: int = 32
+    checkpoint_ratio: float = 2.0
+    checkpoints: list[int] = field(default_factory=list)
+    anchor_repeats: int = 1
+    state_path: str = '.evoskill/rqgm_state.json'
+    # Dotted ``module:function`` returning an RQGMRuntime.  Runtime
+    # providers/executors are intentionally code, not TOML-serialized secrets.
+    runtime_factory: str = ''
+
+    def __post_init__(self) -> None:
+        if not 0 < self.epsilon < 1:
+            raise ValueError("evaluator_evolution.epsilon must be between 0 and 1")
+        if min(self.minimum_anchor_outcomes, self.minimum_node_outcomes, self.anchor_repeats) <= 0:
+            raise ValueError("evaluator evolution evidence counts must be positive")
+        if self.checkpoints:
+            if self.checkpoints != sorted(set(self.checkpoints)) or any(v <= 0 for v in self.checkpoints):
+                raise ValueError("evaluator_evolution.checkpoints must be positive, sorted, and unique")
+        elif self.checkpoint_start <= 0 or self.checkpoint_ratio <= 1:
+            raise ValueError("invalid evaluator evolution checkpoint schedule")
+
+
+@dataclass
 class DatasetConfig:
     source: Literal['csv', 'harbor'] = 'csv'
     path: str = '/absolute/path/to/questions.csv'
@@ -124,6 +152,7 @@ class RemoteConfig:
 class ProjectConfig:
     harness: HarnessConfig = field(default_factory=HarnessConfig)
     evolution: EvolutionConfig = field(default_factory=EvolutionConfig)
+    evaluator_evolution: EvaluatorEvolutionConfig = field(default_factory=EvaluatorEvolutionConfig)
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     scorer: ScorerConfig = field(default_factory=ScorerConfig)
     remote: RemoteConfig | None = None
@@ -226,6 +255,7 @@ def load_config(
 
     harness = HarnessConfig(**harness_raw)
     evolution = EvolutionConfig(**raw.get('evolution', {}))
+    evaluator_evolution = EvaluatorEvolutionConfig(**raw.get('evaluator_evolution', {}))
     dataset = DatasetConfig(**raw.get('dataset', {}))
     scorer = ScorerConfig(**raw.get('scorer', {}))
 
@@ -274,6 +304,7 @@ def load_config(
     return ProjectConfig(
         harness=harness,
         evolution=evolution,
+        evaluator_evolution=evaluator_evolution,
         dataset=dataset,
         scorer=scorer,
         remote=remote,
