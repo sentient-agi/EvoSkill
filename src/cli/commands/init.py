@@ -34,6 +34,18 @@ DEFAULT_CONFIG = {
         'no_improvement_limit': 5,
         'failure_samples': 3,
     },
+    'evaluator_evolution': {
+        'enabled': False,
+        'epsilon': 0.05,
+        'minimum_anchor_outcomes': 5,
+        'minimum_node_outcomes': 5,
+        'checkpoint_start': 32,
+        'checkpoint_ratio': 2.0,
+        'checkpoints': [],
+        'anchor_repeats': 1,
+        'state_path': '.evoskill/rqgm_state.json',
+        'runtime_factory': '',
+    },
     'dataset': {
         'source': 'csv',
         'path': '/absolute/path/to/questions.csv',
@@ -261,6 +273,27 @@ def _render_config(config: dict) -> str:
     _append_toml_field(lines, 'Stop after this many iterations with no improvement.', 'no_improvement_limit', config['evolution']['no_improvement_limit'])
     lines.append('')
     _append_toml_field(lines, 'How many failing examples to sample when proposing changes.', 'failure_samples', config['evolution']['failure_samples'])
+    rqgm = config.get('evaluator_evolution', DEFAULT_CONFIG['evaluator_evolution'])
+    lines.extend(['', '[evaluator_evolution]'])
+    _append_toml_field(lines, 'Enable checkpointed RQGM controlled evaluator evolution.', 'enabled', rqgm['enabled'])
+    lines.append('')
+    _append_toml_field(lines, 'Beta posterior lower-quantile level.', 'epsilon', rqgm['epsilon'])
+    lines.append('')
+    _append_toml_field(lines, 'Minimum valid held-out anchor outcomes for promotion.', 'minimum_anchor_outcomes', rqgm['minimum_anchor_outcomes'])
+    lines.append('')
+    _append_toml_field(lines, 'Minimum current-epoch outcomes before a node is rankable.', 'minimum_node_outcomes', rqgm['minimum_node_outcomes'])
+    lines.append('')
+    _append_toml_field(lines, 'First exponential validation-outcome checkpoint.', 'checkpoint_start', rqgm['checkpoint_start'])
+    lines.append('')
+    _append_toml_field(lines, 'Exponential checkpoint spacing ratio.', 'checkpoint_ratio', rqgm['checkpoint_ratio'])
+    lines.append('')
+    _append_toml_list_field(lines, 'Optional explicit validation-outcome checkpoints.', 'checkpoints', rqgm['checkpoints'])
+    lines.append('')
+    _append_toml_field(lines, 'Repeated judgments per held-out anchor item.', 'anchor_repeats', rqgm['anchor_repeats'])
+    lines.append('')
+    _append_toml_field(lines, 'Persistent controller state path.', 'state_path', rqgm['state_path'])
+    lines.append('')
+    _append_toml_field(lines, 'Python module:function that constructs the private RQGM runtime.', 'runtime_factory', rqgm['runtime_factory'])
     ds = config['dataset']
     lines.extend([
         '',
@@ -369,6 +402,7 @@ def _write_config(path: Path, answers: dict) -> None:
     config = {
         'harness': dict(DEFAULT_CONFIG['harness']),
         'evolution': dict(DEFAULT_CONFIG['evolution']),
+        'evaluator_evolution': dict(DEFAULT_CONFIG['evaluator_evolution']),
         'dataset': dict(DEFAULT_CONFIG['dataset']),
         'scorer': dict(DEFAULT_CONFIG['scorer']),
     }

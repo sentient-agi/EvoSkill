@@ -27,6 +27,7 @@ dependencies = [
     "hatchling",
     "daytona>=0.1.0",
     "harbor>=0.6.1",
+    "scipy>=1.14.0",
 ]
 
 [project.scripts]
@@ -51,6 +52,7 @@ notebooks = [
 [dependency-groups]
 dev = [
     "pytest>=9.0.0",
+    "pytest-asyncio>=0.24.0",
     "pytest-cov>=7.1.0",
 ]
 

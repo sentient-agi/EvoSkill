@@ -8,7 +8,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-from typing import Callable, Any
+from typing import Callable
 
 from src.harness import Agent
 from src.agent_profiles.skill_generator import get_project_root, skill_generator_options
@@ -26,6 +26,7 @@ from src.schemas import (
     ToolGeneratorResponse,
     PromptGeneratorResponse,
 )
+from src.evaluation.rqgm import RQGMController
 
 from .data_utils import load_dataset, stratified_split
 from .task_registry import TaskConfig, get_task, ScorerFn
@@ -53,6 +54,8 @@ class EvoSkill:
             "random" (uniform random), or "round_robin" (cycle through ranked members).
         scorer: Custom scorer function, overrides the task's default.
         task_config: Custom TaskConfig, overrides the task name lookup.
+        evaluator_controller: Optional RQGM controlled evaluator-evolution
+            runtime. When omitted, EvoSkill retains its fixed-scorer behavior.
     """
 
     def __init__(
@@ -75,6 +78,7 @@ class EvoSkill:
         selection_strategy: str = "best",
         scorer: ScorerFn | None = None,
         task_config: TaskConfig | None = None,
+        evaluator_controller: RQGMController | None = None,
     ) -> None:
         self._task_config = task_config or get_task(task)
         self._dataset_path = dataset or self._task_config.default_dataset
@@ -96,6 +100,7 @@ class EvoSkill:
         self._failure_samples = failure_samples
         self._selection_strategy = selection_strategy
         self._scorer_override = scorer
+        self._evaluator_controller = evaluator_controller
 
     def _build_config(self) -> LoopConfig:
         """Create a LoopConfig from constructor params."""
@@ -177,7 +182,8 @@ class EvoSkill:
 
         scorer = self._scorer_override or self._task_config.scorer
         loop = SelfImprovingLoop(
-            config, agents, manager, train_pools, val_data, scorer=scorer
+            config, agents, manager, train_pools, val_data, scorer=scorer,
+            evaluator_controller=self._evaluator_controller,
         )
         result = await loop.run()
 

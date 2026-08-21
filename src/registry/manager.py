@@ -10,7 +10,7 @@ import json
 import random
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import yaml
 
@@ -428,6 +428,34 @@ class ProgramManager:
             return True
 
         return False
+
+    def set_score(self, name: str, score: float | None) -> None:
+        """Set or invalidate a program score without changing frontier membership."""
+        current_branch = self._git_current_branch()
+        target_branch = f"{self.BRANCH_PREFIX}{name}"
+        if current_branch != target_branch:
+            self._git_checkout(target_branch)
+        config = self._read_config()
+        metadata = dict(config.metadata)
+        if score is None:
+            metadata.pop("score", None)
+        else:
+            metadata["score"] = float(score)
+        updated = config.model_copy(update={"metadata": metadata})
+        if updated != config:
+            self._write_config(updated)
+            self._git_add(self.PROGRAM_FILE)
+            label = "Invalidate score" if score is None else f"Update score: {score:.4f}"
+            self._git_commit(label)
+        if current_branch != target_branch:
+            self._git_checkout(current_branch)
+
+    def invalidate_scores(self, names: Iterable[str]) -> None:
+        """Invalidate evaluator-dependent derived scores after an epoch change."""
+        programs = set(self.list_programs())
+        for name in dict.fromkeys(names):
+            if name in programs:
+                self.set_score(name, None)
 
     def commit(self, message: str | None = None) -> bool:
         """

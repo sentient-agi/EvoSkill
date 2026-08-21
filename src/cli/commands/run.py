@@ -338,6 +338,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
     from src.cli.shared import load_and_split, make_scorer
     from src.loop import LoopAgents, LoopConfig, SelfImprovingLoop
     from src.registry import ProgramManager, ProgramManagerError
+    from src.evaluation.rqgm_runtime import build_controller_from_project_config
     from src.schemas import (
         AgentResponse,
         PromptGeneratorResponse,
@@ -484,6 +485,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
         ),
     )
     manager = ProgramManager(cwd=cfg.project_root)
+    evaluator_controller = build_controller_from_project_config(cfg)
 
     loop_config = LoopConfig(
         max_iterations=cfg.evolution.iterations,
@@ -505,6 +507,7 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
             scorer=make_scorer(cfg),
             on_event=display.on_event,
             task_constraints=cfg.task_constraints,
+            evaluator_controller=evaluator_controller,
         )
         result = asyncio.run(loop.run())
     except ProgramManagerError as exc:
