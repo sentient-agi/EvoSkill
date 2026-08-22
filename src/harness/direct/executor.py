@@ -3414,6 +3414,31 @@ async def execute_query(options: dict[str, Any], query: str, *, agent_name: str 
         messages = list(initial_messages)
 
     extra_body: dict[str, Any] = {}
+    # Explicitly request usage accounting. MEASURED 2026-08-22, and the result was
+    # NOT what this was added for: an A/B probe against the live endpoint (org key,
+    # DSV4F pinned to deepseek) returned an identical usage block with and without
+    # the flag -- `cost`, `cost_details` and `prompt_tokens_details` were present
+    # both times. So this is belt-and-braces, not a fix: OpenRouter currently
+    # returns the accounting by default, and the flag is the documented way to keep
+    # getting it if that default ever changes. Do not delete it on the grounds that
+    # it changes nothing today; that is precisely the silent regression it guards.
+    #
+    # The corollary matters more than the flag. Because `usage.cost` is already
+    # populated, the turn-cost path below has always been taking the PROVIDER'S OWN
+    # metered figure, not the `estimate_cost()` price table -- so this executor's
+    # per-record costs are trustworthy, and they reconcile: summing
+    # `trace.total_cost_usd` over the f2 buckets gives $24.68 for the 1,080
+    # evolution episodes against an account-metered $25.04 (1.4%), and $46.71 over
+    # all five legs against a final $47.21 (1.1%). The blanket "all per-leg costs
+    # are unreliable" retraction belongs to tau3's cost_tracking.py (#158, no cache
+    # tier, 2.9x-33x) and to the SSB v2 stale-price-table case (K6). It does not
+    # apply here, and carrying it across that boundary was an error.
+    #
+    # OpenRouter-only: vendor extension, other bases reject unknown top-level keys.
+    # Not in the cache key (sha256("skills:..|prompt:.."), src/cache/run_cache.py),
+    # so enabling it replays existing entries unchanged rather than invalidating.
+    if "openrouter" in (base_url or "").lower():
+        extra_body["usage"] = {"include": True}
     enable_thinking = options.get("enable_thinking", False)
     thinking_effort = options.get("thinking_effort", "")
     if "deepseek" in model.lower():
@@ -4268,6 +4293,15 @@ async def execute_query(options: dict[str, Any], query: str, *, agent_name: str 
         "usage": {
             "prompt_tokens": total_prompt_tokens,
             "completion_tokens": total_completion_tokens,
+            # Persisted so a cost can be RECOMPUTED from the record afterwards at
+            # whatever the correct rates were. Without the hit/miss split a record
+            # supports only a bound, and the bound is useless: measured on the ao1
+            # epoch-1 bucket (629.6M prompt / 14.6M completion over 360 episodes),
+            # pricing all input as cache-hit gives $5.84 and all as cache-miss
+            # $92.23 -- 16x apart. `LAST_RUN_STATS` already had this number, but it
+            # is a process global the caller reads once; it never reached the cache
+            # record, which is why the records on disk cannot be repriced.
+            "cached_tokens": total_cached_tokens,
         },
         "total_cost_usd": total_cost_usd,
         "model": model,

@@ -25,3 +25,8 @@ scratch/
 # third_party/README.md for provenance + setup command to reproduce).
 third_party/*/
 !third_party/README.md
+
+# Dated editing backups (README.md.bak-0821a, executor.py.bak-0822, ...). Kept on
+# disk on purpose while a change is in flight; must never reach a commit. Nothing
+# tracked has ever matched this pattern — verified before it was added.
+*.bak-*
