@@ -81,7 +81,7 @@ billed by the seat and not by the call.
       <td>Multi-turn, simulated customer. Graded on final database state; one zeroed component zeroes the episode.</td>
     </tr>
     <tr>
-      <td><a href="https://github.com/RUCKBReasoning/SpreadsheetBench">SpreadsheetBench v2</a></td>
+      <td><a href="https://github.com/RUCKBReasoning/SpreadsheetBench-2">SpreadsheetBench v2</a></td>
       <td>✅</td>
       <td>All-or-nothing cell comparison over the ranges each task names. Needs the Docker images below.</td>
     </tr>
