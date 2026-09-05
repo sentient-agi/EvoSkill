@@ -530,3 +530,44 @@ class TestScoreAnswer:
     ])
     def test_parametrized_score_answer(self, gt, pred, tol, expected):
         assert score_answer(gt, pred, tolerance=tol) == expected
+
+
+# ===========================================================================
+# Locale and International Number Scoring (#55)
+# ===========================================================================
+
+class TestLocaleNumberScoring:
+    def test_decimal_comma_extraction(self):
+        # Ensure '4,2' is not rescaled 10x to 42.0 (#55)
+        numbers = extract_numbers_with_context("4,2")
+        assert len(numbers) == 1
+        assert numbers[0][0] == 4.2
+
+    def test_space_thousands_separator(self):
+        # Ensure '2 602' parses as 2602.0
+        numbers = extract_numbers_with_context("2 602")
+        assert len(numbers) == 1
+        assert numbers[0][0] == 2602.0
+
+    def test_european_format_with_dot_and_comma(self):
+        # '1.234,56' -> 1234.56
+        numbers = extract_numbers_with_context("1.234,56")
+        assert len(numbers) == 1
+        assert numbers[0][0] == 1234.56
+
+    def test_multilingual_scale_words(self):
+        assert detect_unit_in_context("4.2 миллиарда") == ("billion", 1e9)
+        assert detect_unit_in_context("543 миллиона") == ("million", 1e6)
+        assert detect_unit_in_context("100 tausend") == ("thousand", 1e3)
+
+    @pytest.mark.parametrize("gt,pred,expected", [
+        ("4.2", "4,2", 1.0),
+        ("2602", "2 602", 1.0),
+        ("1234.56", "1 234,56", 1.0),
+        ("1234.56", "1,234.56", 1.0),
+        ("4.2 billion", "4.2 миллиарда", 1.0),
+        ("-4.2", "-4,2", 1.0),
+    ])
+    def test_score_answer_locale_formats(self, gt, pred, expected):
+        assert score_answer(gt, pred, tolerance=0.01) == expected
+
