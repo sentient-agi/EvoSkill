@@ -176,6 +176,28 @@ class TestSkillProposerResponse:
         with pytest.raises(ValidationError):
             SkillProposerResponse(justification="reason")  # type: ignore[call-arg]
 
+    def test_target_skill_path_traversal_rejected(self):
+        from src.schemas import SkillProposerResponse
+
+        with pytest.raises(ValidationError, match="path traversal"):
+            SkillProposerResponse(
+                action="edit",
+                target_skill="../../etc/cron.d/malicious",
+                proposed_skill="malicious skill",
+                justification="testing path traversal rejection",
+            )
+
+    def test_target_skill_invalid_format_rejected(self):
+        from src.schemas import SkillProposerResponse
+
+        with pytest.raises(ValidationError, match="contain no path traversal characters"):
+            SkillProposerResponse(
+                action="edit",
+                target_skill="Invalid Name With Spaces",
+                proposed_skill="invalid skill",
+                justification="testing invalid naming",
+            )
+
 
 # ===========================================================================
 # PromptProposerResponse
