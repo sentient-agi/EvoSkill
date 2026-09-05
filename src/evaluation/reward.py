@@ -32,6 +32,8 @@ def extract_numbers_with_context(text: str) -> list[tuple[float, str, bool, bool
     """
     Extract numbers with surrounding context for unit detection.
 
+    Supports both English (1,234.56) and international/European (1.234,56 / 4,2 / 2 602) formats.
+
     Returns list of tuples: (number_value, context_string, has_percent, is_negative)
 
     Raises:
@@ -43,36 +45,51 @@ def extract_numbers_with_context(text: str) -> list[tuple[float, str, bool, bool
     # Normalize text first
     text = normalize_text(text)
 
-    # Remove commas from numbers
-    text_no_commas = text.replace(',', '')
+    # Pattern matches potential numbers: optional minus, digits with optional spaces/commas/dots, optional percent
+    pattern = r'-?\d+(?:[\s.,]\d+)*%?'
 
     numbers_with_context = []
 
-    # Match negative numbers, decimals, and percentages
-    # Pattern: optional minus, digits, optional decimal part, optional %
-    pattern = r'-?\d+\.?\d*%?'
-
-    for match in re.finditer(pattern, text_no_commas):
-        matched_text = match.group()
+    for match in re.finditer(pattern, text):
+        matched_text = match.group().strip()
         if not matched_text or matched_text == '-':
             continue
 
+        # Handle space-separated thousands (e.g. '2 602' or '1 234 567')
+        clean_num = re.sub(r'(\d)\s+(\d{3})(?!\d)', r'\1\2', matched_text)
+
         # Check for percentage
-        has_percent = matched_text.endswith('%')
-        num_text = matched_text.rstrip('%')
+        has_percent = clean_num.endswith('%')
+        num_text = clean_num.rstrip('%').strip()
 
         # Check for negative
         is_negative = num_text.startswith('-')
+
+        # Handle locale-aware decimal vs thousands separators
+        if '.' in num_text and ',' in num_text:
+            if num_text.rfind('.') < num_text.rfind(','):
+                # European style: 1.234,56 -> 1234.56
+                num_text = num_text.replace('.', '').replace(',', '.')
+            else:
+                # English style: 1,234.56 -> 1234.56
+                num_text = num_text.replace(',', '')
+        elif ',' in num_text:
+            # Comma only (e.g. '4,2' vs '1,000,000')
+            # If comma is followed by 1 or 2 digits at end or not a 3-digit multiple, treat as decimal comma
+            if re.search(r',\d{1,2}$', num_text) and not re.search(r'\d,\d{3},', num_text):
+                num_text = num_text.replace(',', '.')
+            else:
+                num_text = num_text.replace(',', '')
 
         try:
             num = float(num_text)
         except ValueError as e:
             raise ValueError(f"Failed to parse number from '{matched_text}': {e}") from e
 
-        # Get context (20 chars before and after)
+        # Get context (20 chars before and after from original text)
         start = max(0, match.start() - 20)
-        end = min(len(text_no_commas), match.end() + 20)
-        context = text_no_commas[start:end].lower()
+        end = min(len(text), match.end() + 20)
+        context = text[start:end].lower()
 
         numbers_with_context.append((num, context, has_percent, is_negative))
 
@@ -87,24 +104,24 @@ def detect_unit_in_context(context: str) -> tuple[str | None, float]:
         unit_name: 'trillion', 'billion', 'million', 'thousand', or None
         multiplier: corresponding multiplier or 1.0
 
-    Supports plural forms: millions, billions, trillions, thousands
+    Supports plural forms: millions, billions, trillions, thousands, and common multilingual equivalents.
     """
     context_lower = context.lower()
 
     # Check for trillion/trillions
-    if re.search(r'\btrillions?\b', context_lower):
+    if re.search(r'\b(?:trillions?|триллион\w*|billionen?)\b', context_lower):
         return ('trillion', 1e12)
 
     # Check for billion/billions
-    if re.search(r'\bbillions?\b', context_lower) or re.search(r'\bb\b', context_lower):
+    if re.search(r'\b(?:billions?|миллиард\w*|milliarden?)\b', context_lower) or re.search(r'\bb\b', context_lower):
         return ('billion', 1e9)
 
     # Check for million/millions
-    if re.search(r'\bmillions?\b', context_lower) or re.search(r'\bm\b', context_lower):
+    if re.search(r'\b(?:millions?|миллион\w*|millionen?)\b', context_lower) or re.search(r'\bm\b', context_lower):
         return ('million', 1e6)
 
     # Check for thousand/thousands
-    if re.search(r'\bthousands?\b', context_lower) or re.search(r'\bk\b', context_lower):
+    if re.search(r'\b(?:thousands?|тысяч\w*|tausend\w*)\b', context_lower) or re.search(r'\bk\b', context_lower):
         return ('thousand', 1e3)
 
     return (None, 1.0)
