@@ -16,15 +16,10 @@ def get_project_root() -> str:
 SKILL_GENERATOR_TOOLS = [
     "Read",
     "Write",
-    "Bash",
     "Glob",
     "Grep",
     "Edit",
-    "WebFetch",
-    "WebSearch",
     "TodoWrite",
-    "BashOutput",
-    "Skill",
 ]
 
 

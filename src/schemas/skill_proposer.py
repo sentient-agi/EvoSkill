@@ -29,4 +29,10 @@ class SkillProposerResponse(BaseModel):
     def validate_edit_target(self) -> "SkillProposerResponse":
         if self.action == "edit" and not self.target_skill:
             raise ValueError("target_skill is required when action='edit'")
+        if self.target_skill:
+            import re
+            if not re.match(r"^[a-z0-9][a-z0-9_-]{0,63}$", self.target_skill):
+                raise ValueError(
+                    f"target_skill '{self.target_skill}' is invalid: must match ^[a-z0-9][a-z0-9_-]{{0,63}}$ and contain no path traversal characters"
+                )
         return self
