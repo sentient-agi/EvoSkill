@@ -414,6 +414,11 @@ class ProgramManager:
         # Now check frontier membership
         scored = self.get_frontier_with_scores()
 
+        # If no scored programs yet, add unconditionally
+        if not scored:
+            self.mark_frontier(name)
+            return True
+
         # If frontier has room, add unconditionally
         if len(scored) < max_size:
             self.mark_frontier(name)
