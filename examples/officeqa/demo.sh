@@ -38,7 +38,6 @@ fi
 # Clean any leftover state from previous runs
 rm -rf .git .cache .evoskill/state.json .evoskill/feedback_history.md .evoskill/loop_checkpoint.json .evoskill/reports
 rm -f .claude/program.yaml
-rm -rf .claude/skills
 # Backup seed skills on first run, restore on subsequent runs
 if [ ! -d ".seed-skills" ]; then
     cp -R .claude/skills .seed-skills
