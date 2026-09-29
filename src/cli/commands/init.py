@@ -614,7 +614,7 @@ def init_cmd():
             'harbor_tasks_root': harbor_tasks_root,
         },
     )
-    (evoskill_dir / 'task.md').write_text(TASK_MD_TEMPLATE)
+    (evoskill_dir / 'task.md').write_text(TASK_MD_TEMPLATE, encoding='utf-8')
 
     # Auto-download Harbor dataset
     harbor_downloaded = False

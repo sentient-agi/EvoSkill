@@ -18,6 +18,8 @@ Key differences from Claude and OpenCode:
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -27,6 +29,37 @@ from ..utils import resolve_project_root, resolve_data_dirs
 # Default model when none is specified. Codex-mini-latest is optimized
 # for use with the Codex CLI and is the cheapest option.
 DEFAULT_CODEX_MODEL = "gpt-5.1-codex-mini"
+
+
+JSON_SCHEMA_ENV_VAR = "EVOSKILL_CODEX_JSON_SCHEMA"
+_DISABLED_VALUES = {"0", "false", "no", "off"}
+
+
+def json_schema_enabled() -> bool:
+    """Return whether the Codex CLI should receive a native output schema.
+
+    Some OpenAI-compatible endpoints reject the Responses `text.format`
+    (json_schema) field with, for example:
+
+        <400> InternalError.Algo.InvalidParameter:
+        This text.format type is unavailable now
+
+    Point EVOSKILL_CODEX_JSON_SCHEMA=0 at those endpoints. EvoSkill then
+    states the schema in the prompt and parses the reply leniently.
+    """
+    raw = os.environ.get(JSON_SCHEMA_ENV_VAR, "").strip().strip('"').strip("'").lower()
+    return raw not in _DISABLED_VALUES
+
+
+def _json_output_instructions(schema: dict[str, Any]) -> str:
+    """Prompt-side replacement for native structured output."""
+    return (
+        "\n\nReturn your final answer as a single JSON object that validates "
+        "against this JSON Schema:\n"
+        f"{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+        "Output the JSON object only: no prose before or after it, and no "
+        "markdown code fences."
+    )
 
 
 def _make_openai_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -93,6 +126,11 @@ def build_codex_options(
             f"{dirs_note}"
         )
 
+    strict_schema = _make_openai_strict_schema(schema)
+    use_native_schema = json_schema_enabled()
+    if not use_native_schema:
+        system_with_dirs += _json_output_instructions(strict_schema)
+
     return {
         # The system prompt — sent to the Codex thread
         "system": system_with_dirs,
@@ -103,7 +141,7 @@ def build_codex_options(
         # OpenAI's Responses API requires:
         #   - "additionalProperties": false
         #   - "required" must list ALL property keys (no optional fields allowed)
-        "output_schema": _make_openai_strict_schema(schema),
+        "output_schema": strict_schema if use_native_schema else None,
 
         # Model name — passed to Codex thread configuration
         "model": model or DEFAULT_CODEX_MODEL,

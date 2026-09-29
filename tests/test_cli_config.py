@@ -91,6 +91,39 @@ def test_load_config_reads_timeout_and_retry_settings(tmp_path: Path) -> None:
     assert cfg.harness.max_retries == 1
 
 
+def test_load_config_model_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.cli.config import load_config
+
+    project_root = _write_project(
+        tmp_path,
+        '[harness]\nname = "codex"\nmodel = "gpt-5.1-codex-mini"\n'
+        '\n'
+        '[harbor]\ninner_model = "gpt-5.1-codex-mini"\n',
+    )
+    monkeypatch.setenv("EVOSKILL_MODEL", "deepseek-v4.1-flash")
+
+    cfg = load_config(project_root)
+
+    assert cfg.harness.model == "deepseek-v4.1-flash"
+    assert cfg.harbor.inner_model == "deepseek-v4.1-flash"
+
+
+def test_load_config_blank_model_env_override_is_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.cli.config import load_config
+
+    project_root = _write_project(
+        tmp_path,
+        '[harness]\nname = "codex"\nmodel = "gpt-5.1-codex-mini"\n',
+    )
+    monkeypatch.setenv("EVOSKILL_MODEL", "   ")
+
+    cfg = load_config(project_root)
+
+    assert cfg.harness.model == "gpt-5.1-codex-mini"
+
+
 def test_dataset_path_resolves_relative_to_project_root(tmp_path: Path) -> None:
     from src.cli.config import load_config
 

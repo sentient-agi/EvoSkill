@@ -203,9 +203,14 @@ export OPENROUTER_API_KEY=your-key-here
 
 # Fireworks AI (OpenCode / OpenHands harnesses, LLM scorer)
 export FIREWORKS_API_KEY=your-key-here
+
+# Optional: force the model used by every harness (also read from .env)
+export EVOSKILL_MODEL=your-model-id
 ```
 
 OpenRouter-backed evolution runs also accept `LLM_API_KEY`, but `OPENROUTER_API_KEY` is the preferred env var.
+`EVOSKILL_MODEL` overrides `[harness].model` and `[harbor].inner_model`; a plain `MODEL` entry in `.env` is mapped onto it.
+`EVOSKILL_HARBOR_APT_MIRROR` (a host such as `mirrors.tuna.tsinghua.edu.cn`) rewrites the Debian sources inside Harbor task images before they are built, for networks where `deb.debian.org` answers 403.
 
 ---
 

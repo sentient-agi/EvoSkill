@@ -39,7 +39,7 @@ def ensure_skill_frontmatter(
 
     skill_name = skill_path.parent.name
     normalized_description = _normalize_skill_description(description)
-    original_text = skill_path.read_text()
+    original_text = skill_path.read_text(encoding="utf-8")
     body = original_text
     metadata: dict[str, str] = {}
 
@@ -73,7 +73,7 @@ def ensure_skill_frontmatter(
         return False
 
     frontmatter = yaml.safe_dump(metadata, sort_keys=False).strip()
-    skill_path.write_text(f"---\n{frontmatter}\n---\n\n{body.lstrip()}")
+    skill_path.write_text(f"---\n{frontmatter}\n---\n\n{body.lstrip()}", encoding="utf-8")
     return True
 
 

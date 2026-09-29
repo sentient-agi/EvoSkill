@@ -38,6 +38,53 @@ from src.schemas import AgentResponse
 logger = logging.getLogger(__name__)
 
 
+_APT_MIRROR_ENV = "EVOSKILL_HARBOR_APT_MIRROR"
+
+
+def ensure_apt_mirror(task_dir: Path) -> bool:
+    """Point a Harbor task image at a reachable Debian mirror.
+
+    deb.debian.org answers 403 from some networks, which kills every task image at
+    its first `apt-get update` before the inner agent ever runs. Set
+    EVOSKILL_HARBOR_APT_MIRROR (e.g. mirrors.tuna.tsinghua.edu.cn) to prepend a
+    sources rewrite to the task's Dockerfile. No-op when unset, idempotent
+    across runs.
+    """
+    mirror = os.environ.get(_APT_MIRROR_ENV, "").strip().rstrip("/")
+    mirror = mirror.split("://", 1)[-1]
+    if not mirror:
+        return False
+    dockerfile = Path(task_dir) / "environment" / "Dockerfile"
+    if not dockerfile.is_file():
+        return False
+    try:
+        text = dockerfile.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning("harbor apt mirror: cannot read %s: %s", dockerfile, exc)
+        return False
+    if mirror in text:
+        return False
+    lines = text.splitlines(keepends=True)
+    insert_at = next(
+        (i for i, line in enumerate(lines) if line.lstrip().upper().startswith("RUN ")),
+        None,
+    )
+    if insert_at is None:
+        return False
+    lines.insert(
+        insert_at,
+        "RUN sed -i -E 's|https?://deb\\.debian\\.org|https://" + mirror + "|g' "
+        "/etc/apt/sources.list.d/debian.sources\n",
+    )
+    try:
+        dockerfile.write_text("".join(lines), encoding="utf-8")
+    except OSError as exc:
+        logger.warning("harbor apt mirror: cannot write %s: %s", dockerfile, exc)
+        return False
+    logger.info("harbor apt mirror: %s -> %s", dockerfile, mirror)
+    return True
+
+
 class HarborRunError(RuntimeError):
     pass
 
@@ -99,6 +146,7 @@ class HarborAgent(Agent[AgentResponse]):
             return self._error_trace(
                 query, started_ms, f"no task.toml in {task_dir}"
             )
+        ensure_apt_mirror(task_dir)
 
         job_name = f"evoskill-{uuid.uuid4().hex[:12]}"
         job_dir = self.jobs_dir / job_name
@@ -229,6 +277,16 @@ class HarborAgent(Agent[AgentResponse]):
         env = dict(os.environ)
         # Pass the current working dir as context but don't leak project secrets.
         # The inner agent (claude-code, etc.) needs its own provider key in env.
+        # Force UTF-8 in the harbor subprocess. On a legacy Windows console (cp936/GBK), harbor's
+        # rich console renders a bullet (U+2022) while building the 'adhoc ... codex ... <model>'
+        # header through rich._win32_console.LegacyWindowsTerm and dies with
+        # "UnicodeEncodeError: 'gbk' codec can't encode character" before the inner agent gets a
+        # single turn (Turns: 0, "no reward found under", scored as reward 0.0). Decoding harbor's
+        # captured stdout/stderr as UTF-8 is not enough; the child must also be told to encode that
+        # way, so export the variables here rather than as advisory guidance.
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONLEGACYWINDOWSSTDIO"] = "0"
         return env
 
     # -------------------------------------------------------------- reward read

@@ -550,8 +550,11 @@ class ProgramManager:
             self._run_git(["stash", "drop"], check=False)
 
     def _git_checkout_new(self, branch: str) -> None:
-        """Create and checkout a new branch."""
-        self._run_git(["checkout", "-b", branch])
+        """Create and checkout a new branch, resetting a stale one."""
+        # -B keeps reruns working: a run that aborts after creating a program
+        # branch leaves it behind, and plain -b would then fail with exit 128.
+        # The branch is always rebuilt from the parent that was just checked out.
+        self._run_git(["checkout", "-B", branch])
 
     def _git_current_branch(self) -> str:
         """Get current branch name."""

@@ -1,8 +1,58 @@
 """EvoSkill CLI entry point."""
 
+import os
 from importlib import import_module
+from pathlib import Path
 
 import click
+
+# Generic names commonly used in provider .env files, mapped onto the names
+# the OpenAI-compatible harnesses expect. Real environment variables win.
+_ENV_ALIASES = {
+    "API_KEY": "OPENAI_API_KEY",
+    "BASE_URL": "OPENAI_BASE_URL",
+    "MODEL": "EVOSKILL_MODEL",
+}
+
+
+def _find_dotenv() -> Path | None:
+    """Return the closest .env between cwd and the project root, if any."""
+    current = Path.cwd()
+    for parent in [current, *current.parents]:
+        candidate = parent / ".env"
+        if candidate.is_file():
+            return candidate
+        if (parent / ".evoskill").is_dir():
+            break
+    return None
+
+
+def load_dotenv(path: Path | None = None) -> None:
+    """Load KEY=VALUE pairs from .env into os.environ without overriding."""
+    dotenv_path = path or _find_dotenv()
+    if dotenv_path is None:
+        return
+    try:
+        lines = dotenv_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
+        if not key:
+            continue
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+        alias = _ENV_ALIASES.get(key.upper())
+        if alias:
+            os.environ.setdefault(alias, value)
+
 
 _COMMAND_SPECS = {
     "init": ("src.cli.commands.init", "init_cmd", "Initialize a new EvoSkill project in the current directory."),
@@ -38,3 +88,4 @@ class LazyGroup(click.Group):
 @click.group(cls=LazyGroup)
 def cli():
     """EvoSkill CLI."""
+    load_dotenv()

@@ -383,6 +383,13 @@ def run_cmd(continue_loop: bool, verbose: bool, quiet: bool, config_path: Path |
         console.print("  [yellow]Warning:[/yellow] OpenHands does not support native structured output.")
         console.print("  Using fallback JSON extraction which may be less reliable.\n")
 
+    if cfg.harness.name == "codex":
+        from src.harness.codex.options import json_schema_enabled
+
+        if not json_schema_enabled():
+            console.print("  [yellow]Warning:[/yellow] Codex native structured output is disabled.")
+            console.print("  Using fallback JSON extraction which may be less reliable.\n")
+
     # Map harness to sdk
     sdk = cfg.harness.name  # "claude" or "opencode"
     set_sdk(sdk)

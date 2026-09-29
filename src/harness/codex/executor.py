@@ -26,12 +26,113 @@ How Codex differs from Claude and OpenCode:
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Callable, Type
 
 from pydantic import BaseModel, ValidationError
 
 from ..provider_auth import ensure_provider_api_key
+
+
+_CODEX_PATH_ENV_VARS = ("EVOSKILL_CODEX_PATH", "CODEX_PATH")
+_CODEX_STREAM_LIMIT_BYTES = 8 * 1024 * 1024
+
+
+@contextmanager
+def _codex_stream_limit(limit: int = _CODEX_STREAM_LIMIT_BYTES):
+    """Raise the asyncio pipe limit used for the Codex child process.
+
+    The Codex SDK reads its child's stdout with `StreamReader.readline()`, which
+    aborts once a single line exceeds the asyncio default of 64 KiB (ValueError:
+    "Separator is not found, and chunk exceed the limit"). Codex emits one JSON
+    event per line and large tool payloads make individual lines long, so inject a
+    larger `limit` into the SDK's `create_subprocess_exec` call for the turn.
+    """
+    original = asyncio.create_subprocess_exec
+
+    async def patched(*args, **kwargs):
+        if kwargs.get("stdout") is asyncio.subprocess.PIPE:
+            kwargs.setdefault("limit", limit)
+        return await original(*args, **kwargs)
+
+    asyncio.create_subprocess_exec = patched
+    try:
+        yield
+    finally:
+        # Only unwind our own wrapper so overlapping turns cannot restore a stale
+        # version of the function.
+        if asyncio.create_subprocess_exec is patched:
+            asyncio.create_subprocess_exec = original
+
+
+def _resolve_codex_path_override() -> str | None:
+    """Return an explicit Codex CLI path from the environment, if configured.
+
+    The Python SDK bundles no binary and otherwise falls back to the PATH of
+    the current process, which on Windows usually only contains the
+    IDE-installed CLI. Set EVOSKILL_CODEX_PATH (or CODEX_PATH) to point at a
+    stable codex executable.
+    """
+    for var in _CODEX_PATH_ENV_VARS:
+        raw = os.environ.get(var, "").strip().strip('"').strip("'")
+        if not raw:
+            continue
+        path = Path(raw).expanduser()
+        if not path.is_file():
+            raise RuntimeError(
+                f"{var} points at a missing Codex CLI: {path}. "
+                "Install the Codex CLI or correct the path."
+            )
+        return str(path)
+    return None
+
+
+def _extract_json_candidate(text: str) -> str | None:
+    """Best-effort extraction of a JSON object embedded in model text.
+
+    Only needed when native structured output is unavailable, in which case
+    the reply may arrive inside markdown fences or surrounded by prose.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return None
+
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end > start:
+        return stripped[start:end + 1]
+    return None
+
+
+def _load_json_response(text: str) -> tuple[Any, str | None]:
+    """Parse a Codex reply as JSON, tolerating fences and surrounding prose."""
+    candidates = [text]
+    extracted = _extract_json_candidate(text)
+    if extracted and extracted != text.strip():
+        candidates.append(extracted)
+
+    last_error = "empty response"
+    for candidate in candidates:
+        try:
+            return json.loads(candidate), None
+        except json.JSONDecodeError as e:
+            last_error = str(e)
+    return None, f"JSONDecodeError: {last_error}"
 
 
 async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
@@ -80,7 +181,12 @@ async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
     # Create a new Codex instance and start a thread.
     # Unlike OpenCode (which manages a persistent HTTP server), Codex
     # handles its own process lifecycle internally.
-    codex = Codex({"api_key": api_key})
+    codex_options: dict[str, Any] = {"api_key": api_key}
+    codex_path = _resolve_codex_path_override()
+    if codex_path:
+        codex_options["codex_path_override"] = codex_path
+
+    codex = Codex(codex_options)
     thread_opts: dict[str, Any] = {
         "working_directory": options.get("working_directory", "."),
     }
@@ -95,7 +201,7 @@ async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
     # to match our Pydantic schema (e.g., AgentResponse, SkillProposerResponse).
     # This is equivalent to Claude's output_format and OpenCode's format parameter.
     run_opts: dict[str, Any] = {}
-    if "output_schema" in options:
+    if options.get("output_schema"):
         run_opts["output_schema"] = options["output_schema"]
 
     # Run the query. The Codex SDK returns a turn object with:
@@ -105,7 +211,8 @@ async def execute_query(options: dict[str, Any], query: str) -> list[Any]:
     #   .items — tool call results (file reads, bash executions, etc.)
     system_prompt = str(options.get("system") or "").strip()
     prompt = f"{system_prompt}\n\n{query}" if system_prompt else query
-    turn = await thread.run(prompt, run_opts)
+    with _codex_stream_limit():
+        turn = await thread.run(prompt, run_opts)
 
     # Wrap in list for consistency with other executors.
     # Agent.run() always receives list[Any] and passes it to parse_response().
@@ -155,22 +262,19 @@ def parse_response(
     # This is the main difference from Claude/OpenCode: they get structured
     # output as a pre-parsed dict, while Codex gives us a JSON string.
     if result_text:
-        try:
-            # Parse the JSON string into a dict
-            parsed = json.loads(result_text)
+        parsed, json_error = _load_json_response(result_text)
+        if json_error is not None:
+            parse_error = json_error
+        else:
             raw_structured_output = parsed
-
             # Validate against the Pydantic model (e.g., AgentResponse)
             # This is the same validation step that Claude and OpenCode do.
-            output = response_model.model_validate(parsed)
-        except json.JSONDecodeError as e:
-            # The model returned non-JSON text (shouldn't happen with output_schema,
-            # but can happen if the schema wasn't enforced or the model errored)
-            parse_error = f"JSONDecodeError: {e}"
-        except (ValidationError, TypeError) as e:
-            # Valid JSON but doesn't match the expected schema
-            # (e.g., missing required fields, wrong types)
-            parse_error = f"{type(e).__name__}: {str(e)}"
+            try:
+                output = response_model.model_validate(parsed)
+            except (ValidationError, TypeError) as e:
+                # Valid JSON but doesn't match the expected schema
+                # (e.g., missing required fields, wrong types)
+                parse_error = f"{type(e).__name__}: {str(e)}"
     else:
         # No response at all — the model didn't produce output.
         # Could be a timeout, context limit, or SDK error.

@@ -103,7 +103,7 @@ class RunReport:
             skill_path = self.project_root / '.claude' / 'skills' / sk.name / 'SKILL.md'
             if skill_path.exists():
                 lines.append('```markdown')
-                lines.append(skill_path.read_text().strip())
+                lines.append(skill_path.read_text(encoding='utf-8').strip())
                 lines.append('```')
             lines.append('')
 

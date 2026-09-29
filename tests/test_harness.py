@@ -887,6 +887,36 @@ class TestCodexOptions:
         assert result["system"] == "clean prompt"
         assert result["data_dirs"] == []
 
+    def test_prompt_json_mode_omits_native_schema(self, tmp_path, monkeypatch):
+        from src.harness.codex.options import build_codex_options
+
+        monkeypatch.setenv("EVOSKILL_CODEX_JSON_SCHEMA", "0")
+
+        result = build_codex_options(
+            system="You are helpful.",
+            schema={"type": "object", "properties": {"final_answer": {"type": "string"}}},
+            tools=[],
+            project_root=tmp_path,
+        )
+
+        assert result["output_schema"] is None
+        assert "final_answer" in result["system"]
+        assert "JSON Schema" in result["system"]
+
+    def test_prompt_json_mode_off_by_default(self, tmp_path, monkeypatch):
+        from src.harness.codex.options import build_codex_options
+
+        monkeypatch.delenv("EVOSKILL_CODEX_JSON_SCHEMA", raising=False)
+
+        result = build_codex_options(
+            system="s",
+            schema={"type": "object"},
+            tools=[],
+            project_root=tmp_path,
+        )
+
+        assert result["output_schema"]["type"] == "object"
+
 
 # ===========================================================================
 # TestCodexParseResponse — parse_response()
@@ -937,6 +967,30 @@ class TestCodexParseResponse:
         assert fields["output"] is None
         assert "JSONDecodeError" in fields["parse_error"]
         assert fields["is_error"] is True
+
+    def test_parses_json_inside_markdown_fence(self):
+        from src.harness.codex.executor import parse_response
+
+        payload = _json.dumps({"final_answer": "42", "reasoning": "math"})
+        fenced = f"Here you go:\n```json\n{payload}\n```"
+        turn = _make_codex_turn(final_response=fenced)
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["output"] is not None
+        assert fields["output"].final_answer == "42"
+        assert fields["parse_error"] is None
+        assert fields["is_error"] is False
+
+    def test_parses_json_surrounded_by_prose(self):
+        from src.harness.codex.executor import parse_response
+
+        payload = _json.dumps({"final_answer": "7", "reasoning": "r"})
+        turn = _make_codex_turn(final_response=f"The answer is {payload} as requested.")
+        fields = parse_response([turn], AgentResponse, _make_codex_get_options())
+
+        assert fields["output"] is not None
+        assert fields["output"].final_answer == "7"
+        assert fields["parse_error"] is None
 
     def test_handles_empty_final_response(self):
         from src.harness.codex.executor import parse_response
@@ -1440,3 +1494,61 @@ class TestGooseParseResponse:
         assert fields["output"].final_answer == "7"
         assert fields["parse_error"] is None
         assert fields["raw_structured_output"] == {"final_answer": "7", "reasoning": "logic"}
+
+
+class TestCodexStreamLimit:
+    """Codex emits one JSON event per stdout line, and some lines carry payloads
+    larger than the 64 KiB asyncio StreamReader default."""
+
+    def test_patch_is_scoped(self):
+        from src.harness.codex.executor import _codex_stream_limit
+
+        original = asyncio.create_subprocess_exec
+        with _codex_stream_limit():
+            assert asyncio.create_subprocess_exec is not original
+        assert asyncio.create_subprocess_exec is original
+
+    def test_default_limit_would_raise(self):
+        import sys
+
+        async def read_long_line():
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                "print('x' * 200000)",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                return len(await proc.stdout.readline())
+            finally:
+                proc.kill()
+                await proc.wait()
+
+        with pytest.raises(ValueError):
+            asyncio.run(read_long_line())
+
+    def test_raised_limit_reads_long_line(self):
+        import sys
+
+        from src.harness.codex.executor import _codex_stream_limit
+
+        async def read_long_line():
+            with _codex_stream_limit():
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-c",
+                    "print('x' * 200000)",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    line = await proc.stdout.readline()
+                    # Windows line endings add 2 bytes; what matters is that the
+                    # whole line came through instead of tripping the stream limit.
+                    return len(line.strip())
+                finally:
+                    proc.kill()
+                    await proc.wait()
+
+        assert asyncio.run(read_long_line()) == 200000

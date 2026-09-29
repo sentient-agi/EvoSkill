@@ -12,6 +12,10 @@
 
 FROM python:3.12-slim
 
+# Use a domestic Debian mirror: deb.debian.org is unreachable on some networks.
+RUN sed -i -E 's|https?://deb\.debian\.org|https://mirrors.tuna.tsinghua.edu.cn|g' \
+        /etc/apt/sources.list.d/debian.sources
+
 # System deps
 ARG NODE_MAJOR=20
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -69,11 +73,13 @@ RUN pip install --no-cache-dir \
 RUN useradd -m -s /bin/bash evoskill \
     && mkdir -p /workspace && chown evoskill:evoskill /workspace
 
-# Git config for bundle operations
-RUN git config --global user.email "evoskill@sandbox" \
-    && git config --global user.name "EvoSkill Sandbox" \
-    && git config --global init.defaultBranch main
-
 WORKDIR /workspace
 USER evoskill
 ENV PATH="/home/evoskill/.local/bin:${PATH}"
+
+# Git config for the runtime user: bundle operations plus the bind-mounted
+# /workspace (host-owned, so git would otherwise reject it as dubious).
+RUN git config --global user.email "evoskill@sandbox" \
+    && git config --global user.name "EvoSkill Sandbox" \
+    && git config --global init.defaultBranch main \
+    && git config --global --add safe.directory /workspace

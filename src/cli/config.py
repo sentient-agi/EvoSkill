@@ -25,6 +25,17 @@ def _docker_path_overrides() -> dict[str, str]:
     except json.JSONDecodeError:
         return {}
 
+
+def _model_env_override() -> str | None:
+    """Read a model override injected via the environment (.env or shell).
+
+    EVOSKILL_MODEL drives both the harness model and Harbor's inner model,
+    so one line in .env can point a whole run at a different endpoint.
+    """
+    value = os.environ.get("EVOSKILL_MODEL", "").strip().strip('"').strip("'")
+    return value or None
+
+
 EVOSKILL_DIR = '.evoskill'
 
 
@@ -219,6 +230,11 @@ def load_config(
     harness_name = harness_raw.get('name', 'claude')
     harness_raw['model'] = normalize_harness_model(harness_name, harness_raw.get('model'))
 
+    # A model supplied via the environment wins over config.toml.
+    env_model = _model_env_override()
+    if env_model:
+        harness_raw['model'] = normalize_harness_model(harness_name, env_model)
+
     # Docker path overrides for data_dirs
     overrides = _docker_path_overrides()
     if "data_dirs" in overrides:
@@ -263,12 +279,17 @@ def load_config(
         )
 
     task_path = root / EVOSKILL_DIR / 'task.md'
-    description, constraints = _parse_task_md(task_path.read_text()) if task_path.exists() else ('', '')
+    description, constraints = (
+        _parse_task_md(task_path.read_text(encoding='utf-8'))
+        if task_path.exists() else ('', '')
+    )
 
     execution = raw.get('execution', 'local')
 
     # Parse [harbor] section (optional)
     harbor_raw = dict(raw.get('harbor', {}))
+    if harbor_raw and env_model:
+        harbor_raw['inner_model'] = env_model
     harbor = HarborConfig(**harbor_raw) if harbor_raw else HarborConfig()
 
     return ProjectConfig(

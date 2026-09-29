@@ -553,3 +553,66 @@ class TestInitHarborMapping:
             raw = tomllib.load(f)
         assert "harbor" not in raw
         assert raw["dataset"]["source"] == "csv"
+
+
+class TestEnsureAptMirror:
+
+    def _write_dockerfile(self, tmp_path, body):
+        env_dir = tmp_path / "environment"
+        env_dir.mkdir(parents=True, exist_ok=True)
+        dockerfile = env_dir / "Dockerfile"
+        dockerfile.write_text(body, encoding="utf-8")
+        return dockerfile
+
+    def test_inserts_mirror_before_first_run(self, tmp_path, monkeypatch):
+        from src.harness.harbor.agent import ensure_apt_mirror
+        monkeypatch.setenv("EVOSKILL_HARBOR_APT_MIRROR", "mirrors.tuna.tsinghua.edu.cn")
+        dockerfile = self._write_dockerfile(
+            tmp_path,
+            "FROM python:3.11-slim\n\nRUN apt-get update && apt-get install -y curl\n",
+        )
+        assert ensure_apt_mirror(tmp_path) is True
+        lines = dockerfile.read_text(encoding="utf-8").splitlines()
+        assert lines[0] == "FROM python:3.11-slim"
+        assert lines[2].startswith("RUN sed -i")
+        assert "mirrors.tuna.tsinghua.edu.cn" in lines[2]
+        assert "/etc/apt/sources.list.d/debian.sources" in lines[2]
+        assert lines[3] == "RUN apt-get update && apt-get install -y curl"
+
+    def test_second_call_is_noop(self, tmp_path, monkeypatch):
+        from src.harness.harbor.agent import ensure_apt_mirror
+        monkeypatch.setenv("EVOSKILL_HARBOR_APT_MIRROR", "mirrors.tuna.tsinghua.edu.cn")
+        dockerfile = self._write_dockerfile(
+            tmp_path, "FROM python:3.11-slim\nRUN apt-get update\n"
+        )
+        assert ensure_apt_mirror(tmp_path) is True
+        first = dockerfile.read_text(encoding="utf-8")
+        assert ensure_apt_mirror(tmp_path) is False
+        assert dockerfile.read_text(encoding="utf-8") == first
+
+    def test_unset_env_is_noop(self, tmp_path, monkeypatch):
+        from src.harness.harbor.agent import ensure_apt_mirror
+        monkeypatch.delenv("EVOSKILL_HARBOR_APT_MIRROR", raising=False)
+        dockerfile = self._write_dockerfile(
+            tmp_path, "FROM python:3.11-slim\nRUN apt-get update\n"
+        )
+        before = dockerfile.read_text(encoding="utf-8")
+        assert ensure_apt_mirror(tmp_path) is False
+        assert dockerfile.read_text(encoding="utf-8") == before
+
+    def test_url_value_is_reduced_to_host(self, tmp_path, monkeypatch):
+        from src.harness.harbor.agent import ensure_apt_mirror
+        monkeypatch.setenv("EVOSKILL_HARBOR_APT_MIRROR", "https://mirrors.tuna.tsinghua.edu.cn/")
+        dockerfile = self._write_dockerfile(
+            tmp_path, "FROM python:3.11-slim\nRUN apt-get update\n"
+        )
+        assert ensure_apt_mirror(tmp_path) is True
+        text = dockerfile.read_text(encoding="utf-8")
+        line = [l for l in text.splitlines() if l.startswith("RUN sed")][0]
+        assert "https://mirrors.tuna.tsinghua.edu.cn|" in line
+        assert "https://https://" not in line
+
+    def test_missing_dockerfile_is_noop(self, tmp_path, monkeypatch):
+        from src.harness.harbor.agent import ensure_apt_mirror
+        monkeypatch.setenv("EVOSKILL_HARBOR_APT_MIRROR", "mirrors.tuna.tsinghua.edu.cn")
+        assert ensure_apt_mirror(tmp_path) is False
