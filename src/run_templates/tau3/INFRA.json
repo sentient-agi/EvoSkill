@@ -1,0 +1,96 @@
+{
+ "_note": "INFRA.json template of `evoskill run --task-type tau3`: the report's run configuration. src/run.py fills every null: run, solver.model, solver.key_file, solver.expect_served_model, evolver.model, ao.model, claude_code.token_file, data.root, data.overlay_patches_json, data.overlay_patches_sha256, leg_sandbox.concurrency, leg_sandbox.dockerfile_sha256, leg_sandbox.image_id. The null snapshot_ref fields stay null: a Daytona snapshot ref is derived by Daytona when it first builds the Dockerfile and cannot be computed offline, so null = not pinned (the Dockerfile's sha256 is the image's content identity, checked before any machine is created; the ref Daytona reports is recorded in every leg's and evolver turn's receipt). Set one to require that exact build.",
+ "schema": "evoskill-infra/1",
+ "run": null,
+ "solver": {
+  "model": null,
+  "gateway": "anthropic_oauth",
+  "key_file": null,
+  "key_variable": "CLAUDE_CODE_OAUTH_TOKEN",
+  "provider_order": [],
+  "provider_only": [],
+  "allow_fallbacks": false,
+  "require_parameters": false,
+  "quantizations": [],
+  "expect_provider": "firstParty",
+  "expect_served_model": null,
+  "reasoning_effort": "none",
+  "harness": "claude_code"
+ },
+ "evolver": {
+  "model": null,
+  "effort": "default",
+  "harness": "claude_cli",
+  "host": "daytona",
+  "sandbox": true,
+  "timeout_s": 7200
+ },
+ "ao": {
+  "model": null,
+  "effort": "default",
+  "host": "daytona"
+ },
+ "claude_code": {
+  "version": "2.1.293",
+  "linux_x64_sha256": "8968405e26db478af44eabc4635ab5ca557057b702a54460a59c13e1b253e978",
+  "token_file": null,
+  "no_model_fallback": true
+ },
+ "claude_sandbox": {
+  "dockerfile": "scripts/daytona/Dockerfile.ssb_evolver",
+  "dockerfile_sha256": "7bd48b9761888054d5d283b2c333f4077b2fc9d934864b56650ec4b1ae91d7a4",
+  "base_dockerfile_sha256": "681a617ef3ce70ab8056dcd78dffcf9531ddb3c55fd4d2925ba6d0dc9d06e65d",
+  "snapshot_ref": null,
+  "libreoffice": "LibreOffice 25.2.3.2 520(Build:2)",
+  "resources": {
+   "cpu": 8,
+   "memory": 32,
+   "disk": 40
+  },
+  "egress": [
+   "api.anthropic.com"
+  ],
+  "ttl_minutes": 180
+ },
+ "leg_sandbox": {
+  "host": "daytona",
+  "dockerfile": "scripts/daytona/Dockerfile.tau3_leg",
+  "dockerfile_sha256": null,
+  "image_id": null,
+  "snapshot_ref": null,
+  "libreoffice": "LibreOffice 25.2.3.2 520(Build:2)",
+  "grading_openpyxl": "3.1.5",
+  "resources": {
+   "cpu": 8,
+   "memory": 32,
+   "disk": 40
+  },
+  "egress": [
+   "openrouter.ai"
+  ],
+  "max_sandboxes": 6,
+  "concurrency": null,
+  "max_heavy_per_shard": 2,
+  "ttl_minutes": 300,
+  "shard_wall_min": 240,
+  "leg_timeout_s": 43200
+ },
+ "grader": {
+  "recalc_timeout_s": 900,
+  "datatable_uno_timeout_s": 900
+ },
+ "data": {
+  "root": null,
+  "overlay_patches_json": null,
+  "overlay_patches_sha256": null
+ },
+ "guards": {
+  "leg_spend_cap_usd": 40.0,
+  "run_spend_cap_usd": 200.0,
+  "min_account_balance_usd": 100.0
+ },
+ "other_models": {
+  "user_sim": "openrouter/openai/gpt-6-luna",
+  "judge": "none"
+ }
+}

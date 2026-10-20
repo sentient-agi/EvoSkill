@@ -1,0 +1,730 @@
+{
+ "status": "APPROVED: the 1004 split with task_049 also excluded as a benchmark defect: 19/20/31 of the 70 valid tasks; 3 samples per task.",
+ "decision_pending": "none",
+ "domain": "banking_knowledge",
+ "source": {
+  "tasks_dir": "third_party/tau3-bench/data/tau2/domains/banking_knowledge/tasks",
+  "tasks_sha256": "ca100722c17900aa62389dfd1058706a01cad166f1d13dabb94ac2268823f649",
+  "db_sha256": "e692feb797c659f0e21ff7380aa87beb4e95a0694d7bb7945f073102f0293d28"
+ },
+ "generator": {
+  "path": "scripts/make_tau3_family_split.py",
+  "sha256": "08c62d14b39db2bc2fcfd673540accf01971754b64a1f52a7091ea4f93c4b90f"
+ },
+ "constraints": {
+  "path": "outputs/tau3_split_family_1004b/split_constraints.json",
+  "sha256": "0801bfa2fe9a11b33fd16ba895e51cdfa7885377aa5c906cabac4e1029412d0f"
+ },
+ "families_file": {
+  "path": "outputs/tau3_split_family_1004b/families.json",
+  "sha256": "19a39df2accdd9294e5e003093f8f6bcbb576a97407b5a576ac5d80ada2dce60"
+ },
+ "seed": 1004,
+ "n": {
+  "train": 19,
+  "val": 20,
+  "test": 31,
+  "dropped": 27
+ },
+ "METHOD": "Family-aware: tasks linked by any family rule (notes pointing at another task, identical golden, golden containment >= 0.5, shared customer by id or by email/phone_number in the scenario with the full name, scenario similarity >= 0.8) form one unit; every unit goes to one set. Units assigned by 120 seeded restarts of size-preserving exchange hill climbing. Objective = mean + max over axes of the worst-arm TVD vs the population, plus 1.0 per task of reward_basis deviation from its proportional quota, plus the anchor cost of moving tasks away from outputs/tau3_split_family_1004/split.json (see 'anchor').",
+ "NOT_BALANCED_ON": "Measured pass rates, deliberately: no leg, cache or score was read while drawing this split.",
+ "objective": 0.296466,
+ "balance_objective": 0.296466,
+ "anchor": {
+  "split": "outputs/tau3_split_family_1004/split.json",
+  "sha256": "0063f001b81d8c4e61311d94efc2315a5ab05f8634ccec04ca4af87b54ee252a",
+  "move_weight": 0.003,
+  "train_to_heldout_weight": 0.015,
+  "why": "Anchor = the approved split 1004: the only intended change is dropping task_049; every other task should keep its set. Same weights as 1004/0925.",
+  "cost": 0.0,
+  "n_moved_from_anchor": 0,
+  "n_anchor_train_now_heldout": 0,
+  "floor_anchor_train_now_heldout": {
+   "anchor_train_tasks_in_pool": 19,
+   "what": "exact knapsack over the families above: the fewest anchor-train tasks ANY split with these families and train size (and, second row, the train reward_basis quota) must send to val/test",
+   "size_only": 0,
+   "with_reward_basis_quota": 0
+  }
+ },
+ "per_dimension_worst_arm_tvd": {
+  "family_size": 0.2,
+  "n_distinct_action_names": 0.1466,
+  "n_required_documents": 0.1286,
+  "requestor_set": 0.1218,
+  "n_golden_actions": 0.097,
+  "n_user_tools": 0.0786,
+  "initial_state_shape": 0.0643,
+  "has_log_verification": 0.0564,
+  "has_human_transfer": 0.0429,
+  "has_discoverable_unlock": 0.0286
+ },
+ "reward_basis_quota": {
+  "train": {
+   "DB": 17,
+   "ACTION": 2
+  },
+  "val": {
+   "DB": 18,
+   "ACTION": 2
+  },
+  "test": {
+   "DB": 28,
+   "ACTION": 3
+  }
+ },
+ "reward_basis_achieved": {
+  "train": {
+   "ACTION": 2,
+   "DB": 17
+  },
+  "val": {
+   "ACTION": 2,
+   "DB": 18
+  },
+  "test": {
+   "ACTION": 3,
+   "DB": 28
+  }
+ },
+ "reward_basis_deviation_tasks": 0,
+ "profile": {
+  "train": {
+   "n": 19,
+   "reward_basis": {
+    "ACTION": 2,
+    "DB": 17
+   },
+   "n_golden_actions": {
+    "mean": 9.26,
+    "median": 6,
+    "min": 1,
+    "max": 25,
+    "quartile_bins": {
+     "0": 7,
+     "1": 4,
+     "2": 5,
+     "3": 3
+    },
+    "tvd_vs_pop": 0.097
+   },
+   "n_required_documents": {
+    "mean": 8.26,
+    "median": 8,
+    "min": 1,
+    "max": 25,
+    "quartile_bins": {
+     "0": 6,
+     "1": 4,
+     "2": 7,
+     "3": 2
+    },
+    "tvd_vs_pop": 0.1271
+   },
+   "n_user_tools": {
+    "levels": {
+     "0": 3,
+     "1": 7,
+     "2": 9
+    },
+    "tvd_vs_pop": 0.0684
+   },
+   "n_distinct_action_names": {
+    "levels": {
+     "1": 2,
+     "2": 1,
+     "3": 10,
+     "4": 5,
+     "5": 1
+    },
+    "tvd_vs_pop": 0.1466
+   },
+   "requestor_set": {
+    "levels": {
+     "assistant": 11,
+     "assistant+user": 7,
+     "user": 1
+    },
+    "tvd_vs_pop": 0.1218
+   },
+   "initial_state_shape": {
+    "levels": {
+     "init_data_null": 3,
+     "init_data_present": 10,
+     "none": 6
+    },
+    "tvd_vs_pop": 0.0594
+   },
+   "has_human_transfer": {
+    "levels": {
+     "False": 16,
+     "True": 3
+    },
+    "tvd_vs_pop": 0.015
+   },
+   "has_log_verification": {
+    "levels": {
+     "False": 3,
+     "True": 16
+    },
+    "tvd_vs_pop": 0.0564
+   },
+   "has_discoverable_unlock": {
+    "levels": {
+     "False": 6,
+     "True": 13
+    },
+    "tvd_vs_pop": 0.0128
+   },
+   "family_size": {
+    "levels": {
+     "1": 9,
+     "2": 2,
+     "3-4": 3,
+     "5+": 5
+    },
+    "tvd_vs_pop": 0.0947
+   }
+  },
+  "val": {
+   "n": 20,
+   "reward_basis": {
+    "ACTION": 2,
+    "DB": 18
+   },
+   "n_golden_actions": {
+    "mean": 8.55,
+    "median": 6.5,
+    "min": 1,
+    "max": 20,
+    "quartile_bins": {
+     "0": 5,
+     "1": 6,
+     "2": 5,
+     "3": 4
+    },
+    "tvd_vs_pop": 0.0429
+   },
+   "n_required_documents": {
+    "mean": 7.5,
+    "median": 6.5,
+    "min": 1,
+    "max": 19,
+    "quartile_bins": {
+     "0": 5,
+     "1": 8,
+     "2": 4,
+     "3": 3
+    },
+    "tvd_vs_pop": 0.1286
+   },
+   "n_user_tools": {
+    "levels": {
+     "0": 5,
+     "1": 5,
+     "2": 10
+    },
+    "tvd_vs_pop": 0.0786
+   },
+   "n_distinct_action_names": {
+    "levels": {
+     "1": 3,
+     "2": 1,
+     "3": 10,
+     "4": 3,
+     "5": 3
+    },
+    "tvd_vs_pop": 0.0357
+   },
+   "requestor_set": {
+    "levels": {
+     "assistant": 9,
+     "assistant+user": 9,
+     "user": 2
+    },
+    "tvd_vs_pop": 0.0071
+   },
+   "initial_state_shape": {
+    "levels": {
+     "init_data_null": 2,
+     "init_data_present": 13,
+     "none": 5
+    },
+    "tvd_vs_pop": 0.0643
+   },
+   "has_human_transfer": {
+    "levels": {
+     "False": 18,
+     "True": 2
+    },
+    "tvd_vs_pop": 0.0429
+   },
+   "has_log_verification": {
+    "levels": {
+     "False": 4,
+     "True": 16
+    },
+    "tvd_vs_pop": 0.0143
+   },
+   "has_discoverable_unlock": {
+    "levels": {
+     "False": 6,
+     "True": 14
+    },
+    "tvd_vs_pop": 0.0286
+   },
+   "family_size": {
+    "levels": {
+     "1": 11,
+     "2": 6,
+     "3-4": 3
+    },
+    "tvd_vs_pop": 0.2
+   }
+  },
+  "test": {
+   "n": 31,
+   "reward_basis": {
+    "ACTION": 3,
+    "DB": 28
+   },
+   "n_golden_actions": {
+    "mean": 10.39,
+    "median": 8,
+    "min": 1,
+    "max": 37,
+    "quartile_bins": {
+     "0": 7,
+     "1": 9,
+     "2": 9,
+     "3": 6
+    },
+    "tvd_vs_pop": 0.0456
+   },
+   "n_required_documents": {
+    "mean": 9.1,
+    "median": 10,
+    "min": 1,
+    "max": 23,
+    "quartile_bins": {
+     "0": 7,
+     "1": 7,
+     "2": 10,
+     "3": 7
+    },
+    "tvd_vs_pop": 0.077
+   },
+   "n_user_tools": {
+    "levels": {
+     "0": 4,
+     "1": 9,
+     "2": 17,
+     "3": 1
+    },
+    "tvd_vs_pop": 0.0521
+   },
+   "n_distinct_action_names": {
+    "levels": {
+     "1": 5,
+     "2": 2,
+     "3": 13,
+     "4": 4,
+     "5": 7
+    },
+    "tvd_vs_pop": 0.0945
+   },
+   "requestor_set": {
+    "levels": {
+     "assistant": 12,
+     "assistant+user": 15,
+     "user": 4
+    },
+    "tvd_vs_pop": 0.07
+   },
+   "initial_state_shape": {
+    "levels": {
+     "init_data_null": 5,
+     "init_data_present": 18,
+     "none": 8
+    },
+    "tvd_vs_pop": 0.0184
+   },
+   "has_human_transfer": {
+    "levels": {
+     "False": 26,
+     "True": 5
+    },
+    "tvd_vs_pop": 0.0184
+   },
+   "has_log_verification": {
+    "levels": {
+     "False": 8,
+     "True": 23
+    },
+    "tvd_vs_pop": 0.0438
+   },
+   "has_discoverable_unlock": {
+    "levels": {
+     "False": 11,
+     "True": 20
+    },
+    "tvd_vs_pop": 0.0263
+   },
+   "family_size": {
+    "levels": {
+     "1": 12,
+     "2": 6,
+     "3-4": 4,
+     "5+": 9
+    },
+    "tvd_vs_pop": 0.0903
+   }
+  }
+ },
+ "population_profile": {
+  "n": 70,
+  "reward_basis": {
+   "ACTION": 7,
+   "DB": 63
+  },
+  "n_golden_actions": {
+   "mean": 9.56,
+   "median": 8.0,
+   "min": 1,
+   "max": 37,
+   "quartile_bins": {
+    "0": 19,
+    "1": 19,
+    "2": 19,
+    "3": 13
+   },
+   "tvd_vs_pop": 0.0
+  },
+  "n_required_documents": {
+   "mean": 8.41,
+   "median": 7.5,
+   "min": 1,
+   "max": 25,
+   "quartile_bins": {
+    "0": 18,
+    "1": 19,
+    "2": 21,
+    "3": 12
+   },
+   "tvd_vs_pop": 0.0
+  },
+  "n_user_tools": {
+   "levels": {
+    "0": 12,
+    "1": 21,
+    "2": 36,
+    "3": 1
+   },
+   "tvd_vs_pop": 0.0
+  },
+  "n_distinct_action_names": {
+   "levels": {
+    "1": 10,
+    "2": 4,
+    "3": 33,
+    "4": 12,
+    "5": 11
+   },
+   "tvd_vs_pop": 0.0
+  },
+  "requestor_set": {
+   "levels": {
+    "assistant": 32,
+    "assistant+user": 31,
+    "user": 7
+   },
+   "tvd_vs_pop": 0.0
+  },
+  "initial_state_shape": {
+   "levels": {
+    "init_data_null": 10,
+    "init_data_present": 41,
+    "none": 19
+   },
+   "tvd_vs_pop": 0.0
+  },
+  "has_human_transfer": {
+   "levels": {
+    "False": 60,
+    "True": 10
+   },
+   "tvd_vs_pop": 0.0
+  },
+  "has_log_verification": {
+   "levels": {
+    "False": 15,
+    "True": 55
+   },
+   "tvd_vs_pop": 0.0
+  },
+  "has_discoverable_unlock": {
+   "levels": {
+    "False": 23,
+    "True": 47
+   },
+   "tvd_vs_pop": 0.0
+  },
+  "family_size": {
+   "levels": {
+    "1": 32,
+    "2": 14,
+    "3-4": 10,
+    "5+": 14
+   },
+   "tvd_vs_pop": 0.0
+  }
+ },
+ "families": [
+  {
+   "tasks": [
+    "task_004",
+    "task_005",
+    "task_017"
+   ],
+   "set": "train"
+  },
+  {
+   "tasks": [
+    "task_015",
+    "task_018",
+    "task_022",
+    "task_028",
+    "task_029",
+    "task_031",
+    "task_036",
+    "task_037",
+    "task_038"
+   ],
+   "set": "test"
+  },
+  {
+   "tasks": [
+    "task_023",
+    "task_043",
+    "task_045",
+    "task_046",
+    "task_055"
+   ],
+   "set": "train"
+  },
+  {
+   "tasks": [
+    "task_024",
+    "task_025"
+   ],
+   "set": "test"
+  },
+  {
+   "tasks": [
+    "task_039",
+    "task_040"
+   ],
+   "set": "val"
+  },
+  {
+   "tasks": [
+    "task_044",
+    "task_050",
+    "task_054"
+   ],
+   "set": "val"
+  },
+  {
+   "tasks": [
+    "task_051",
+    "task_052"
+   ],
+   "set": "val"
+  },
+  {
+   "tasks": [
+    "task_058",
+    "task_063"
+   ],
+   "set": "val"
+  },
+  {
+   "tasks": [
+    "task_072",
+    "task_073",
+    "task_074",
+    "task_077"
+   ],
+   "set": "test"
+  },
+  {
+   "tasks": [
+    "task_078",
+    "task_079"
+   ],
+   "set": "train"
+  },
+  {
+   "tasks": [
+    "task_080",
+    "task_081"
+   ],
+   "set": "test"
+  },
+  {
+   "tasks": [
+    "task_090",
+    "task_092"
+   ],
+   "set": "test"
+  }
+ ],
+ "checks": {
+  "every_loader_task_in_exactly_one_of_train_val_test_dropped": "PASS",
+  "sizes_equal_targets": "PASS",
+  "no_nl_assertion_task_in_any_set": "PASS",
+  "no_identical_golden_across_sets": "PASS",
+  "no_family_link_across_sets": "PASS",
+  "heldout_specific_golden_in_train_le_0.0": "PASS",
+  "every_dropped_task_has_a_reason": "PASS"
+ },
+ "dropped": {
+  "task_ids": [
+   "task_014",
+   "task_016",
+   "task_020",
+   "task_026",
+   "task_027",
+   "task_049",
+   "task_053",
+   "task_060",
+   "task_061",
+   "task_062",
+   "task_065",
+   "task_066",
+   "task_067",
+   "task_068",
+   "task_069",
+   "task_070",
+   "task_071",
+   "task_076",
+   "task_082",
+   "task_083",
+   "task_084",
+   "task_085",
+   "task_086",
+   "task_088",
+   "task_091",
+   "task_097",
+   "task_102"
+  ],
+  "reason": "defective as instruments: 083/102 (2026-09-25, see per_task) + 24 benchmark defects verified 2026-10-03/04 (missing information, KB vs expected answer, rounding, free-text grader trap, customer-decided); + task_049 (2026-10-04, customer-decided: expected answer needs a customer tool call the script never names)",
+  "per_task": {
+   "task_083": "ACTION basis. Its 4 golden call_discoverable_agent_tool(file_debit_card_transaction_dispute_6281) calls omit the required argument customer_max_liability_amount (third_party/tau3-bench/src/tau2/domains/banking_knowledge/tools.py:939-958), so each returns 'Error: Invalid arguments ... missing 1 required positional argument'. ACTION compares the arguments string verbatim, so an agent that files the disputes correctly cannot match. Cached episodes: 18/18 matched golden actions 0-5 and never 6-9; 0 passes.",
+   "task_102": "The only task with an NL_ASSERTION basis (DB+NL_ASSERTION), so the only reason the rerun would need a judge model. Its assertion requires 'recognizing that Ember Analytics exceeds the 4-year company age limit'; Ember's real age (5 years) is only in the task notes, absent from initial_state, db.json and all documents (grep 'Ember' finds nothing), and the simulated user says 'about 3 years'. Across cached legs the judge answered met=True 11 times in 90 judged episodes, 9 of whose justifications describe a failure.",
+   "task_014": "KB contradicts itself: gold transfers to a human, doc general_009 says 'Do not transfer to a human in these cases' (scan) [was test]",
+   "task_016": "customer-decided: the agent behaves identically every run; pass/fail decided by how the customer resolves script rule 5 vs guideline 'Only call a tool if the agent has requested it' [was val]",
+   "task_020": "rounding: KB floor vs gold nearest (as 026) [was train]",
+   "task_026": "rounding: KB floors reward points, gold rounds to nearest (upstream #438) [was train]",
+   "task_027": "rounding: gold's 4 disputes need nearest rounding; KB floor gives 9 more (scan) [was train]",
+   "task_053": "gold gives get_card_last_4_digits but omits the customer's call, which always writes a DB record and is the only source of 2791 (scan) [was test]",
+   "task_060": "grader trap: gold closes a bank account with the default closure_reason; any agent text fails (upstream #485, PR #484) [was val]",
+   "task_061": "grader trap: default closure_reason (as 060) [was val]",
+   "task_062": "grader trap: default closure_reason (as 060), test split [was test]",
+   "task_065": "grader trap: default closure_reason (as 060) [was val]",
+   "task_066": "grader trap: default closure_reason (as 060) [was val]",
+   "task_067": "grader trap: default closure_reason (as 060) [was val]",
+   "task_068": "grader trap: default closure_reason (as 060); also a wrong product-name example [was val]",
+   "task_069": "KB vs gold: KB says Gold savings has $30/mo ATM rebates, gold says none [was val]",
+   "task_070": "missing information: Sky Blue needs company age <= 4 years; never given (upstream #432) [was train]",
+   "task_071": "missing information: same Sky Blue company-age gap as 070 (scan) [was test]",
+   "task_076": "missing information (borderline per refuter): gold rules out cheaper Bluest over a $75,000 deposit the script never says she cannot fund (scan) [was test]",
+   "task_082": "KB vs gold: KB says close the Green card for this fraud type, gold does not (upstream #372, PR #382) [was val]",
+   "task_084": "missing information / KB vs gold: liability values cap one tier at the disputed amount but not another; no statement date given (scan) [was val]",
+   "task_085": "missing information: gold liability 50 on a $14.99 dispute vs the tool doc's 'and the disputed amount'; 0 of 111 local rollouts passed (scan) [was val]",
+   "task_086": "missing information: liability depends on a statement date never given (upstream #592; 0/110 public trials) (scan) [was val]",
+   "task_088": "missing information: nothing decides transaction_type signature_purchase; 086/087 golds point the other way (scan) [was test]",
+   "task_091": "KB vs gold: gold orders STANDARD/CLASSIC despite 'most premium free option' (086/087 use EXPEDITED/PREMIUM) and a Light Blue replacement despite the entry-tier 48-hour wait (079 enforces it) (scan) [was test]",
+   "task_097": "KB vs gold: gold APY 6.65 omits the 0.025% Silver relationship bonus the KB (and sibling 093's gold) include (scan) [was train]",
+   "task_049": "customer-decided / script vs expected answer (2026-10-04): expected action 049_13 (requestor user) is the customer's request_human_agent_transfer, which writes the human_transfer_requests row the DB check needs; the script's step 9 is a spoken line only (\"Transfer me to a human agent.\") and never names the tool, while the customer guideline says \"Only call a tool if the agent has requested it\" (tasks 034/081, which expect the same row, name the tool in the script). No agent turn in 21 local rollouts mentions the tool and the KB never tells the agent to ask for it. 1 pass in 21 local rollouts (Sol s1, an unprompted call); customers called it unprompted in 8 of 21."
+  },
+  "evidence": "data-integrity review 2026-09-25 (golden self-check soft flags for task_083; per-leg judge answers for task_102); benchmark-conflict and split-defect scans 2026-10-03/04 for the other 25.",
+  "decided_by": "083/102: the 0925 split plan; the 24 benchmark defects and task_049: excluded after the 2026-10-03/04 scans"
+ },
+ "train": [
+  "task_004",
+  "task_005",
+  "task_007",
+  "task_017",
+  "task_019",
+  "task_023",
+  "task_035",
+  "task_043",
+  "task_045",
+  "task_046",
+  "task_047",
+  "task_048",
+  "task_055",
+  "task_064",
+  "task_075",
+  "task_078",
+  "task_079",
+  "task_089",
+  "task_093"
+ ],
+ "val": [
+  "task_001",
+  "task_006",
+  "task_010",
+  "task_012",
+  "task_021",
+  "task_032",
+  "task_039",
+  "task_040",
+  "task_044",
+  "task_050",
+  "task_051",
+  "task_052",
+  "task_054",
+  "task_056",
+  "task_058",
+  "task_063",
+  "task_087",
+  "task_094",
+  "task_098",
+  "task_099"
+ ],
+ "test": [
+  "task_002",
+  "task_003",
+  "task_008",
+  "task_015",
+  "task_018",
+  "task_022",
+  "task_024",
+  "task_025",
+  "task_028",
+  "task_029",
+  "task_031",
+  "task_033",
+  "task_034",
+  "task_036",
+  "task_037",
+  "task_038",
+  "task_041",
+  "task_057",
+  "task_059",
+  "task_072",
+  "task_073",
+  "task_074",
+  "task_077",
+  "task_080",
+  "task_081",
+  "task_090",
+  "task_092",
+  "task_095",
+  "task_096",
+  "task_100",
+  "task_101"
+ ],
+ "self_sha256": "9592b3d917e3d870ee4238aed4c0f59a8d3eaf3dd4178c05ebb62f4d4a721a30"
+}

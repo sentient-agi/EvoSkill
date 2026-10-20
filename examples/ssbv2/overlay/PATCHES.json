@@ -1,0 +1,70 @@
+{
+ "what": "patched copy of the SpreadsheetBench v2 data root: broken docProps/core.xml repaired",
+ "src": null,
+ "dst": "spreadsheetbench-v2",
+ "made_utc": "2026-09-25T06:03:47.317876+00:00",
+ "repair": "declare xmlns:dc=\"http://purl.org/dc/elements/1.1/\" on the root cp:coreProperties element; nothing else changes",
+ "files": [
+  {
+   "task": "Financial_Model/06_01",
+   "field": "spreadsheet_path",
+   "path": "Financial_Model/spreadsheet/06_Project DigiMark/06_01_DigiMark_input.xlsx",
+   "sha256_before": "71233a0b02e0680361836392ca41c567aae657ce91dd24c4248f273f459fd53c",
+   "sha256_after": "84c04ae511a9cb0515042f65d3b20c23d976e03d1d3275d4f29f8a849d5ef145",
+   "entries": 23,
+   "entries_identical": 22,
+   "openpyxl_sheets": 14,
+   "core_before": "<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\"><dc:language xmlns:dc=\"http://purl.org/dc/elements/1.1/\">en-US</dc:language><dcterms:created xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:created><dcterms:modified xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:modified><cp:revision>0</cp:revision><dc:creator>Aptura</dc:creator><cp:lastModifiedBy>Aptura</cp:lastModifiedBy></cp:coreProperties>",
+   "core_after": "<cp:coreProperties xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\"><dc:language xmlns:dc=\"http://purl.org/dc/elements/1.1/\">en-US</dc:language><dcterms:created xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:created><dcterms:modified xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:modified><cp:revision>0</cp:revision><dc:creator>Aptura</dc:creator><cp:lastModifiedBy>Aptura</cp:lastModifiedBy></cp:coreProperties>"
+  },
+  {
+   "task": "Financial_Model/06_02",
+   "field": "spreadsheet_path",
+   "path": "Financial_Model/spreadsheet/06_Project DigiMark/06_02_DigiMark_input.xlsx",
+   "sha256_before": "df11e2ade3fbb3644f64ab0e5003e4339fcb27ebaabd80939eded019da664172",
+   "sha256_after": "ecec7cdb3baf20f236d8345c7094f1a545109cdaca7596efdfd7ceab2d357143",
+   "entries": 23,
+   "entries_identical": 22,
+   "openpyxl_sheets": 14,
+   "core_before": "<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\"><dc:language xmlns:dc=\"http://purl.org/dc/elements/1.1/\">en-US</dc:language><dcterms:created xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:created><dcterms:modified xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:modified><cp:revision>0</cp:revision><dc:creator>Aptura</dc:creator><cp:lastModifiedBy>Aptura</cp:lastModifiedBy></cp:coreProperties>",
+   "core_after": "<cp:coreProperties xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\"><dc:language xmlns:dc=\"http://purl.org/dc/elements/1.1/\">en-US</dc:language><dcterms:created xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:created><dcterms:modified xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:modified><cp:revision>0</cp:revision><dc:creator>Aptura</dc:creator><cp:lastModifiedBy>Aptura</cp:lastModifiedBy></cp:coreProperties>"
+  },
+  {
+   "task": "Financial_Model/06_03",
+   "field": "spreadsheet_path",
+   "path": "Financial_Model/spreadsheet/06_Project DigiMark/06_03_DigiMark_input.xlsx",
+   "sha256_before": "feddfcf6f02f9966139593d76c54743643404a678c9379ca1721cd1f85da17d3",
+   "sha256_after": "4e774b5d9ac1b126f6c4bdc66d023d9952438e59690e1a84126b4243341df1ec",
+   "entries": 23,
+   "entries_identical": 22,
+   "openpyxl_sheets": 14,
+   "core_before": "<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\"><dc:language xmlns:dc=\"http://purl.org/dc/elements/1.1/\">en-US</dc:language><dcterms:created xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:created><dcterms:modified xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:modified><cp:revision>0</cp:revision><dc:creator>Aptura</dc:creator><cp:lastModifiedBy>Aptura</cp:lastModifiedBy></cp:coreProperties>",
+   "core_after": "<cp:coreProperties xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\"><dc:language xmlns:dc=\"http://purl.org/dc/elements/1.1/\">en-US</dc:language><dcterms:created xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:created><dcterms:modified xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:modified><cp:revision>0</cp:revision><dc:creator>Aptura</dc:creator><cp:lastModifiedBy>Aptura</cp:lastModifiedBy></cp:coreProperties>"
+  },
+  {
+   "task": "Financial_Model/06_04",
+   "field": "spreadsheet_path",
+   "path": "Financial_Model/spreadsheet/06_Project DigiMark/06_04_DigiMark_input.xlsx",
+   "sha256_before": "61e871f377d5615b0a82a93f67d34c6e1db95c997d8b0d6f6e20b9d950f4be18",
+   "sha256_after": "33f10854e686144b1cba1a1e6088d67145bb94c3cc1d44b604c384b8ef1e7e81",
+   "entries": 23,
+   "entries_identical": 22,
+   "openpyxl_sheets": 14,
+   "core_before": "<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\"><dc:language xmlns:dc=\"http://purl.org/dc/elements/1.1/\">en-US</dc:language><dcterms:created xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:created><dcterms:modified xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:modified><cp:revision>0</cp:revision><dc:creator>Aptura</dc:creator><cp:lastModifiedBy>Aptura</cp:lastModifiedBy></cp:coreProperties>",
+   "core_after": "<cp:coreProperties xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\"><dc:language xmlns:dc=\"http://purl.org/dc/elements/1.1/\">en-US</dc:language><dcterms:created xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:created><dcterms:modified xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:modified><cp:revision>0</cp:revision><dc:creator>Aptura</dc:creator><cp:lastModifiedBy>Aptura</cp:lastModifiedBy></cp:coreProperties>"
+  },
+  {
+   "task": "Financial_Model/06_05",
+   "field": "spreadsheet_path",
+   "path": "Financial_Model/spreadsheet/06_Project DigiMark/06_05_DigiMark_input.xlsx",
+   "sha256_before": "f5e91b13e9a0710ebaf33f8b33ef24e3ebb7b7927f7841163c12c01b483ce2fb",
+   "sha256_after": "14737509ed1733e37c0d78d2da4e09532446ae946cd367a4d388057e91dcd5ae",
+   "entries": 23,
+   "entries_identical": 22,
+   "openpyxl_sheets": 14,
+   "core_before": "<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\"><dc:language xmlns:dc=\"http://purl.org/dc/elements/1.1/\">en-US</dc:language><dcterms:created xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:created><dcterms:modified xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:modified><cp:revision>0</cp:revision><dc:creator>Aptura</dc:creator><cp:lastModifiedBy>Aptura</cp:lastModifiedBy></cp:coreProperties>",
+   "core_after": "<cp:coreProperties xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\"><dc:language xmlns:dc=\"http://purl.org/dc/elements/1.1/\">en-US</dc:language><dcterms:created xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:created><dcterms:modified xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"dcterms:W3CDTF\">2026-01-01T00:00:00Z</dcterms:modified><cp:revision>0</cp:revision><dc:creator>Aptura</dc:creator><cp:lastModifiedBy>Aptura</cp:lastModifiedBy></cp:coreProperties>"
+  }
+ ],
+ "paths": "src null = the SpreadsheetBench v2 data root of the run (INFRA.json data.root; $EVOSKILL_SSBV2_DATA, else $SSBV2_ROOT/data/spreadsheetbench-v2); dst is relative to this file's directory"
+}

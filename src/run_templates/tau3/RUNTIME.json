@@ -1,0 +1,86 @@
+{
+ "_note": "RUNTIME.json template of `evoskill run --task-type tau3`: the report's run configuration (template prompt, one stateful evolver session in a container on the run's one Daytona machine, the Claude Code leg launcher, pipelined val, no train leg in the last epoch). src/run.py fills every null: leg_script, shared_dir, oracle, prompt_author_model, claude.ao_model, claude.evolver_model_from_spec, cc_leg.concurrency, daytona_leg.concurrency, base_leg, base_leg_val, heldout_base_leg. require_snapshot_ref / require_leg_snapshot_ref stay null = not pinned (see INFRA.json's note): the observed Daytona snapshot ref is accepted and recorded; set them (with INFRA's snapshot_ref) to require one build.",
+ "leg_script": null,
+ "shared_dir": null,
+ "oracle": null,
+ "prompt_author_model": null,
+ "prompt_mode": "template",
+ "evolver_host": "daytona",
+ "evolver_sandbox": true,
+ "evolver_timeout_s": 7200,
+ "leg_timeout_s": 43200,
+ "evolver_evidence": "all_epochs",
+ "evolver_evidence_layout": "evo",
+ "evolver_session": "stateful",
+ "evolver_daytona": {
+  "placement": "pool_container",
+  "ttl_minutes": 180,
+  "require_libreoffice": "LibreOffice 25.2.3.2 520(Build:2)",
+  "require_snapshot_ref": null,
+  "require_leg_snapshot_ref": null,
+  "machine_wait_s": 900,
+  "container": {
+   "cpus": 8,
+   "mem_max_gib": 32,
+   "cpu_weight": 10000,
+   "mem_high_ratio": 1.0,
+   "pids_max": 2048,
+   "tmp_gib": 1,
+   "rw_max_gib": 5
+  },
+  "train_references": false,
+  "grader_clean": false,
+  "train_inputs": false
+ },
+ "pipeline_val": true,
+ "skip_last_train": true,
+ "daytona_leg": {
+  "max_sandboxes": 6,
+  "concurrency": null,
+  "max_heavy_per_shard": 2,
+  "leg_spend_cap_usd": 40.0,
+  "run_spend_cap_usd": 200.0,
+  "min_account_balance_usd": 100.0,
+  "ttl_minutes": 300,
+  "shard_wall_min": 240,
+  "require_snapshot_ref": null,
+  "require_libreoffice": "LibreOffice 25.2.3.2 520(Build:2)",
+  "pool": true,
+  "pool_keys": [
+   "train",
+   "val",
+   "test"
+  ],
+  "pool_sandboxes": 1,
+  "pool_ttl_minutes": 1440,
+  "pool_ttl_margin_min": 255,
+  "pool_keep_idle_s": 86400,
+  "pool_max_heavy_units": 1
+ },
+ "cc_leg": {
+  "concurrency": null,
+  "mem_max_gib_per_container": 1,
+  "wall_min": 20,
+  "machine_wait_s": 1800,
+  "grade_max_procs": 4,
+  "grade_max_heavy": 1,
+  "skills_placement": "project_symlink",
+  "cc_version": "2.1.293",
+  "thinking_display": "summarized"
+ },
+ "ao": {
+  "brief_files": []
+ },
+ "tau3_user_llm_args": {
+  "reasoning_effort": "high"
+ },
+ "base_leg": null,
+ "base_leg_val": null,
+ "claude": {
+  "ao_model": null,
+  "evolver_model_from_spec": null,
+  "effort": "default",
+  "expect_claude_code_version": "2.1.293"
+ },
+ "heldout_base_leg": null
+}

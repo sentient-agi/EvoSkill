@@ -1,9 +1,8 @@
-"""#234 uptake assessment that knows which DIALECT of transcript it is reading.
+"""Skill-uptake assessment that knows which DIALECT of transcript it is reading.
 
-WHY THIS FILE EXISTS. `loop.py::_v_skills_were_consulted` imports `assess_delivery` from here
-first and falls back to `scripts/tau3_skill_delivery.py`. Until now this module did not exist, so
-every run fell back — and that fallback recognises exactly one notation for "the agent opened a
-skill":
+WHY THIS FILE EXISTS. `loop.py::_v_skills_were_consulted` imports `assess_delivery` from here. A
+reader that knows only one transcript dialect recognises exactly one notation for "the agent opened
+a skill":
 
     CALL = re.compile(r'\\(tool\\.skill\\)[^\\n]*?"name"\\s*:\\s*"([^"]+)"')
 
@@ -12,21 +11,18 @@ which is tau3's. SSB v2 digests record a skill load as a tool-result line:
     [SKILL LOADED: excel-edit-protocol — 6169 B. Body omitted here; ...]
 
 So on an SSB v2 surface the tau3 patterns match nothing, `consulted` stays 0, and the check
-reports **0/180 rollouts consulted a skill = 0% — the library was NOT DELIVERED**. On 2026-08-12
-that fired against ssbv2_ao1 epoch 3, whose own 60 digests contain 405 skill-load lines
-(excel-edit-protocol in 180 of 180 rollouts, excel-model-completion 118, excel-workbook-audit 60,
-excel-output-verification 47). Real uptake is 100%. The reported uptake was 0%.
+reports **0/180 rollouts consulted a skill = 0% — the library was NOT DELIVERED**, on a surface
+where every rollout loaded a skill.
 
-Note what made the false verdict so convincing: `rollouts` was RIGHT (180), because sections are
+Note what would make such a false verdict convincing: `rollouts` was RIGHT (180), because sections are
 split on `## Rollout `, which both benchmarks use. Only the numerator was blind. A reader that
 gets the denominator right looks like a reader that works.
 
 THE RULE THIS ENCODES. A parser that finds none of ITS OWN markers on a surface has not measured
 0% — it has failed to read. Those are different facts and they must not share a return value.
-This is the #306 shape (a tau3 reader applied to an ssbv2 result json, fixed by declaring the
-branch and refusing rather than defaulting) and the #154 shape (a check that cannot fail). Here
-the failure is inverted — a check that cannot pass — but the fix is the same: name the dialect,
-and when no dialect is recognisable, say UNREADABLE rather than emitting a number.
+A reader applied to the wrong format must declare the branch and refuse rather than default, and a
+check must be able both to pass and to fail. So: name the dialect, and when no dialect is
+recognisable, say UNREADABLE rather than emitting a number.
 
 Adding a benchmark means adding a DIALECT entry, and the selftest asserts each dialect's fixture
 is parsed by exactly one entry, so a new pattern that accidentally swallows another benchmark's
@@ -38,8 +34,7 @@ import collections
 import re
 from pathlib import Path
 
-# Below this, the arm's result is about delivery, not about skills. Kept identical to
-# scripts/tau3_skill_delivery.py so switching readers cannot move a verdict.
+# Below this, the arm's result is about delivery, not about skills.
 UPTAKE_FLOOR = 0.50
 
 # tau3 domain tools carry a numeric suffix; a skill name never does.
@@ -176,6 +171,25 @@ def _selftest() -> int:
         check("ssbv2: dialect named", a["dialect"] == "ssbv2")
         check("ssbv2: not unreadable", a["unreadable"] is False)
         check("ssbv2: per-skill attributed", a["per_skill"] == {"excel-edit-protocol": 1})
+
+        # The version-anchored marker keeps the NAME as the first token, and the
+        # producing library it sits beside (_library/) is a subdir, not a digest.
+        d1b = root / "d_ssbv2_anchored"
+        (d1b / "_library" / "excel-edit-protocol").mkdir(parents=True)
+        (d1b / "_library" / "excel-edit-protocol" / "SKILL.md").write_text(
+            "## Rollout s0 — FAIL (a SKILL.md in _library/ must never be read as a digest)\n")
+        (d1b / "Debugging_02_01.md").write_text(
+            "header\n"
+            "## Rollout s0 — FAIL (26 turns)\n"
+            "[SKILL LOADED: excel-edit-protocol — 6169 B; library skills_v1 sha256:0123456789ab; "
+            "body in ./_library/excel-edit-protocol/SKILL.md of this digest dir]\n"
+            "## Rollout s1 — FAIL (25 turns)\n"
+            "no skill here\n")
+        a2 = assess(lib, d1b)
+        check("anchored marker: name parsed, version ignored",
+              a2["per_skill"] == {"excel-edit-protocol": 1} and not a2["typos"])
+        check("anchored marker: _library/ is not counted as rollouts",
+              a2["rollouts"] == 2 and a2["consulted"] == 1)
 
         # tau3 dialect must still parse through this same reader.
         d2 = root / "d_tau3"

@@ -1,0 +1,216 @@
+# SSB v2 LEG IMAGE FOR DAYTONA (x86_64) -- solver env + grading env + runner env in ONE image.
+#
+# Built server-side by Daytona (Image.from_dockerfile) from THIS file alone: no COPY/ADD, so the
+# file's sha256 plus Daytona's build_info.snapshot_ref identify the image. Every leg records both
+# (runtime_env in the runner's result JSON). x86 is a NEW comparability class vs the Mac's aarch64
+# docker legs: numbers from this image are compared with numbers from this image.
+#
+# LAYOUT (measured on Daytona: nested dockerd works but was never exercised at production
+# shape, so episodes run as namespaced process trees instead -- scripts/daytona/docker_shim.py):
+#
+#   /                        = the SOLVER environment. Steps 1-4 below are the steps of
+#                              docker/ssb-solver/Dockerfile + Dockerfile.libreoffice, in order,
+#                              on the same digest-pinned base (ssb-solver-lo:latest's recipe).
+#                              python3 = /usr/local/bin/python3 (3.11) with openpyxl 3.1.3,
+#                              pandas 2.2.0, numpy 1.26.4; LibreOffice + python3-uno; warm profile.
+#   /opt/evoskill/verifier-lo-profile
+#                            = the GRADING LibreOffice profile of EvoSkill-public's
+#                              docker/ssb-verifier/Dockerfile (ssb-verifier:latest: OOXMLRecalcMode=0 /
+#                              ODFRecalcMode=0, "recalc always").
+#                              The verifier image is the same base + same apt packages + same pip
+#                              pins, so on one build date it differs from the solver env only in
+#                              this profile; the shim mounts a private copy of it per recalc call.
+#   /opt/evoskill/venv       = the RUNNER (orchestrating process + in-process openpyxl grading).
+#                              CPython 3.13.9 and the package versions of the host interpreter the
+#                              reported runs' grading ran under,
+#                              notably openpyxl 3.1.5 WITH lxml 6.1.1 + defusedxml (openpyxl
+#                              switches XML backends on their presence). The audit's required pin:
+#                              the image's 3.1.3 produced false FAILs where grading ran.
+#
+# The solver never sees /opt, /Users or the shim's state (tmpfs over them in its mount
+# namespace); it sees / exactly as the solver image lays it out, plus /workspace.
+#
+# NO CLAUDE CLI: claude-agent-sdk is needed only because src/agent_profiles/__init__.py builds a
+# ClaudeAgentOptions dataclass at import. Its wheel bundles the `claude` binary; it is deleted
+# below and the build asserts no file named `claude` exists anywhere in the image.
+# Its VERSION is the one deliberate departure from the Mac's pins (0.2.91 there): PyPI yanks old
+# claude-agent-sdk releases and deletes them (0.2.91 was), so a pin
+# to it makes the image unbuildable. Nothing on the SSB path calls the SDK beyond that dataclass.
+# If a rebuild fails on this line, bump to the newest non-yanked release and record it.
+
+# ---- 1. base, pinned by multi-arch index digest (same line as docker/ssb-solver/Dockerfile) ----
+FROM python:3.11-slim@sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7
+
+# ---- 2. solver python stack, exactly as the reported solver image ----
+RUN pip install --no-cache-dir openpyxl==3.1.3 pandas==2.2.0 numpy==1.26.4
+
+# /workspace, NOT /app (see docker/ssb-solver/Dockerfile for why).
+WORKDIR /workspace
+
+# ---- 3. LibreOffice arm: libreoffice-calc AND python3-uno (mirrors ssb-verifier) ----
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libreoffice-calc python3-uno && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    soffice --version > /etc/evoskill_libreoffice_version
+
+# ---- 4. pre-seeded LibreOffice user profile (first recalculation behaves like later ones) ----
+RUN printf 'x\n' > /tmp/seed.csv && \
+    soffice --headless --calc --convert-to xlsx --outdir /tmp /tmp/seed.csv >/dev/null 2>&1 && \
+    test -f /tmp/seed.xlsx && \
+    rm -f /tmp/seed.csv /tmp/seed.xlsx
+
+WORKDIR /workspace
+
+# The environment `docker run` would give a process in the solver image, captured BEFORE any
+# runner layer exists; the shim builds each episode's environment from this file (+ docker -e).
+RUN env | grep -E '^(PATH|LANG|GPG_KEY|PYTHON_VERSION|PYTHON_SHA256)=' | sort > /etc/evoskill_container_env && \
+    grep -q '^PATH=/usr/local/bin' /etc/evoskill_container_env && \
+    /usr/local/bin/python3 -c "import openpyxl,pandas,numpy;assert (openpyxl.__version__,pandas.__version__,numpy.__version__)==('3.1.3','2.2.0','1.26.4')"
+
+# ---- 5. grading profile (EvoSkill-public docker/ssb-verifier/Dockerfile, verbatim content) ----
+RUN mkdir -p /opt/evoskill/verifier-lo-profile/4/user \
+ && printf '%s\n' \
+ '<?xml version="1.0" encoding="UTF-8"?>' \
+ '<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' \
+ '<item oor:path="/org.openoffice.Office.Calc/Formula/Load"><prop oor:name="OOXMLRecalcMode" oor:op="fuse"><value>0</value></prop></item>' \
+ '<item oor:path="/org.openoffice.Office.Calc/Formula/Load"><prop oor:name="ODFRecalcMode" oor:op="fuse"><value>0</value></prop></item>' \
+ '</oor:items>' \
+ > /opt/evoskill/verifier-lo-profile/4/user/registrymodifications.xcu \
+ && grep -q 'OOXMLRecalcMode' /opt/evoskill/verifier-lo-profile/4/user/registrymodifications.xcu \
+ && grep -q '<value>0</value>' /opt/evoskill/verifier-lo-profile/4/user/registrymodifications.xcu
+
+# ---- 6. runner environment: relocatable CPython 3.13.9 + the reported grading package versions ----
+# uv is used only to fetch the interpreter and install the venv, then removed from the solver's
+# python so the solver environment is unchanged.
+RUN pip install --no-cache-dir uv==0.12.18 && \
+    UV_PYTHON_INSTALL_DIR=/opt/evoskill/python uv python install 3.13.9 && \
+    UV_PYTHON_INSTALL_DIR=/opt/evoskill/python uv venv --python 3.13.9 /opt/evoskill/venv && \
+    printf '%s\n' \
+      'openpyxl==3.1.5' 'et_xmlfile==2.0.0' 'lxml==6.1.1' 'defusedxml==0.7.1' 'pillow==12.0.0' \
+      'numpy==2.3.5' 'httpx==0.28.1' 'httpx-sse==0.4.3' 'anyio==4.10.0' 'sniffio==1.3.0' \
+      'idna==3.11' 'pydantic==2.12.4' 'pydantic-core==2.41.5' 'pydantic-settings==2.12.0' \
+      'annotated-types==0.6.0' 'typing-extensions==4.15.0' 'typing-inspection==0.4.2' \
+      'claude-agent-sdk==0.2.159' 'mcp==1.27.2' 'click==8.2.1' 'rich==14.2.0' 'pygments==2.19.2' \
+      'pyyaml==6.0.3' 'python-dotenv==1.1.0' 'opentelemetry-api==1.40.0' \
+      'opentelemetry-sdk==1.40.0' 'opentelemetry-semantic-conventions==0.61b0' \
+      'opentelemetry-instrumentation==0.61b0' 'jsonschema==4.25.0' 'attrs==25.4.0' \
+      'importlib-metadata==8.7.0' 'zipp==3.23.0' \
+      > /opt/evoskill/runner-requirements.txt && \
+    uv pip install --no-cache --python /opt/evoskill/venv/bin/python -r /opt/evoskill/runner-requirements.txt && \
+    uv --version > /opt/evoskill/uv_version && \
+    pip uninstall -y uv && rm -rf /root/.cache && \
+    rm -rf "$(/opt/evoskill/venv/bin/python -c 'import claude_agent_sdk,os;print(os.path.dirname(claude_agent_sdk.__file__))')/_bundled" && \
+    /opt/evoskill/venv/bin/python -c "import openpyxl,lxml,defusedxml,openpyxl.xml as x,sys;assert openpyxl.__version__=='3.1.5' and x.LXML and x.DEFUSEDXML, (openpyxl.__version__,x.LXML,x.DEFUSEDXML);assert sys.version_info[:3]==(3,13,9)"
+
+# ---- 7. build-time assertions (each must hold or the build fails) ----
+# no claude CLI anywhere; the solver's python3 is still 3.11 + openpyxl 3.1.3; uv gone from the
+# solver env; unshare/nsenter/setpriv present (util-linux) for the shim.
+RUN test -z "$(find / -xdev -name claude -type f 2>/dev/null)" && \
+    ! command -v claude && ! command -v uv && \
+    test "$(/usr/local/bin/python3 -c 'import openpyxl;print(openpyxl.__version__)')" = 3.1.3 && \
+    command -v unshare && command -v nsenter && command -v setpriv
+
+# the runner venv's full package list, for the result JSON (uv venvs carry no pip)
+RUN /opt/evoskill/venv/bin/python -c "import importlib.metadata as m;print(chr(10).join(sorted(d.metadata['Name']+'=='+d.version for d in m.distributions())))" > /opt/evoskill/runner-freeze.txt && \
+    grep -q '^openpyxl==3.1.5$' /opt/evoskill/runner-freeze.txt
+
+WORKDIR /workspace
+
+# ======================================================================================================
+# TAU3 LEG IMAGE (scripts/daytona/Dockerfile.tau3_leg). Every line ABOVE this block is
+# scripts/daytona/Dockerfile.ssb_leg byte for byte (its header's "no COPY/ADD" describes those lines
+# only); tests/test_tau3_cc_smoke.py checks the prefix. The block below adds the tau3
+# environment pinned in scripts/tau3_env/ at /opt/tau3, for the tau3
+# rollout harness (scripts/tau3_cc/tau2_cc_harness.py), which runs as root on the machine OUTSIDE
+# every container (a container sees /opt as claude-code only), and for the user's tau3 grader:
+#   /opt/tau3/src     tau2-bench at 363133ada1936491fb5bcec33cd62c3518a99f65: `git archive` of
+#                     pyproject.toml uv.lock README.md LICENSE .python-version src, with
+#                     uvlock_1.0.1.patch applied (uv.lock sha256 b7c73807...e18e14)
+#   /opt/tau3/python  CPython 3.12.13, fetched by uv 0.10.12 (the uv that made the pinned venv)
+#   /opt/tau3/venv    `uv sync --frozen --no-dev --extra knowledge --python 3.12.13` (tau2 1.0.1,
+#                     editable from /opt/tau3/src); the build fails unless scripts/tau3_check_venv.py
+#                     finds it equal to tau3_venv_freeze.txt (76 packages, CPython 3.12.13)
+#   /opt/tau3/check   tau3_check_venv.py + tau3_venv_freeze.txt (the same check, for run time)
+#   the KB shell's sandbox (step 9b; tau3 retrieval = tau2's "alltools",
+#                     whose `shell` tool runs every command through Anthropic's sandbox-runtime):
+#                     apt nodejs (the base is Debian trixie -- a smoke build's log installed
+#                     libreoffice-calc 4:25.2.3-2+deb13u7 -- so trixie's nodejs; srt's engines say
+#                     node >= 18; the version built is recorded below), ripgrep, bubblewrap,
+#                     socat (tau2's _REQUIRED_BINARIES_LINUX: srt rg bwrap socat); srt 0.0.23 (tau2's
+#                     pin, knowledge/sandbox_manager.py) at /usr/local/lib/node_modules/@anthropic-ai/
+#                     sandbox-runtime + the npm-style link /usr/local/bin/srt -> its dist/cli.js; the
+#                     versions in /opt/tau3/sandbox_versions.txt. NOT under /opt: the bridge's srt
+#                     settings deny reads of /opt (scripts/tau3_cc/tau3_retrieval.py), and srt runs
+#                     its vendored vendor/seccomp/<arch>/apply-seccomp INSIDE the sandbox.
+# No tau2 data is baked in: the run uploads the curated data root (tau3_data_363133a, with its
+# .embeddings_cache).
+#
+# BUILD CONTEXT. Daytona's SDK (Image.from_dockerfile) resolves each COPY source against THIS
+# FILE's directory and uploads that whole tree, with no ignore file. So this file is never built
+# from scripts/daytona/ and never with third_party/tau3-bench as a source (its data/, .venv and
+# .git are ~1 GB): scripts/daytona/tau3_cc_smoke.py writes a copy of this file next to a clean
+# context, tau3_ctx/tau2-bench (the git archive above, patched), tau3_ctx/check and
+# tau3_ctx/srt/sandbox-runtime (a locally installed npm package @anthropic-ai/sandbox-runtime
+# 0.0.23, $EVOSKILL_SRT_SRC, else the package of the `srt` on PATH, copied file by file with
+# its modes: pure JS + the vendored x64/arm64 apply-seccomp ELF binaries; no npm at build time),
+# and builds from that copy. Identity = this file's sha256 + the context's sha256 (both recorded
+# by the driver; the srt tree's own sha too) + Daytona's snapshot_ref.
+#
+# uv is removed again and step 7's assertions are re-run (no file named claude, no uv, the
+# solver's python3 still 3.11 with openpyxl 3.1.3; unshare/nsenter/setpriv present).
+
+# ---- 8. the pinned tau3 environment ----
+COPY tau3_ctx/tau2-bench /opt/tau3/src
+COPY tau3_ctx/check /opt/tau3/check
+RUN test "$(sha256sum /opt/tau3/src/uv.lock | cut -d' ' -f1)" = b7c738079f883646b50d93f72caaa256dee5cf7e130baa68cb460cfc43e18e14 && \
+    test "$(cat /opt/tau3/src/.python-version)" = 3.12 && \
+    pip install --no-cache-dir uv==0.10.12 && \
+    UV_PYTHON_INSTALL_DIR=/opt/tau3/python uv python install --no-bin 3.12.13 && \
+    cd /opt/tau3/src && \
+    UV_PYTHON_INSTALL_DIR=/opt/tau3/python UV_PROJECT_ENVIRONMENT=/opt/tau3/venv UV_LINK_MODE=copy \
+        uv sync --frozen --no-dev --extra knowledge --python 3.12.13 --no-python-downloads --no-cache && \
+    uv --version > /opt/tau3/uv_version && \
+    cd / && pip uninstall -y uv && rm -rf /root/.cache
+
+# ---- 9. the venv equals the pin (76 packages, CPython 3.12.13), and tau2 imports ----
+RUN /usr/local/bin/python3 /opt/tau3/check/tau3_check_venv.py --python /opt/tau3/venv/bin/python \
+        --pin /opt/tau3/check/tau3_venv_freeze.txt | tee /opt/tau3/venv_check.txt && \
+    grep -q 'equal: 76 packages, CPython 3.12.13' /opt/tau3/venv_check.txt && \
+    cd / && PYTHON_DOTENV_DISABLED=1 LITELLM_LOCAL_MODEL_COST_MAP=True TAU2_DATA_DIR=/nonexistent \
+        /opt/tau3/venv/bin/python -c "import importlib.metadata as m, tau2, tau2.runner.build, litellm, rank_bm25, httpx; assert m.version('tau2') == '1.0.1', m.version('tau2')"
+
+# ---- 9b. the KB shell's sandbox: sandbox-runtime (srt) 0.0.23 + node, rg, bwrap, socat ----
+# The exec bits are set again after the COPY (the context carries them; the upload's handling of
+# modes is not relied on). `srt --version` prints commander's placeholder (1.0.0), so the package
+# version is read from its package.json.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        nodejs ripgrep bubblewrap socat && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+COPY tau3_ctx/srt/sandbox-runtime /usr/local/lib/node_modules/@anthropic-ai/sandbox-runtime
+RUN SRT=/usr/local/lib/node_modules/@anthropic-ai/sandbox-runtime && \
+    chmod 0755 "$SRT/dist/cli.js" && \
+    find "$SRT" -type f -name apply-seccomp -exec chmod 0755 {} + && \
+    ln -s ../lib/node_modules/@anthropic-ai/sandbox-runtime/dist/cli.js /usr/local/bin/srt && \
+    test "$(node -p "require('$SRT/package.json').version")" = 0.0.23 && \
+    test "$(node -p "require('$SRT/package.json').name")" = @anthropic-ai/sandbox-runtime && \
+    test -x "$SRT/vendor/seccomp/x64/apply-seccomp" && \
+    test -z "$(find "$SRT" -name claude)" && test -z "$(find "$SRT" -type l)" && \
+    srt --version && \
+    command -v srt && command -v rg && command -v bwrap && command -v socat && command -v node && \
+    { echo "sandbox-runtime $(node -p "require('$SRT/package.json').version") $(readlink -f "$(command -v srt)")"; \
+      echo "srt --version $(srt --version)"; \
+      echo "node $(node --version) $(command -v node)"; \
+      echo "$(rg --version | head -1) $(command -v rg)"; \
+      echo "$(bwrap --version) $(command -v bwrap)"; \
+      echo "$(socat -V | grep -m1 'socat version') $(command -v socat)"; } > /opt/tau3/sandbox_versions.txt && \
+    cat /opt/tau3/sandbox_versions.txt && \
+    grep -q '^sandbox-runtime 0.0.23 ' /opt/tau3/sandbox_versions.txt
+
+# ---- 10. step 7's assertions again, after the tau3 layer ----
+RUN test -z "$(find / -xdev -name claude -type f 2>/dev/null)" && \
+    ! command -v claude && ! command -v uv && \
+    test "$(/usr/local/bin/python3 -c 'import openpyxl;print(openpyxl.__version__)')" = 3.1.3 && \
+    test "$(/usr/local/bin/python3 -c 'import sys;print(sys.version_info[0]*100+sys.version_info[1])')" = 311 && \
+    command -v unshare && command -v nsenter && command -v setpriv
+
+WORKDIR /workspace

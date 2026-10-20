@@ -1,0 +1,117 @@
+# SSB v2 LEG IMAGE FOR DAYTONA (x86_64) -- solver env + grading env + runner env in ONE image.
+#
+# Built server-side by Daytona (Image.from_dockerfile) from THIS file alone: no COPY/ADD, so the
+# file's sha256 plus Daytona's build_info.snapshot_ref identify the image. Every leg records both
+# (runtime_env in the runner's result JSON). x86 is a NEW comparability class vs the Mac's aarch64
+# docker legs: numbers from this image are compared with numbers from this image.
+#
+# LAYOUT (measured on Daytona: nested dockerd works but was never exercised at production
+# shape, so episodes run as namespaced process trees instead -- scripts/daytona/docker_shim.py):
+#
+#   /                        = the SOLVER environment. Steps 1-4 below are the steps of
+#                              docker/ssb-solver/Dockerfile + Dockerfile.libreoffice, in order,
+#                              on the same digest-pinned base (ssb-solver-lo:latest's recipe).
+#                              python3 = /usr/local/bin/python3 (3.11) with openpyxl 3.1.3,
+#                              pandas 2.2.0, numpy 1.26.4; LibreOffice + python3-uno; warm profile.
+#   /opt/evoskill/verifier-lo-profile
+#                            = the GRADING LibreOffice profile of EvoSkill-public's
+#                              docker/ssb-verifier/Dockerfile (ssb-verifier:latest: OOXMLRecalcMode=0 /
+#                              ODFRecalcMode=0, "recalc always").
+#                              The verifier image is the same base + same apt packages + same pip
+#                              pins, so on one build date it differs from the solver env only in
+#                              this profile; the shim mounts a private copy of it per recalc call.
+#   /opt/evoskill/venv       = the RUNNER (orchestrating process + in-process openpyxl grading).
+#                              CPython 3.13.9 and the package versions of the host interpreter the
+#                              reported runs' grading ran under,
+#                              notably openpyxl 3.1.5 WITH lxml 6.1.1 + defusedxml (openpyxl
+#                              switches XML backends on their presence). The audit's required pin:
+#                              the image's 3.1.3 produced false FAILs where grading ran.
+#
+# The solver never sees /opt, /Users or the shim's state (tmpfs over them in its mount
+# namespace); it sees / exactly as the solver image lays it out, plus /workspace.
+#
+# NO CLAUDE CLI: claude-agent-sdk is needed only because src/agent_profiles/__init__.py builds a
+# ClaudeAgentOptions dataclass at import. Its wheel bundles the `claude` binary; it is deleted
+# below and the build asserts no file named `claude` exists anywhere in the image.
+# Its VERSION is the one deliberate departure from the Mac's pins (0.2.91 there): PyPI yanks old
+# claude-agent-sdk releases and deletes them (0.2.91 was), so a pin
+# to it makes the image unbuildable. Nothing on the SSB path calls the SDK beyond that dataclass.
+# If a rebuild fails on this line, bump to the newest non-yanked release and record it.
+
+# ---- 1. base, pinned by multi-arch index digest (same line as docker/ssb-solver/Dockerfile) ----
+FROM python:3.11-slim@sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7
+
+# ---- 2. solver python stack, exactly as the reported solver image ----
+RUN pip install --no-cache-dir openpyxl==3.1.3 pandas==2.2.0 numpy==1.26.4
+
+# /workspace, NOT /app (see docker/ssb-solver/Dockerfile for why).
+WORKDIR /workspace
+
+# ---- 3. LibreOffice arm: libreoffice-calc AND python3-uno (mirrors ssb-verifier) ----
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libreoffice-calc python3-uno && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    soffice --version > /etc/evoskill_libreoffice_version
+
+# ---- 4. pre-seeded LibreOffice user profile (first recalculation behaves like later ones) ----
+RUN printf 'x\n' > /tmp/seed.csv && \
+    soffice --headless --calc --convert-to xlsx --outdir /tmp /tmp/seed.csv >/dev/null 2>&1 && \
+    test -f /tmp/seed.xlsx && \
+    rm -f /tmp/seed.csv /tmp/seed.xlsx
+
+WORKDIR /workspace
+
+# The environment `docker run` would give a process in the solver image, captured BEFORE any
+# runner layer exists; the shim builds each episode's environment from this file (+ docker -e).
+RUN env | grep -E '^(PATH|LANG|GPG_KEY|PYTHON_VERSION|PYTHON_SHA256)=' | sort > /etc/evoskill_container_env && \
+    grep -q '^PATH=/usr/local/bin' /etc/evoskill_container_env && \
+    /usr/local/bin/python3 -c "import openpyxl,pandas,numpy;assert (openpyxl.__version__,pandas.__version__,numpy.__version__)==('3.1.3','2.2.0','1.26.4')"
+
+# ---- 5. grading profile (EvoSkill-public docker/ssb-verifier/Dockerfile, verbatim content) ----
+RUN mkdir -p /opt/evoskill/verifier-lo-profile/4/user \
+ && printf '%s\n' \
+ '<?xml version="1.0" encoding="UTF-8"?>' \
+ '<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' \
+ '<item oor:path="/org.openoffice.Office.Calc/Formula/Load"><prop oor:name="OOXMLRecalcMode" oor:op="fuse"><value>0</value></prop></item>' \
+ '<item oor:path="/org.openoffice.Office.Calc/Formula/Load"><prop oor:name="ODFRecalcMode" oor:op="fuse"><value>0</value></prop></item>' \
+ '</oor:items>' \
+ > /opt/evoskill/verifier-lo-profile/4/user/registrymodifications.xcu \
+ && grep -q 'OOXMLRecalcMode' /opt/evoskill/verifier-lo-profile/4/user/registrymodifications.xcu \
+ && grep -q '<value>0</value>' /opt/evoskill/verifier-lo-profile/4/user/registrymodifications.xcu
+
+# ---- 6. runner environment: relocatable CPython 3.13.9 + the reported grading package versions ----
+# uv is used only to fetch the interpreter and install the venv, then removed from the solver's
+# python so the solver environment is unchanged.
+RUN pip install --no-cache-dir uv==0.12.18 && \
+    UV_PYTHON_INSTALL_DIR=/opt/evoskill/python uv python install 3.13.9 && \
+    UV_PYTHON_INSTALL_DIR=/opt/evoskill/python uv venv --python 3.13.9 /opt/evoskill/venv && \
+    printf '%s\n' \
+      'openpyxl==3.1.5' 'et_xmlfile==2.0.0' 'lxml==6.1.1' 'defusedxml==0.7.1' 'pillow==12.0.0' \
+      'numpy==2.3.5' 'httpx==0.28.1' 'httpx-sse==0.4.3' 'anyio==4.10.0' 'sniffio==1.3.0' \
+      'idna==3.11' 'pydantic==2.12.4' 'pydantic-core==2.41.5' 'pydantic-settings==2.12.0' \
+      'annotated-types==0.6.0' 'typing-extensions==4.15.0' 'typing-inspection==0.4.2' \
+      'claude-agent-sdk==0.2.159' 'mcp==1.27.2' 'click==8.2.1' 'rich==14.2.0' 'pygments==2.19.2' \
+      'pyyaml==6.0.3' 'python-dotenv==1.1.0' 'opentelemetry-api==1.40.0' \
+      'opentelemetry-sdk==1.40.0' 'opentelemetry-semantic-conventions==0.61b0' \
+      'opentelemetry-instrumentation==0.61b0' 'jsonschema==4.25.0' 'attrs==25.4.0' \
+      'importlib-metadata==8.7.0' 'zipp==3.23.0' \
+      > /opt/evoskill/runner-requirements.txt && \
+    uv pip install --no-cache --python /opt/evoskill/venv/bin/python -r /opt/evoskill/runner-requirements.txt && \
+    uv --version > /opt/evoskill/uv_version && \
+    pip uninstall -y uv && rm -rf /root/.cache && \
+    rm -rf "$(/opt/evoskill/venv/bin/python -c 'import claude_agent_sdk,os;print(os.path.dirname(claude_agent_sdk.__file__))')/_bundled" && \
+    /opt/evoskill/venv/bin/python -c "import openpyxl,lxml,defusedxml,openpyxl.xml as x,sys;assert openpyxl.__version__=='3.1.5' and x.LXML and x.DEFUSEDXML, (openpyxl.__version__,x.LXML,x.DEFUSEDXML);assert sys.version_info[:3]==(3,13,9)"
+
+# ---- 7. build-time assertions (each must hold or the build fails) ----
+# no claude CLI anywhere; the solver's python3 is still 3.11 + openpyxl 3.1.3; uv gone from the
+# solver env; unshare/nsenter/setpriv present (util-linux) for the shim.
+RUN test -z "$(find / -xdev -name claude -type f 2>/dev/null)" && \
+    ! command -v claude && ! command -v uv && \
+    test "$(/usr/local/bin/python3 -c 'import openpyxl;print(openpyxl.__version__)')" = 3.1.3 && \
+    command -v unshare && command -v nsenter && command -v setpriv
+
+# the runner venv's full package list, for the result JSON (uv venvs carry no pip)
+RUN /opt/evoskill/venv/bin/python -c "import importlib.metadata as m;print(chr(10).join(sorted(d.metadata['Name']+'=='+d.version for d in m.distributions())))" > /opt/evoskill/runner-freeze.txt && \
+    grep -q '^openpyxl==3.1.5$' /opt/evoskill/runner-freeze.txt
+
+WORKDIR /workspace

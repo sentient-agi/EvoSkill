@@ -1,65 +1,42 @@
-"""Harness-selectable evolver dispatch: `claude_cli` today, `direct` as a peer.
+"""The macOS sandbox-exec containment for a LOCAL `claude` child (the evolver or the AO run on the host), and
+the parent-session environment scrub every evolver dispatch applies.
 
-NOTHING IMPORTS THIS YET, deliberately. It is built while a 4-epoch run is live, and wiring it
-into `loop.py` would change the running instrument. `spec.py` gains `evolver_harness` only after
-that run's last epoch lands.
+The report's evolver runs in a container on the pool machine (scripts/daytona/evolver_container.py) and uses only
+scrub_parent_session_env() from this module. The rest serves a local child: a deny-first sandbox-exec profile
+(build_evolver_sandbox_profile), probes that EXECUTE reads, writes and connects under it (containment_probe,
+write_containment_probe, preflight, egress_probes), and a CLI that emits the profile for a shell launcher.
 
-── WHY THE HARNESS IS A CONTAINMENT QUESTION FIRST AND A PLUMBING QUESTION SECOND ──────────────
+── WHY SANDBOX-EXEC ────────────────────────────────────────────────────────────────────────────
 
-The CC evolver is confined by three PreToolUse hooks installed by `tau3_evolver.sh`:
+Claude Code's `--add-dir` does NOT confine Bash: a child can reach any path through a shell command even though
+the directory was never added. A PreToolUse hook is a PATTERN MATCH ON A COMMAND STRING and must anticipate every
+phrasing. `sandbox-exec` denies at the kernel: a path that is not granted cannot be opened, by any command, however
+phrased.
 
-    matcher "Bash|Read|Grep|Glob"              -> leak hook, held-out task specs   (#186)
-    matcher "Bash|Read|Grep|Glob|Write|Edit"   -> peer-skill hook, other arms' skills (#213)
-    matcher "Agent"                            -> synchronous subagent dispatch    (#212)
+── WHY NOT A SOLVER'S PROFILE ──────────────────────────────────────────────────────────────────
 
-`src/harness/direct` HAS NO HOOK MECHANISM AT ALL. It has `_check_write_guard` (writes only) and
-a sandbox profile. So porting the evolver to `direct` without building containment would SILENTLY
-DELETE every one of those guards — the #186/#205/#213 defect class, reintroduced by a config
-change, which is the worst way to reintroduce it.
-
-── WHY WE DO NOT REUSE `direct._build_sandbox_profile` ─────────────────────────────────────────
-
-It is deny-read-by-default and then, at executor.py:1285:
-
-    (allow file-read* (subpath "{project_root}"))
-
-i.e. it whitelists the WHOLE REPOSITORY. Every held-out task spec lives under the repository.
-That profile is correct for a SOLVER, which is supposed to see the project, and useless for an
-EVOLVER, whose entire containment problem is "this subtree and no other". Reusing it would have
-produced a guard that cannot fail — #154's shape exactly.
-
-── WHY SANDBOX-EXEC IS THE RIGHT PRIMITIVE, AND STRONGER THAN THE HOOKS IT REPLACES ────────────
-
-#186 recorded that CC's `--add-dir` does NOT confine Bash: the evolver could reach held-out specs
-through a shell command even though the directory was never added. The hooks exist to patch that,
-and a hook is a PATTERN MATCH ON A COMMAND STRING — it must anticipate the phrasing. This session
-alone produced five cases where a substring match was not a meaning; a hook is that same instrument
-pointed at an adversary that can rephrase.
-
-`sandbox-exec` denies at the kernel. A path that is not granted cannot be opened, by any command,
-however phrased, including ones nobody thought of. So the direct path is not a downgrade to be
-compensated for — done deny-first it is the stronger containment, and the CC path is the one
-carrying the weaker guarantee.
+A solver's profile whitelists the WHOLE REPOSITORY, and every held-out task spec lives under the repository. That is
+right for a solver, which is supposed to see the project, and useless for an evolver, whose containment problem is
+"this subtree and no other". Reusing it would produce a guard that cannot fail.
 
 ── THE RULE THIS MODULE ENFORCES ───────────────────────────────────────────────────────────────
 
-A harness may not be selected until it has DEMONSTRATED refusal on a real held-out path.
-`containment_probe()` executes an actual read attempt and returns what happened. `selftest()`
-asserts both that a forbidden read FAILS and that a granted read SUCCEEDS — the second half is
-what stops this from being a guard that passes by refusing everything (a vacuous guard is #154).
+A containment claim must be DEMONSTRATED. `containment_probe()` executes an actual read attempt and returns what
+happened. `selftest()` asserts both that a forbidden read FAILS and that a granted read SUCCEEDS -- the second half
+is what stops this from being a guard that passes by refusing everything.
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-
-HARNESSES = ("claude_cli", "direct")
-
 
 @dataclass
 class EvolverJob:
@@ -72,72 +49,146 @@ class EvolverJob:
     log_path: Path
     grants: list[Path] = field(default_factory=list)   # readable subtrees (digests, staging, oracle)
     prompt_path: Path | None = None      # the composed prompt FILE — granted as a literal, not a tree
-    writes: list[Path] = field(default_factory=list)   # #266: paths this job may WRITE (deny-all otherwise)
-    # #295: subtrees to deny READ BY NAME, wherever they are. See the deny block in
+    writes: list[Path] = field(default_factory=list)   # paths this job may WRITE (deny-all otherwise)
+    # Subtrees to deny READ BY NAME, wherever they are. See the deny block in
     # build_evolver_sandbox_profile for why the four-prefix deny is not sufficient on its own.
     hide: list[Path] = field(default_factory=list)
-    # #293: subtrees to deny WRITE BY NAME. Same reasoning as `hide`, other side of the profile.
+    # Subtrees to deny WRITE BY NAME. Same reasoning as `hide`, other side of the profile.
     # A caller declares the run dir here and re-grants only what the job may produce via `writes`.
     no_write: list[Path] = field(default_factory=list)
     timeout_s: int = 5400
     env: dict = field(default_factory=dict)
+    # The `claude` child's OWN temp root, handed to it as
+    # CLAUDE_CODE_TMPDIR (see mint_cli_tmpdir). Granted read+write AFTER the deny of the host's
+    # shared per-uid temp root. None for a child that is not the CLI.
+    cli_tmpdir: Path | None = None
+    # A DRY RUN's preflight never probes the host's REAL per-uid CLI temp root
+    # (every session's task outputs); step 5 probes a throwaway stand-in instead. See preflight().
+    dry_run: bool = False
+    # EGRESS. None = the profile carries NO network rule, so network-outbound falls under `(allow default)`.
+    # A list = egress ENFORCED: every outbound connection is denied — TCP, UDP and AF_UNIX
+    # connects alike (measured: an AF_UNIX connect under `(deny network-outbound)` is EPERM, so
+    # mDNSResponder, i.e. DNS, is closed too) — and then exactly these LOOPBACK ports are allowed
+    # again: the allowlist proxy's first, then e.g. a local model proxy's.
+    egress_ports: list | None = None
+
+
+def egress_section(ports) -> str:
+    """The profile's network rules. LAST in the profile (see the rule-order note at the builder's
+    return): SBPL takes the last matching rule, so nothing may follow the deny that could match
+    network-outbound again. `ports` None -> a comment only (egress not restricted here)."""
+    if ports is None:
+        return ("; EGRESS: NOT restricted by this profile — network-outbound falls under "
+                "(allow default)")
+    bad = [p for p in ports if not (isinstance(p, int) and 1 <= p <= 65535)]
+    if bad:
+        raise ValueError(f"egress ports must be integers in 1..65535, got {bad!r}")
+    lines = ["; EGRESS ENFORCED. Every outbound connection is denied — TCP, UDP and",
+             "; AF_UNIX connects (DNS via mDNSResponder included) — except to these loopback",
+             "; ports: the allowlist CONNECT proxy first, then any declared local model proxy.",
+             "; LAST in the profile, so no later rule can re-open outbound (last match wins).",
+             "(deny network-outbound)"]
+    lines += [f'(allow network-outbound (remote ip "localhost:{p}"))'
+              for p in dict.fromkeys(ports)]
+    return "\n".join(lines)
+
+
+# ── the PARENT session's environment ───────────────────────────────────────────────────────
+# The orchestrator itself may run inside a Claude Code session, and every `claude` child (the evolver, the AO)
+# would inherit that session's environment:
+# its messaging socket and token (a live, non-file channel INTO the operator's session), its
+# session and bridge ids, its background-job dir and kind, its pid and executable. None of it is
+# the child's to use, and CLAUDE_JOB_DIR/CLAUDE_CODE_SESSION_KIND would make a child believe it
+# is part of the operator's job. Names seen in os.environ of a real session:
+# CLAUDECODE, CLAUDE_CODE_BRIDGE_SESSION_ID, CLAUDE_CODE_CHILD_SESSION, CLAUDE_CODE_ENTRYPOINT,
+# CLAUDE_CODE_EXECPATH, CLAUDE_CODE_MESSAGING_SOCKET, CLAUDE_CODE_MESSAGING_TOKEN,
+# CLAUDE_CODE_SESSION_ATTENDED, CLAUDE_CODE_SESSION_ID, CLAUDE_PID; CLAUDE_JOB_DIR and
+# CLAUDE_CODE_SESSION_KIND are set for background jobs. Kept on purpose: auth
+# (CLAUDE_CODE_OAUTH_TOKEN), the child's own CLAUDE_CODE_TMPDIR, and model/config variables.
+# A new CLAUDE_CODE_* name about a session, messaging, a bridge, a parent or a job is caught by
+# the pattern. Only NAMES are ever recorded; values are never printed.
+#
+# The IDE-integration channel too. Run from an IDE's terminal, the
+# session exports CLAUDE_CODE_SSE_PORT (the IDE extension's MCP server) and may set
+# ENABLE_IDE_INTEGRATION / CLAUDE_CODE_*IDE*; a child inheriting them attaches to the OPERATOR's
+# IDE. Matched as whole `_`-separated tokens: a bare substring would also take *OVERRIDE* and
+# *PROCESSES* names, which are configuration, not a channel.
+PARENT_SESSION_ENV = (
+    "CLAUDECODE", "CLAUDE_PID", "CLAUDE_JOB_DIR",
+    "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SESSION_KIND", "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SSE_PORT", "ENABLE_IDE_INTEGRATION",
+)
+_PARENT_SESSION_RE = re.compile(r"^CLAUDE_CODE_\w*(SESSION|MESSAGING|BRIDGE|PARENT|JOB)\w*$")
+_PARENT_IDE_RE = re.compile(r"^CLAUDE_CODE_(?:\w+_)?(?:IDE|SSE)(?:_\w+)?$")
+
+
+def parent_session_env_names(env=None) -> list[str]:
+    """Sorted names in `env` (default os.environ) that identify or reach the parent session."""
+    env = os.environ if env is None else env
+    return sorted(k for k in env if k in PARENT_SESSION_ENV or _PARENT_SESSION_RE.match(k)
+                  or _PARENT_IDE_RE.match(k))
+
+
+def scrub_parent_session_env(env: dict) -> tuple[dict, list[str]]:
+    """(a copy of `env` without the parent-session variables, the sorted names removed)."""
+    names = parent_session_env_names(env)
+    return ({k: v for k, v in env.items() if k not in names}, names)
+
+
+# ── the CLI's per-uid temp root ─────────────────────────────────────────────────────────────
+# `claude` keeps EVERY session's scratch under <root>/claude-<uid>,
+# root = $CLAUDE_CODE_TMPDIR or /tmp: per-cwd-slug/<session>/tasks/*.output (the Bash output of
+# every session on this host, the orchestrator's included), scratchpads, and shared entries
+# (bundled-skills/, bash-edit-diff/, plugin-tool-staging/, fswatch probes). The profile's first
+# rule allows all of /private, so all of it would be readable -- and writable -- by the evolver and
+# the AO. The profile denies that tree outright, and the child is pointed at a PRIVATE root of
+# its own instead (CLAUDE_CODE_TMPDIR, the CLI's documented override), granted back by name.
+# Relocating rather than granting back "this session's slug dir" is deliberate: the CLI also
+# uses the shared entries above, which a slug grant would silently break, and the slug rule is
+# the CLI's to change.
+#
+# THE 44-BYTE BUDGET. The CLI gives child processes $TMPDIR = <root>/claude-<uid> only while
+# that path is at most 44 bytes (AF_UNIX socket paths); beyond it the child's $TMPDIR falls
+# back to /tmp/claude-<uid> — the very tree denied here. So the minted path is short, spelled
+# via /tmp, and checked.
+CLI_TMP_BUDGET = 44
+
+
+def cli_uid_roots() -> list[Path]:
+    """The host's per-uid CLI temp root(s) the profile denies: /tmp/claude-<uid> resolved (macOS
+    resolves /tmp under /private), plus the one an inherited CLAUDE_CODE_TMPDIR would select."""
+    uid = os.getuid()
+    roots = {Path("/tmp").resolve() / f"claude-{uid}"}
+    inherited = os.environ.get("CLAUDE_CODE_TMPDIR", "")
+    if inherited:
+        roots.add(Path(inherited).resolve() / f"claude-{uid}")
+    return sorted(roots, key=str)
+
+
+def mint_cli_tmpdir(tag: str) -> str:
+    """A fresh, unused CLAUDE_CODE_TMPDIR for one child: /tmp/claude-<uid>/<tag>.<8 hex>.
+    NOT created — the CLI creates it (and <it>/claude-<uid>) inside the grant. Raises when the
+    CLI's own per-uid dir under it would exceed CLI_TMP_BUDGET."""
+    import uuid
+    if not tag or not tag.isalnum() or len(tag) > 4:
+        raise ValueError(f"cli tmpdir tag {tag!r}: 1-4 alphanumerics")
+    uid = os.getuid()
+    p = f"/tmp/claude-{uid}/{tag}.{uuid.uuid4().hex[:8]}"
+    if len(f"{p}/claude-{uid}".encode()) > CLI_TMP_BUDGET:
+        raise ValueError(f"{p}/claude-{uid} exceeds the CLI's {CLI_TMP_BUDGET}-byte temp-dir "
+                         f"budget; its child processes would fall back to the denied shared root")
+    return p
 
 
 # ── containment ─────────────────────────────────────────────────────────────────────────────
 
-def _cli_install_allows() -> list[str]:
-    """Read grants for wherever the `claude` CLI actually lives on THIS machine.
-
-    Returns the resolved binary, its bin dir, and -- for a node install -- the package
-    tree next to it, since the launcher script only re-execs into node_modules. Silent
-    when the CLI is absent: preflight reports that separately, and a profile is still
-    emittable on a machine that has not installed it yet.
-    """
-    out: list[str] = []
-    exe = shutil.which("claude")
-    if not exe:
-        return out
-    real = Path(exe).resolve()
-    roots = {Path(exe).parent, real.parent}
-    # npm -g layout: <prefix>/bin/claude -> <prefix>/lib/node_modules/@anthropic-ai/...
-    for cand in (real.parent.parent, Path(exe).parent.parent):
-        for sub in ("lib/node_modules", "libexec"):
-            q = cand / sub
-            if q.is_dir():
-                roots.add(q)
-    node = shutil.which("node")
-    if node:
-        # BOTH the symlink's directory and its target's: sandbox-exec resolves an exec
-        # through every path component, so granting only the realpath tree still failed at
-        # /opt/homebrew/bin/node with "execvp() ... Operation not permitted".
-        roots.add(Path(node).parent)
-        roots.add(Path(node).resolve().parent)
-        roots.add(Path(node).resolve().parent.parent)
-
-    # A PACKAGE-MANAGER PREFIX, GRANTED ONLY IF THE CLI ACTUALLY LIVES IN ONE.
-    # Homebrew's node loads a web of sibling dylibs (@rpath/libnode.*, then
-    # /opt/homebrew/opt/llhttp/lib/libllhttp.*, and onward), so granting the node package
-    # alone gets past execvp and dies in dyld one symptom later. Enumerating those
-    # libraries is unbounded and version-specific. The trade taken here: if -- and only
-    # if -- the resolved CLI or its interpreter sits under a known prefix, grant that
-    # prefix for READ. It is the operator's own toolchain directory; the containment that
-    # matters is over the benchmark's held-out material, which lives under $HOME and the
-    # repo and is denied by name elsewhere in this profile. On a machine where the CLI is
-    # self-contained (the ~/.local install) no prefix is granted at all.
-    for pref in (Path("/opt/homebrew"), Path("/usr/local"), Path("/opt/local")):
-        if any(str(r).startswith(str(pref)) for r in roots):
-            roots.add(pref)
-    out.append("; the `claude` CLI as installed on THIS machine, derived not assumed (#291)")
-    out.append(f'(allow file-read* (literal "{real}"))')
-    for r in sorted({str(x) for x in roots}):
-        out.append(f'(allow file-read* (subpath "{r}"))')
-    return out
-
-
-def build_evolver_sandbox_profile(job: EvolverJob) -> str:
+def build_evolver_sandbox_profile(job: EvolverJob, uid_roots=None) -> str:
     """Deny-read by default; grant ONLY what the evolver is entitled to.
 
-    The inversion versus `direct._build_sandbox_profile` is the whole point: that one denies a
+    The inversion versus a solver's profile is the whole point: that one denies a
     fixed list of system subpaths and then allows the project root, so anything inside the repo
     is readable. This one allows a fixed list of SYSTEM paths needed to run a shell, denies
     everything else including the repository, and then grants exactly `job.grants`.
@@ -146,117 +197,76 @@ def build_evolver_sandbox_profile(job: EvolverJob) -> str:
     specific match, so a later `(allow (subpath "<grant>"))` under /Users still wins for that
     subtree while its siblings stay denied. That ordering is the load-bearing detail and it is
     what `selftest()` proves, rather than assuming.
+
+    `uid_roots` replaces the host's per-uid CLI temp root(s) (cli_uid_roots()) in the rules. Only
+    a dry-run preflight passes it, to probe the rule shape on a throwaway stand-in.
     """
     allows = "\n".join(f'(allow file-read* (subpath "{p.resolve()}"))' for p in job.grants)
-    # #295. DENY THE RUN DIRECTORY BY NAME, exactly as #293 does for writes, and for exactly the
+    # DENY THE RUN DIRECTORY BY NAME, exactly as no_write does for writes, and for exactly the
     # same reason: the block below denies reads by LOCATION -- /Users, /home, /opt, /Volumes --
     # and `(allow default)` covers everything else. A run directory outside those four prefixes
     # (a scratch mount, /var/folders, an external volume) is therefore FULLY READABLE, peer arms'
-    # skills_v* and the split file with every held-out id included. The #213 and #186 properties
-    # would hold in production only because run dirs happen to live under /Users.
-    #
-    # Caught by the FIRST fixture that put a peer arm in a tempdir (2026-08-11): the evolver read
-    # it straight out, including through Bash, which is #186's measured failure reappearing at a
-    # different address. Declared, never derived -- the caller names what to hide, because
+    # skills_v* and the split file with every held-out id included; the no-peer-read and
+    # no-held-out-read properties would hold only because run dirs happen to live under /Users.
+    # Declared, never derived -- the caller names what to hide, because
     # guessing a parent from the grants is how a deny lands on the wrong directory.
     hides = "\n".join(f'(deny file-read* (subpath "{p.resolve()}"))' for p in (job.hide or []))
-    # #293, as a first-class field rather than string surgery at one call site. The write deny
+    # The write deny by NAME, as a first-class field rather than string surgery at one call site. The write deny
     # below is by LOCATION (repo, home); a run dir outside both matches neither and `(allow
-    # default)` makes it fully writable -- the operator's answer channel, the countersignature
-    # and every skills_v* included. Emitted BEFORE `write_allows`, so the job's declared outputs
+    # default)` makes it fully writable -- the operator's answer channel and every skills_v*
+    # included. Emitted BEFORE `write_allows`, so the job's declared outputs
     # are re-granted afterwards and win (last match).
     no_writes = "\n".join(f'(deny file-write* (subpath "{p.resolve()}"))'
                           for p in (job.no_write or []))
     work = job.work_dir.resolve()
-    # #250c. THE LOG'S PARENT DIRECTORY NODE, AS A LITERAL, NEVER AS A SUBPATH.
-    # LogWriter calls mkdir(exist_ok=True); CPython's exist_ok branch catches FileExistsError then
-    # calls is_dir() to confirm, and a DENIED is_dir() makes it RE-RAISE. Writes were never
-    # blocked (this profile only denies reads) -- the confirmation READ was.
-    # My first fix added the run dir to `grants`, i.e. as a SUBPATH. That would have made the run
-    # dir's split file readable, and the split file LISTS ALL 47 TEST IDS -- widening containment
-    # to fix a plumbing bug, which is how #186 happens. A `literal` grant gives is_dir() and
-    # listing on that one node while every file inside stays denied unless separately granted
-    # (digests, staging and the train-only oracle already are).
+    # THE LOG'S PARENT DIRECTORY NODE, AS A LITERAL, NEVER AS A SUBPATH.
+    # A log writer calls mkdir(exist_ok=True); CPython's exist_ok branch catches FileExistsError then
+    # calls is_dir() to confirm, and a DENIED is_dir() makes it RE-RAISE.
+    # Granting the run dir as a SUBPATH would make its split file readable, and the split file lists
+    # every held-out id. A `literal` grant gives is_dir() and listing on that one node while every
+    # file inside stays denied unless separately granted (digests, staging and the train-only oracle are).
     _logdir = job.log_path.resolve().parent
-    # #300. THE LOG FILE ITSELF, not just its parent node. The child's stdout/stderr are
-    # redirected INTO this file, and a process fstat()s its own stderr fd at startup. The parent
-    # was granted as a directory node (#250c) but the file was not, and once #295 denied the run
-    # dir by name the fd became unreadable: the CLI died with
-    # `EPERM: operation not permitted, fstat` inside a Bun WriteStream — a JS stack trace naming
-    # no path, which is why three probe generations missed it and only a real launch found it.
-    # A LITERAL on the file, never a subpath on its directory: the run dir holds the split.
-    # #300. THE FILES THE CHILD'S OWN fd's POINT AT — every one of them.
-    # A process fstat()s its inherited stdout/stderr at startup (Bun does it in
-    # internal:util/colors to detect colour support), and fstat on an fd whose PATH the sandbox
-    # denies is EPERM. Once #295 denied the run dir by name, the log the launcher redirects into
-    # became unreadable and the CLI died before its first turn, with a Bun stack trace naming no
-    # path at all. Three probe generations and two "fixes" missed it; only a real launch found it.
+    # THE FILES THE CHILD'S OWN fds POINT AT -- every one of them, as LITERALS (the run dir holds the split).
+    # A process fstat()s its inherited stdout/stderr at startup (Bun does it in internal:util/colors to detect
+    # colour support), and fstat on an fd whose PATH the sandbox denies is EPERM: with the run dir denied by name,
+    # the CLI would die before its first turn with `EPERM: operation not permitted, fstat`, a stack trace naming
+    # no path.
     #
-    # `.streamer.stderr` is the launcher's own convention for the Phoenix branch's stderr sink,
+    # `.streamer.stderr` is the launcher's own convention for its stream branch's stderr sink,
     # named here rather than passed in because getting it WRONG is silent (the child dies at
     # startup) while getting it wrong in the launcher would at least be visible in argv. If that
     # suffix ever changes, this must change with it.
     #
-    # STRUCTURAL NOTE, recorded rather than fixed tonight: the evolver's log lives in the RUN DIR,
-    # which is exactly the tree containment must hide (it holds the split). Logging into a denied
-    # directory and then granting the log back file-by-file is a standing tension. The clean fix
-    # is to write the log inside WORK -- already granted read+write -- and copy it out after. That
-    # touches every consumer of the log path, so it is deliberately not done under time pressure.
+    # STRUCTURAL NOTE: the child's log lives in the RUN DIR, which is exactly the tree containment must hide
+    # (it holds the split), so the log is granted back file by file. Writing the log inside WORK (granted
+    # read+write) and copying it out after would avoid that, at the cost of changing every consumer of the
+    # log path.
     _lits = [_logdir, job.log_path.resolve(),
              job.log_path.resolve().with_name(job.log_path.name + ".streamer.stderr")]
     # The PROMPT FILE is the evolver's own input and is deliberately given to it. Granted as a
-    # LITERAL FILE, so nothing else in the run dir (notably the split, which lists all 47 test ids)
+    # LITERAL FILE, so nothing else in the run dir (notably the split, which lists every held-out id)
     # becomes readable alongside it.
     if job.prompt_path:
         _lits.append(job.prompt_path.resolve())
     log_allow = "\n".join(f'(allow file-read* (literal "{x}"))' for x in _lits)
-    # #250. THE INTERPRETER MUST BE GRANTED OR NOTHING RUNS AT ALL. `/Users` is denied as a
-    # subpath, and on this host sys.executable lives under the user's home (a conda
-    # install) — so the profile denied exec of the very binary the dispatch invokes:
-    #     sandbox-exec: execvp() of '.../anaconda3/bin/python3' failed: Operation not permitted
-    # Measured on the FIRST live dispatch, 2026-08-10. Zero cost (it died before any model call).
+    # THE INTERPRETER MUST BE GRANTED OR NOTHING RUNS AT ALL. `/Users` is denied as a subpath, and an
+    # interpreter under the home directory (a conda install, a venv) then cannot even be exec'd:
+    #     sandbox-exec: execvp() of '.../bin/python3' failed: Operation not permitted
     #
-    # Derived from sys.executable, NOT hardcoded: a hardcoded anaconda path would break the
-    # moment the interpreter moved, and it would break silently-at-launch rather than loudly.
-    # `direct._build_sandbox_profile` already grants the interpreter tree and the user's
-    # ~/.local for exactly this reason — I read that line while deciding not to reuse the profile
-    # and did not carry the requirement across. Granting the interpreter tree is safe: it is
-    # outside the repository, so held-out specs stay denied.
-    # ...AND THE UNRESOLVED PATH, WHICH IS THE ONE THAT GETS EXEC'D. resolve() maps
-    # .venv/bin/python to its conda target, so only the conda tree was granted, while the
-    # exec itself names the venv symlink inside the REPO -- denied by design. Result:
-    #     execvp() of '<repo>/.venv/bin/python' failed: Operation not permitted
-    # which is the #250 failure again, one indirection out. Caught 2026-08-18 by this
-    # module's own selftest reporting "9 checks, 1 bad" while the launcher still dispatched.
-    # A read grant on .venv/bin does not widen access to the repo's content: the src/ and
-    # scripts/ content grants are separate and held-out material is denied by name.
-    # ...AND THE VENV ITSELF, OR THE CHILD SILENTLY LEAVES IT.
-    # CPython activates a venv by reading pyvenv.cfg NEXT TO the executable and then
-    # importing from <prefix>/lib. Granting only .venv/bin and the RESOLVED base prefix
-    # left both denied -- they sit under the repo, which this profile denies apart from
-    # src/ and scripts/ -- so the sandboxed interpreter fell back to the ambient base
-    # install: different package versions than the declared constraints, and an outright
-    # failure on a machine whose base install is clean. Measured by emitting the real
-    # profile and printing sys.prefix under it.
+    # Derived from sys.executable, NOT hardcoded: a hardcoded path would break the moment the
+    # interpreter moved, and it would break silently-at-launch rather than loudly. Granting the
+    # interpreter tree (and ~/.local) is safe: it is outside the repository, so held-out specs stay denied.
     _exe = Path(sys.executable).resolve()
-    _interp = sorted({str(_exe.parents[1]), str(Path.home() / ".local"),
-                      str(Path(sys.executable).parent)})
-    _venv_allows = []
-    if sys.prefix != sys.base_prefix:
-        _venv_allows = [f'(allow file-read* (literal "{Path(sys.prefix) / "pyvenv.cfg"}"))',
-                        f'(allow file-read* (subpath "{Path(sys.prefix) / "lib"}"))']
-    interp_allows = "\n".join([f'(allow file-read* (subpath "{d}"))' for d in _interp]
-                              + _venv_allows)
+    _interp = sorted({str(_exe.parents[1]), str(Path.home() / ".local")})
+    interp_allows = "\n".join(f'(allow file-read* (subpath "{d}"))' for d in _interp)
 
-    # #250b. THE RUNNER MODULE LIVES IN THE REPO, AND THE REPO IS DENIED BY DESIGN. Granting the
-    # interpreter got python to exec; it then died in `_path_importer_cache` with
-    # `PermissionError: [Errno 1] Operation not permitted`, because it could not even STAT its
-    # own sys.path entries — `python3 -m src.orchestrator.evolver_direct_runner` needs to read
-    # the repo's CODE.
+    # THE REPO'S CODE IS NEEDED, AND THE REPO IS DENIED BY DESIGN. With only the interpreter granted, python
+    # dies in `_path_importer_cache` with `PermissionError: [Errno 1] Operation not permitted`, because it
+    # cannot even STAT its own sys.path entries; a python child needs to read the repo's CODE.
     #
-    # The fix must not become "allow the repo", which is precisely the reuse trap this profile
-    # exists to avoid (direct._build_sandbox_profile whitelists project_root and every held-out
-    # spec lives under it). So the grant is split by WHAT IS NEEDED, not by convenience:
+    # The grant must not become "allow the repo", which is precisely the trap this profile
+    # exists to avoid (every held-out spec lives under it).
+    # So the grant is split by WHAT IS NEEDED, not by convenience:
     #   * file-read-METADATA on the repo root -> stat/scandir succeed, so imports resolve, but
     #     no file CONTENT is readable.
     #   * file-read* on src/ and scripts/ only -> the code, which is not data.
@@ -266,37 +276,29 @@ def build_evolver_sandbox_profile(job: EvolverJob) -> str:
     _repo = Path(__file__).resolve().parents[2]
     repo_allows = "\n".join([
         # LITERAL, not subpath: grants the repo-root DIRECTORY NODE so python can enumerate it,
-        # without granting anything inside. `file-read-metadata (subpath ...)` was tried first and
-        # is NOT sufficient -- macOS requires file-read-DATA on a directory to list it, and python
+        # without granting anything inside. `file-read-metadata (subpath ...)` is NOT sufficient --
+        # macOS requires file-read-DATA on a directory to list it, and python
         # lists every sys.path entry. Measured: metadata-only died in _path_importer_cache.
         f'(allow file-read* (literal "{_repo}"))',
         f'(allow file-read* (subpath "{_repo / "src"}"))',
         f'(allow file-read* (subpath "{_repo / "scripts"}"))',
     ])
-    # #266 WRITE CONTAINMENT (2026-08-11). Until now this profile governed READS ONLY — there was
-    # not one file-write rule in it, for the evolver or anyone else. That was survivable while
-    # nothing downstream TRUSTED a file an agent could author. It stopped being survivable the
-    # moment ask() started reading ANSWERS_e{N}.json and _v_operator_signature started reading
-    # e{N}_PROOFREAD.json: both are trust boundaries, and an agent with write access to the run
-    # dir could satisfy its own gate — ask itself a question and answer it, or countersign its own
-    # prompt. Read-containment cannot express that; only write-containment can.
+    # WRITE CONTAINMENT. Files the loop TRUSTS (the operator's answers, the run's records) live in the run
+    # dir; an agent with write access to it could satisfy its own gate, e.g. ask itself a question and
+    # answer it. Read-containment cannot express that; only write-containment can.
     #
     # Deny-then-grant, same shape as the reads, same most-specific-match resolution. The grants
     # are deliberately narrow: the job's own work dir, its log's directory, and whatever it
     # explicitly declared in `writes`. Everything else under /Users is denied, INCLUDING the run
-    # directory the AO previously had wholesale.
+    # directory.
     #
     # ~/.claude is granted because the CLI writes its own session/telemetry state there and dies
-    # without it — verified by probe, not assumed. That is a real widening and it is why the
+    # without it (verified by probe). That is a real widening and it is why the
     # answer channel must ALSO live outside any agent-writable path rather than relying on this
     # list alone: defence in depth, because one forgotten grant here re-opens the boundary.
-    # THE LOG IS GRANTED AS A LITERAL FILE, NEVER VIA ITS PARENT. My first version wrote
-    # `_wr = [work, _logdir]`, and _logdir is log_path.parent — which IS THE RUN DIR. That
-    # granted write access to the whole run dir while purporting to lock it down: the probe
-    # showed ANSWERS/PROOFREAD/skills all still writable. The read path carries a comment
-    # (#250c) saying exactly this — "the log's parent directory node, as a LITERAL, never as a
-    # SUBPATH" — and I reproduced the mistake it warns about, on the other side of the profile.
-    # A subpath grant for a file that lives in a sensitive directory grants the directory.
+    # THE LOG IS GRANTED AS A LITERAL FILE, NEVER VIA ITS PARENT: log_path.parent IS THE RUN DIR, and a
+    # subpath grant for a file that lives in a sensitive directory grants the directory (the same rule as
+    # the read side's log node above).
     _wr_sub = [work] + [Path(w).resolve() for w in (job.writes or [])]
     _wr_lit = [job.log_path.resolve()]
     _home_claude = Path.home() / ".claude"
@@ -304,28 +306,60 @@ def build_evolver_sandbox_profile(job: EvolverJob) -> str:
         [f'(allow file-write* (subpath "{d}"))' for d in sorted({str(x) for x in _wr_sub})]
         + [f'(allow file-write* (literal "{f}"))' for f in sorted({str(x) for x in _wr_lit})]
         + [f'(allow file-write* (subpath "{_home_claude}"))'])
+    # ~/.claude, WRITE SIDE. The ~/.claude write allow above is a blanket, so every
+    # evolver and AO could rewrite what the OPERATOR's own sessions load and run: settings.json
+    # (hooks run unsandboxed in the operator's session, where the split and the val/sealed results
+    # are readable, and could drop them where a later evolver reads them), statusline scripts,
+    # CLAUDE.md, user-level skills/ commands/ agents/ (one arm contaminating every later session),
+    # plugins/ (plugin hooks), the local install and the Chrome native-host wrapper — and other
+    # jobs' work dirs under jobs/, whose READ is taken back below too. Denied by name AFTER the
+    # allow; the job's own declared writes are then granted AGAIN below, because an evolver's WORK
+    # lives under jobs/ and must still win (last match). The list follows the config the CLI's own
+    # sandbox write-protects (skills, hooks, commands, agents, workflows, routines, rules,
+    # output-styles, plugins, settings*, CLAUDE.md, launch/scheduled_tasks/daemon/policy-limits
+    # json, local, jobs, chrome), minus what the CLI itself writes at run time (projects/ for its
+    # transcript, shell-snapshots/, session-env/, sessions/, backups/, todos/, statsig state).
+    _cfg_re = re.escape(str(_home_claude))
+    _cli_roots_w = cli_uid_roots() if uid_roots is None else [Path(r) for r in uid_roots]
+    write_denies = "\n".join(
+        [f'(deny file-write* (subpath "{_home_claude / n}"))'
+         for n in ("skills", "hooks", "commands", "agents", "workflows", "routines", "rules",
+                   "output-styles", "plugins", "cowork_plugins", "local", "chrome", "jobs")]
+        + [f'(deny file-write* (regex #"^{_cfg_re}/(settings[^/]*|statusline[^/]*|[^/]*\\.md'
+           f'|scheduled_tasks\\.json|launch\\.json|daemon\\.json|policy-limits\\.json)$"))'])
+    # The host's per-uid CLI temp root (see cli_uid_roots), denied BY NAME on both sides: other
+    # sessions' Bash task outputs and scratchpads — the orchestrator's included, which the
+    # operator's session reads back, so a write there is a channel INTO the operator's session.
+    # Emitted right after the location-based denies, BEFORE every narrower allow, so that the
+    # child's own private root (cli_tmpdir, granted back below) and any declared grant win.
+    cli_root_write_denies = "\n".join(f'(deny file-write* (subpath "{r}"))' for r in _cli_roots_w)
+    cli_root_read_denies = "\n".join(f'(deny file-read* (subpath "{r}"))' for r in _cli_roots_w)
+    _cli_tmp = Path(job.cli_tmpdir).resolve() if job.cli_tmpdir else None
+    write_reallows = "\n".join(
+        [f'(allow file-write* (subpath "{d}"))'
+         for d in sorted({str(x) for x in _wr_sub + ([_cli_tmp] if _cli_tmp else [])})]
+        + [f'(allow file-write* (literal "{f}"))' for f in sorted({str(x) for x in _wr_lit})])
+    # The child CLI's own temp root (CLAUDE_CODE_TMPDIR) for READ, after the per-uid root deny;
+    # plus the per-uid root NODE for metadata only (the CLI realpaths and stats its temp dir's
+    # ancestors), never for listing — the root's entries name other sessions.
+    cli_tmp_allows = "\n".join(
+        [f'(allow file-read-metadata (literal "{r}"))' for r in _cli_roots_w]
+        + ([f'(allow file-read* (subpath "{_cli_tmp}"))'] if _cli_tmp else []))
 
-    # ── #291. WHAT THE `claude` CLI ITSELF NEEDS TO RUN AT ALL ────────────────────────────
+    # ── WHAT THE `claude` CLI ITSELF NEEDS TO RUN AT ALL ─────────────────────────────────
     #
-    # This profile was written for, and only ever exercised against, the `direct` harness — a
-    # python module. The `claude_cli` harness (every real evolver run to date) does NOT wrap its
-    # dispatch in sandbox-exec at all; it shells out to scripts/tau3_evolver.sh unwrapped. So when
-    # #267 put the AO under this profile, THAT WAS THE FIRST TIME A REAL `claude` LAUNCH HAD EVER
-    # RUN UNDER IT — and it died instantly. Two distinct failures, both invisible to the existing
-    # probes because those probe /bin/cat and /bin/sh, never the CLI:
+    # Two requirements a probe of /bin/cat or /bin/sh never shows:
     #
-    #   1. AUTHENTICATION. `~/.claude` was granted WRITE ("the CLI writes its own state there and
-    #      dies without it — verified by probe") but never READ, and OAuth credentials live in the
-    #      login keychain under ~/Library/Keychains. Result: `Not logged in · Please run /login`,
-    #      exit 1, in 4 seconds. The probe that "verified" the write grant never checked that the
-    #      process could then authenticate.
+    #   1. AUTHENTICATION. The CLI must READ ~/.claude (not only write it), and OAuth credentials live
+    #      in the login keychain under ~/Library/Keychains. Without them: `Not logged in · Please run
+    #      /login`, exit 1.
     #
     #   2. DENIED != ABSENT ON THE CONFIG SEARCH PATH. The CLI walks from cwd up to $HOME looking
     #      for configuration. A MISSING directory is fine; a DENIED one raises EPERM and kills the
     #      process outright — `error: An internal error occurred (EPERM)`, with no indication of
     #      which path. Since `(deny file-read* (subpath "/Users"))` denies every ancestor, the CLI
-    #      could not start regardless of what was granted below. Bisected: granting exactly the
-    #      ancestor DIRECTORY NODES (literals — the node, never the tree) is sufficient.
+    #      cannot start regardless of what is granted below. Granting exactly the ancestor DIRECTORY
+    #      NODES (literals -- the node, never the tree) is sufficient (bisected).
     #
     # The grants below are the minimum found by bisection, and `~/.claude/projects` is re-denied
     # on top: that subtree holds every past session transcript on this machine, which is both the
@@ -340,54 +374,67 @@ def build_evolver_sandbox_profile(job: EvolverJob) -> str:
                 break
             cur = cur.parent
     _anc = sorted({str(x) for x in _anc if str(x).startswith(str(Path.home()))})
+    # "Under HOME" is only as good as $HOME. With HOME at or above the
+    # per-uid CLI temp root (HOME=/tmp, resolved), a work dir beneath that root (the AO's private
+    # CLI temp root is one) would put the root itself in this list -- a file-read* literal AFTER the
+    # root's deny, so every session's slug dir would be listable again. Whatever HOME says: no node
+    # that is a per-uid root or lies above one. The root keeps its metadata-only grant
+    # (cli_tmp_allows) for the CLI's realpath; nodes INSIDE it stay, as the CLI needs them when
+    # HOME itself lies there (the fixtures do).
+    _rr = [Path(r).resolve() for r in _cli_roots_w]
+    _anc = [a for a in _anc if not any(Path(a) == r or Path(a) in r.parents for r in _rr)]
+    # THE REST OF ~/.claude THAT IS OTHER SESSIONS' MATERIAL, taken back like
+    # projects/. The subpath read grant above re-denied only projects/, which left readable:
+    #   jobs/          every other job's scratch — other runs' evolver WORK dirs with their
+    #                  PROMPT.md (from epoch 2 on, another arm's prior skill set word for word) and
+    #                  scratch/, and the orchestrator's own job dirs, which may quote val and
+    #                  held-out test results;
+    #   history.jsonl, file-history/, paste-cache/, debug/, sessions/, backups/
+    #                  prompts, file snapshots and pastes from every session on this host.
+    # NOT shell-snapshots/: the CLI writes its OWN snapshot there and every
+    # Bash call `source`s it with the failure swallowed, so a deny silently strips the child's
+    # PATH export and its find/grep/rg/pkill wrappers. The files hold aliases, functions and
+    # PATH, not conversations; the CLI's own sandbox re-opens that dir for reads for this reason.
+    # NOT a deny of all of ~/.claude: the CLI's startup needs (settings, credentials, plugins,
+    # statsig state, ...) were found by bisection and cannot be re-bisected without a live launch.
+    # Narrow grants that come LATER still win (last match): this job's WORK dir (under jobs/),
+    # this run's own PROJDIR, the AO's own transcript dir. The ancestor NODES below are emitted
+    # AFTER these denies for the same reason — the evolver's cwd lives under jobs/, and a denied
+    # ancestor of cwd is a fatal EPERM -- so jobs/ and jobs/<id>/ stay listable (names only).
+    _other_sessions = [f'(deny file-read* (subpath "{_home_claude / n}"))'
+                       for n in ("jobs", "file-history", "paste-cache",
+                                 "debug", "sessions", "backups")]
+    _other_sessions.append(f'(deny file-read* (literal "{_home_claude / "history.jsonl"}"))')
     cli_allows = "\n".join(
-        ["; #291 the ancestor directory NODES of cwd and the repo, as literals. The CLI walks up",
-         "; from cwd looking for config; a DENIED ancestor is EPERM (fatal), unlike an absent one."]
-        + [f'(allow file-read* (literal "{a}"))' for a in _anc]
-        + ["; #291 the CLI's own installation, config and credentials. Without these it reports",
+        ["; the CLI's own installation, config and credentials. Without these it reports",
          "; `Not logged in` and exits 1 — the write grant on ~/.claude is not sufficient.",
          f'(allow file-read* (subpath "{Path.home() / ".local"}"))',
          f'(allow file-read* (subpath "{_home_claude}"))',
-         # #291 FOURTH SITE. The grants above cover ~/.local, which is where the CLI lands
-         # for the installer this repo's authors happen to use -- so the profile worked here
-         # and nowhere else. README.md tells operators to `npm install -g`, which under
-         # Homebrew on Apple Silicon puts the binary at /opt/homebrew/bin/claude with its
-         # modules under /opt/homebrew/lib/node_modules, and /opt is DENIED a few lines
-         # below. The child then dies at execvp while the launcher prints "containment:
-         # sandbox-exec ...". Derive the location instead of assuming it, the same way #250
-         # derives the interpreter from sys.executable rather than hardcoding a path.
          f'(allow file-read* (literal "{Path.home() / ".claude.json"}"))',
          f'(allow file-read* (subpath "{Path.home() / "Library" / "Keychains"}"))',
-         "; ... but NOT other sessions' content. Granted above by the ~/.claude subpath;",
+         "; ... but NOT other sessions' transcripts. Granted above by the ~/.claude subpath;",
          "; taken back here, because that tree holds every past run's conversation on this host.",
-         "; `projects` alone was not enough: its SIBLINGS carry the same material in other",
-         "; shapes -- file-history/ holds snapshots of every file any CC session on this host",
-         "; has edited (on the authors' machine it contains held-out ids from the shipped smoke",
-         "; splits), history.jsonl the prompts, shell-snapshots/ the shell state, and backups/",
-         "; and session-env/ whole copies. A sandboxed evolver read all of them past both hooks.",
-         "; Denied by name so the list is auditable; the CLI needs none of them to authenticate",
-         "; (proved by preflight, which execs it under this very profile)."]
-        + [f'(deny file-read* (subpath "{_home_claude / d}"))'
-           for d in ("projects", "file-history", "backups", "session-env",
-                     "shell-snapshots", "debug", "downloads", "paste-cache", "jobs")]
-        + [f'(deny file-read* (literal "{_home_claude / "history.jsonl"}"))']
-        + _cli_install_allows())
+         f'(deny file-read* (subpath "{_home_claude / "projects"}"))',
+         "; nor other jobs' scratch, the prompt history, file snapshots, pastes, debug",
+         "; logs, session state or backups of any session on this host."]
+        + _other_sessions
+        + ["; the ancestor directory NODES of cwd and the repo, as literals. The CLI walks up",
+           "; from cwd looking for config; a DENIED ancestor is EPERM (fatal), unlike an absent one.",
+           "; AFTER the denies above, so an ancestor under ~/.claude/jobs stays stat-able."]
+        + [f'(allow file-read* (literal "{a}"))' for a in _anc])
 
-    # #296. RULE ORDER IS THE WHOLE PROFILE, and it was inverted. SBPL takes the LAST matching
-    # rule, and the broad "minimum needed to run a shell" allow -- which includes
-    # (subpath "/var") and (subpath "/private") -- used to sit at the BOTTOM. It therefore
-    # overrode every deny above it for those trees, silently. Proof: a #295 deny on a run dir in
-    # /var/folders emitted correctly into the profile and the file was still readable, contents
-    # and all, including through Bash.
+    # RULE ORDER IS THE WHOLE PROFILE. SBPL takes the LAST matching rule, and the broad "minimum
+    # needed to run a shell" allow includes (subpath "/var") and (subpath "/private"). At the BOTTOM it
+    # would override every deny above it for those trees, silently (a deny-by-name on a run dir in
+    # /var/folders would leave the file readable, including through Bash).
     #
     # The order below is broad-allow FIRST, then denies, then narrow grants: each later rule
     # refines the one before it, which is the only arrangement in which "deny X, then grant X/y"
-    # means what it reads like. The system paths are still allowed; they are simply no longer
-    # allowed LAST.
+    # means what it reads like. The system paths are allowed, just not LAST.
     return f"""(version 1)
 (allow default)
 ; the minimum needed to run a shell and a python. FIRST, so the denies and grants below can
-; refine it -- see #296 for what happened when this sat at the bottom.
+; refine it (last match wins: at the bottom it would override every deny).
 (allow file-read* (subpath "/usr") (subpath "/bin") (subpath "/sbin")
   (subpath "/System") (subpath "/Library") (subpath "/var") (subpath "/private")
   (subpath "/dev") (subpath "/etc"))
@@ -395,41 +442,43 @@ def build_evolver_sandbox_profile(job: EvolverJob) -> str:
   (subpath "{_repo}")
   (subpath "{Path.home()}")
 )
-; #293 denied BY NAME, so write containment does not depend on where the run dir happens to sit
+; the host's per-uid CLI temp root (every session's task outputs), denied BY NAME
+{cli_root_write_denies}
+; no-write paths denied BY NAME, so write containment does not depend on where the run dir happens to sit
 {no_writes}
-; PEER ARMS' EVOLVER WORKING DIRECTORIES. Every arm's work dir is
-; $TMPDIR/evoskill_tau3_evolver_e<N>, and $TMPDIR lives under /var/folders -- which the
-; "minimum needed to run a shell" allow above grants as a whole subpath. So one arm's evolver
-; could read AND write a peer's cwd, its dispatched PROMPT.md included: the cross-arm leak the
-; WORK_TAG change was meant to close, reopened by a coarse system grant. Denied by NAME (regex,
-; not location) for the same reason #293 and #295 are; this job's OWN work dir is re-granted
-; below by write_allows and by its explicit read allow, both of which come later and win.
-(deny file-read* (regex #"/evoskill_tau3_evolver_"))
-(deny file-write* (regex #"/evoskill_tau3_evolver_"))
 ; the ONLY writable paths: this job's work dir, its log dir, its declared outputs, CLI state
 {write_allows}
+; ...but not the operator's config and code under ~/.claude, or other jobs.
+; Then this job's own writes AGAIN (and its CLI temp root), so they win (last match).
+{write_denies}
+{write_reallows}
 (deny file-read*
   (subpath "/Users")
   (subpath "/home")
   (subpath "/opt")
   (subpath "/Volumes")
 )
-; #295 denied BY NAME, so containment does not depend on where the run dir happens to sit.
+; the host's per-uid CLI temp root (every session's task outputs and scratchpads), BY NAME
+{cli_root_read_denies}
+; hidden paths denied BY NAME, so containment does not depend on where the run dir happens to sit.
 ; The explicit grants below come later and win for their own leaves (last match wins).
 {hides}
 ; the interpreter and its library tree — without these sandbox-exec cannot even exec python
 {interp_allows}
-; #291 what the `claude` CLI needs to start and authenticate — see the comment at the builder
+; what the `claude` CLI needs to start and authenticate — see the comment at the builder
 {cli_allows}
 ; the repo: METADATA everywhere (so imports can stat sys.path), CONTENT only under src/ scripts/
 {repo_allows}
 ; the evolver's own working directory — it must be able to read what it writes
 (allow file-read* (subpath "{work}"))
-; the log's parent DIRECTORY NODE only (#250c) — is_dir() must succeed; contents stay denied
+; the per-uid CLI temp root as a NODE (metadata only), and the child's own CLI temp root
+{cli_tmp_allows}
+; the log's parent DIRECTORY NODE only -- is_dir() must succeed; contents stay denied
 {log_allow}
-; explicit grants: the evidence surface, the staging dir, the train-only oracle. LAST, so they
-; win over both the system allow above and the #295 deny-by-name (#296).
+; explicit grants: the evidence surface, the staging dir, the train-only oracle. LAST among the
+; file rules, so they win over both the system allow above and the deny-by-name (last match).
 {allows}
+{egress_section(job.egress_ports)}
 """
 
 
@@ -437,8 +486,8 @@ def containment_probe(job: EvolverJob, target: Path) -> tuple[bool, str]:
     """Actually attempt to read `target` under this job's profile. Returns (readable, detail).
 
     EXECUTES the read; it does not reason about the profile. A containment claim that was never
-    exercised is the #154 shape, and this module's whole premise is that a harness must
-    demonstrate refusal before it may be selected.
+    exercised is a guard that cannot fail, and this module's whole premise is that containment
+    must demonstrate refusal.
     """
     if not _sandbox_exec_available():
         return (True, "sandbox-exec unavailable — containment NOT enforceable on this host")
@@ -460,8 +509,7 @@ def containment_probe(job: EvolverJob, target: Path) -> tuple[bool, str]:
 def write_containment_probe(job: EvolverJob, target: Path) -> tuple[bool, str]:
     """Actually ATTEMPT TO WRITE `target` under this job's profile. Returns (writable, detail).
 
-    #266. Mirrors containment_probe deliberately, because the read version is the one that has
-    been trusted for weeks and the failure it exists to prevent (#154) is precisely a check that
+    Mirrors containment_probe deliberately: the failure it exists to prevent is a check that
     could never fail. This one shells out and tries the write; it does not inspect the profile
     text. A profile that CONTAINS the right rule and a process that is actually refused are two
     different claims, and only the second one is worth anything.
@@ -491,12 +539,9 @@ def write_containment_probe(job: EvolverJob, target: Path) -> tuple[bool, str]:
 def preflight(job: EvolverJob) -> list[str]:
     """Probe every path the runner will touch, under the REAL profile. Returns ALL failures.
 
-    WHY THIS EXISTS. Four consecutive dispatch attempts each died on a different missing grant —
-    the interpreter (#250), the repo listing (#250b), the log dir's is_dir() (#250c), the prompt
-    file. Each cost a launch to discover ONE gap, because nothing enumerated the requirements up
-    front. Fixing them one at a time is the wrong shape: the failures were not independent bugs,
-    they were one missing step. So: probe the whole set before spending a dispatch, and report
-    every failure together.
+    WHY THIS EXISTS. A child can die on any one missing grant -- the interpreter, the repo listing,
+    the log dir's is_dir(), the prompt file -- and a launch discovers only one gap at a time. So:
+    probe the whole set before spending a dispatch, and report every failure together.
 
     This is a PREFLIGHT, not a guard — it must never widen the profile. If a required path is
     denied, the answer is a narrow grant for that path, decided by a person, not a broader rule.
@@ -513,52 +558,19 @@ def preflight(job: EvolverJob) -> list[str]:
                            capture_output=True, text=True, timeout=60)
         if r.returncode:
             bad.append(f"cannot EXEC {sys.executable}: {(r.stderr or '').strip()[:120]}")
-        # 1b. THE `claude` CLI MUST EXEC. Preflight covered the interpreter and the runner
-        # but never the binary the AO and the evolver actually run through, so the one gap
-        # it could not see was the one that hit operators who installed the CLI where
-        # README.md tells them to (npm -g -> /opt/homebrew, a DENIED tree). This probe is
-        # the reason the grant above can stay narrow: if a machine puts the CLI somewhere
-        # neither is derived, this says so before a dispatch is spent rather than after.
-        cli = shutil.which("claude")
-        if cli is None:
-            bad.append("`claude` is not on PATH — the AO and the evolver both exec it "
-                       "(README: npm install -g @anthropic-ai/claude-code)")
-        else:
-            r = subprocess.run(["sandbox-exec", "-f", prof, cli, "--version"],
-                               capture_output=True, text=True, timeout=60)
-            if r.returncode:
-                bad.append(f"cannot EXEC the claude CLI at {cli} under the profile: "
-                           f"{(r.stderr or '').strip()[:160]}")
-        # 2. the runner module must IMPORT
-        # IMPORT WHAT THE RUNNER LOADS, NOT ITS ENTRY SHIM. evolver_direct_runner's module
-        # scope is stdlib-only (argparse/json/sys/time/uuid/pathlib/typing); every
-        # third-party import is lazy inside _run(). So this probe passed on a profile under
-        # which the run would die at the first pydantic/httpx import, certified "no
-        # containment gaps", and the dispatch was spent before anything noticed.
-        r = subprocess.run(["sandbox-exec", "-f", prof, sys.executable, "-c",
-                            "import src.harness.direct.executor, src.harness.direct.options"],
-                           capture_output=True, text=True, timeout=90,
-                           cwd=str(Path(__file__).resolve().parents[2]))
-        if r.returncode:
-            bad.append(f"cannot IMPORT the runner's real dependencies: "
-                       f"{(r.stderr or '').strip().splitlines()[-1][:140]}")
-        # ...and the child must still be IN the venv. A sandboxed interpreter that has
-        # silently fallen back to the base install imports different versions than the
-        # declared constraints, which no import probe alone would reveal.
-        r = subprocess.run(["sandbox-exec", "-f", prof, sys.executable, "-c",
-                            "import sys; print(sys.prefix)"],
-                           capture_output=True, text=True, timeout=60)
-        _got = (r.stdout or "").strip()
-        if r.returncode or _got != sys.prefix:
-            bad.append(f"the sandboxed interpreter left its environment: sys.prefix is "
-                       f"{_got or '<unreadable>'!r}, expected {sys.prefix!r} — it would "
-                       f"import from the ambient install, not this project's venv")
+        # 2. (a python runner module would be probed for IMPORT here; the shipped children are the
+        #    `claude` CLI, which imports nothing from the repo)
         # 3. every declared READ must succeed
         reads = [job.prompt_path] + list(job.grants) if job.prompt_path else list(job.grants)
         for p in reads:
             if p is None or not Path(p).exists():
                 continue
             tgt = p if Path(p).is_file() else next(iter(sorted(Path(p).rglob("*"))), None)
+            # An all-epochs digest dir holds its producing library in a
+            # _library/ subdir, and "_" sorts before lowercase task names (task_004.md), so the
+            # first entry is that DIRECTORY and the grant would go unprobed. Probe a task file.
+            if tgt is not None and Path(tgt).is_dir() and Path(tgt).name == "_library":
+                tgt = next(iter(sorted(Path(p).glob("*.md"))), None)
             if tgt is None or not Path(tgt).is_file():
                 continue
             r = subprocess.run(["sandbox-exec", "-f", prof, "/bin/cat", str(tgt)],
@@ -570,9 +582,97 @@ def preflight(job: EvolverJob) -> list[str]:
                             f"import pathlib,sys; sys.exit(0 if pathlib.Path({str(job.log_path.resolve().parent)!r}).is_dir() else 3)"],
                            capture_output=True, text=True, timeout=60)
         if r.returncode:
-            bad.append("log parent fails is_dir() — mkdir(exist_ok=True) will re-raise (#250c)")
+            bad.append("log parent fails is_dir() — mkdir(exist_ok=True) will re-raise")
+        # 5. the host's per-uid CLI temp root — every session's Bash
+        #    task outputs — must NOT be listable, while its NODE stays stat-able for the CLI's
+        #    realpath of its own private root beneath it. Creates nothing.
+        #    A DRY RUN never lists the REAL root (other sessions' material, the operator's
+        #    included): it checks the real root's rules are in the profile TEXT, and probes the
+        #    same rules, built around a throwaway stand-in root, by execution.
+        if job.dry_run:
+            bad += _probe_uid_root_standin(job, build_evolver_sandbox_profile(job))
+        for root in ([] if job.dry_run else cli_uid_roots()):
+            if not root.is_dir():
+                continue
+            r = subprocess.run(["sandbox-exec", "-f", prof, "/bin/ls", str(root)],
+                               capture_output=True, text=True, timeout=30)
+            if r.returncode == 0:
+                bad.append(f"the per-uid CLI temp root {root} is LISTABLE — other sessions' task "
+                           f"outputs and scratchpads would be readable")
+            if job.cli_tmpdir:
+                r = subprocess.run(["sandbox-exec", "-f", prof, "/usr/bin/stat", str(root)],
+                                   capture_output=True, text=True, timeout=30)
+                if r.returncode:
+                    bad.append(f"the per-uid CLI temp root {root} cannot be stat()ed — the CLI "
+                               f"could not realpath its private temp root beneath it")
+        # 6. every declared NO-WRITE (the run dir, the operator
+        #    channel) must refuse a fresh name under the REAL profile — the write allows and the
+        #    grants come later in it and could undo the deny. An existing dir is probed with a new
+        #    file inside it; an absent one with its own mkdir (the evolver could create it). A
+        #    probe that holds creates nothing; one that got through is removed and reported.
+        bad += _probe_no_writes(job, prof)
     finally:
         os.unlink(prof)
+    return bad
+
+
+def _probe_no_writes(job: EvolverJob, prof: str) -> list[str]:
+    bad: list[str] = []
+    for d in (Path(p) for p in (job.no_write or [])):
+        existed = d.is_dir()
+        if d.exists() and not existed:
+            continue                      # a file: nothing to create inside it
+        target = d / f".evodisp_nowrite_probe.{os.getpid()}" if existed else d
+        script = ': > "$1"' if existed else 'mkdir "$1"'
+        r = subprocess.run(["sandbox-exec", "-f", prof, "/bin/sh", "-c", script, "sh",
+                            str(target)], capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            bad.append(f"a declared no-write path is WRITABLE under the profile: {d} (a probe "
+                       f"{'file was created in it' if existed else 'mkdir created it'}; removed)")
+            try:
+                target.unlink() if existed else target.rmdir()
+            except OSError:
+                pass
+    return bad
+
+
+def _probe_uid_root_standin(job: EvolverJob, real_profile: str) -> list[str]:
+    """Preflight step 5 for a DRY RUN. The real per-uid root is only READ as profile text;
+    the listing and stat probes run against a stand-in root under $TMPDIR, denied by a profile
+    built for this job with the stand-in in place of the real root. Removed afterwards."""
+    bad: list[str] = []
+    for root in cli_uid_roots():
+        if f'(deny file-read* (subpath "{root}"))' not in real_profile:
+            bad.append(f"the profile does not deny reads of the per-uid CLI temp root {root}")
+    st = Path(tempfile.mkdtemp(prefix="evodisp_uidroot.")).resolve()
+    try:
+        (st / "-other-session" / "tasks").mkdir(parents=True)
+        (st / "-other-session" / "tasks" / "t.output").write_text("x")
+        with tempfile.NamedTemporaryFile("w", suffix=".sb", delete=False) as fh:
+            fh.write(build_evolver_sandbox_profile(job, uid_roots=[st]))
+            prof = fh.name
+        try:
+            r = subprocess.run(["sandbox-exec", "-f", prof, "/bin/ls", str(st)],
+                               capture_output=True, text=True, timeout=30)
+            if r.returncode == 0:
+                bad.append("the per-uid CLI temp root rules leave the root LISTABLE (probed on a "
+                           "dry-run stand-in) — other sessions' task outputs would be readable")
+            r = subprocess.run(["sandbox-exec", "-f", prof, "/bin/cat",
+                                str(st / "-other-session" / "tasks" / "t.output")],
+                               capture_output=True, text=True, timeout=30)
+            if r.returncode == 0:
+                bad.append("another session's task output under the per-uid CLI temp root is "
+                           "READABLE (probed on a dry-run stand-in)")
+            if job.cli_tmpdir:
+                r = subprocess.run(["sandbox-exec", "-f", prof, "/usr/bin/stat", str(st)],
+                                   capture_output=True, text=True, timeout=30)
+                if r.returncode:
+                    bad.append("the per-uid CLI temp root cannot be stat()ed (probed on a dry-run "
+                               "stand-in) — the CLI could not realpath its private temp root")
+        finally:
+            os.unlink(prof)
+    finally:
+        shutil.rmtree(st, ignore_errors=True)
     return bad
 
 
@@ -580,38 +680,128 @@ def _sandbox_exec_available() -> bool:
     return shutil.which("sandbox-exec") is not None
 
 
-# ── dispatch backends ───────────────────────────────────────────────────────────────────────
+# ── egress probes ──────────────────────────────────────────────────────────────
+# Executed under the EMITTED profile file, never reasoned from its text. The child is this
+# module's own interpreter (granted by the profile: interp_allows), so it needs nothing else.
+_EGRESS_CHILD = r"""
+import errno, json, socket, sys
+cfg = json.loads(sys.argv[1])
+def err(e):
+    return errno.errorcode.get(e.errno, str(e)) if getattr(e, "errno", None) else type(e).__name__
+def connect(fam, addr):
+    s = socket.socket(fam, socket.SOCK_STREAM); s.settimeout(3)
+    try:
+        s.connect(addr); return "connected"
+    except OSError as e:
+        return err(e)
+    finally:
+        s.close()
+def via_proxy(target):
+    try:
+        s = socket.create_connection(("127.0.0.1", cfg["proxy"]), timeout=5)
+    except OSError as e:
+        return "no proxy: " + err(e)
+    try:
+        s.sendall(("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n" % (target, target)).encode())
+        buf = b""
+        while b"\r\n" not in buf and len(buf) < 4096:
+            c = s.recv(4096)
+            if not c: break
+            buf += c
+        return buf.split(b"\r\n", 1)[0].decode("latin-1") or "no response"
+    except OSError as e:
+        return "error: " + err(e)
+    finally:
+        s.close()
+out = {
+  "a_other_loopback_port": connect(socket.AF_INET, ("127.0.0.1", cfg["other"])),
+  "b_proxy_port": connect(socket.AF_INET, ("127.0.0.1", cfg["proxy"])),
+  "c_proxy_refuses_host": via_proxy("%s:443" % cfg["host"]),
+  "c_proxy_refuses_ip_literal": via_proxy("127.0.0.1:%d" % cfg["other"]),
+  "d_offhost_ipv4": connect(socket.AF_INET, (cfg["ip"], 443)),
+  "d_offhost_ipv6": connect(socket.AF_INET6, (cfg["ip6"], 443)),
+  "e_unix_socket": connect(socket.AF_UNIX, cfg["unix"]),
+}
+for p in cfg["extra"]:
+    out["f_local_port_%d" % p] = connect(socket.AF_INET, ("127.0.0.1", p))
+print(json.dumps(out))
+"""
 
-def dispatch(job: EvolverJob, harness: str) -> list[str]:
-    """Return the argv for `harness`. DELEGATES for claude_cli — never reimplements it.
 
-    `tau3_evolver.sh` owns the org-key refusal, the quota gate, the leak hooks, the seeded
-    staging and the Phoenix tee. A second copy of any of that is #154, so the claude_cli backend
-    stays a thin call into the script that four epochs of this programme have already exercised.
+def egress_probes(profile: Path, proxy_port: int, extra_ports=(), probe_host: str = "example.com",
+                  probe_ip: str = "192.0.2.1", probe_ip6: str = "2001:db8::1") -> list[dict]:
+    """Run the egress probes under `profile` and return one dict per probe:
+    {"probe", "expect", "got", "ok"}. Creates two throwaway listeners (a TCP port on 127.0.0.1
+    that is NOT the proxy's, and an AF_UNIX socket under /tmp) and removes them afterwards.
+
+      a  a TCP connect to the throwaway loopback port is refused by the kernel (EPERM)
+      b  the proxy port accepts
+      c  CONNECT through the proxy to a non-allowlisted host, and to an IP literal, gets 403 —
+         and the throwaway listener the IP-literal CONNECT names received NO connection
+      d  a raw connect to an off-host IP literal (v4 and v6; documentation ranges by default,
+         so even a broken profile contacts no real host) is refused by the kernel (EPERM)
+      e  an AF_UNIX connect is refused by the kernel (EPERM)
+      f  each extra declared local port is NOT refused by the kernel (connected or ECONNREFUSED)
     """
-    if harness not in HARNESSES:
-        raise ValueError(f"unknown evolver harness {harness!r}; known: {HARNESSES}")
-    if harness == "claude_cli":
-        return ["bash", "scripts/tau3_evolver.sh", str(job.epoch), str(job.log_path)]
-    return _direct_argv(job)
+    lst = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    lst.bind(("127.0.0.1", 0))
+    lst.listen(16)
+    other = lst.getsockname()[1]
+    udir = tempfile.mkdtemp(prefix="egp", dir="/tmp")
+    upath = os.path.join(udir, "u.sock")
+    ulst = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    ulst.bind(upath)
+    ulst.listen(4)
+    cfg = {"proxy": int(proxy_port), "other": other, "host": probe_host, "ip": probe_ip,
+           "ip6": probe_ip6, "unix": upath, "extra": [int(p) for p in extra_ports]}
+    try:
+        # the RESOLVED interpreter: a venv's bin/python reads pyvenv.cfg inside the (denied) repo,
+        # its target lives in the tree interp_allows grants
+        # -I and cwd "/": the child imports nothing from, and never stats, whatever cwd the caller
+        # had (the repo is denied by the profile)
+        r = subprocess.run(["sandbox-exec", "-f", str(profile), str(Path(sys.executable).resolve()),
+                            "-I", "-c", _EGRESS_CHILD, json.dumps(cfg)],
+                           capture_output=True, text=True, timeout=120, cwd="/")
+        try:
+            got = json.loads(r.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return [{"probe": "probe child", "expect": "JSON results", "ok": False,
+                     "got": f"rc={r.returncode} {(r.stderr or r.stdout).strip()[-300:]}"}]
+        accepted = []
+        for s, name in ((lst, "tcp"), (ulst, "unix")):
+            s.setblocking(False)
+            try:
+                c, _ = s.accept()
+                c.close()
+                accepted.append(name)
+            except (BlockingIOError, OSError):
+                pass
+    finally:
+        lst.close()
+        ulst.close()
+        shutil.rmtree(udir, ignore_errors=True)
 
-
-def _direct_argv(job: EvolverJob) -> list[str]:
-    """Direct-harness evolver, run under the deny-first profile.
-
-    NOT YET WIRED: the runner module this points at is the next piece of work. The argv shape is
-    fixed here so the containment tests above can be written and run against the profile FIRST —
-    building the guard before the thing it guards is deliberate, and the reverse order is how
-    #186 and #213 happened.
-    """
-    return [
-        "sandbox-exec", "-f", "<profile-written-at-dispatch>",
-        "python3", "-m", "src.orchestrator.evolver_direct_runner",
-        "--epoch", str(job.epoch),
-        "--work-dir", str(job.work_dir),
-        "--model", job.model,
-        "--log", str(job.log_path),
+    def row(probe, expect, ok):
+        return {"probe": probe, "expect": expect, "got": got.get(probe), "ok": bool(ok)}
+    rows = [
+        row("a_other_loopback_port", "EPERM", got.get("a_other_loopback_port") == "EPERM"),
+        row("b_proxy_port", "connected", got.get("b_proxy_port") == "connected"),
+        row("c_proxy_refuses_host", "HTTP 403",
+            str(got.get("c_proxy_refuses_host", "")).split(" ")[1:2] == ["403"]),
+        row("c_proxy_refuses_ip_literal", "HTTP 403",
+            str(got.get("c_proxy_refuses_ip_literal", "")).split(" ")[1:2] == ["403"]),
+        row("d_offhost_ipv4", "EPERM", got.get("d_offhost_ipv4") == "EPERM"),
+        row("d_offhost_ipv6", "EPERM", got.get("d_offhost_ipv6") == "EPERM"),
+        row("e_unix_socket", "EPERM", got.get("e_unix_socket") == "EPERM"),
     ]
+    rows.append({"probe": "c_no_upstream_connection", "expect": "throwaway listeners accepted "
+                 "nothing", "got": accepted or "nothing accepted", "ok": not accepted})
+    for p in cfg["extra"]:
+        k = f"f_local_port_{p}"
+        rows.append(row(k, "not EPERM (connected or ECONNREFUSED)",
+                        got.get(k) in ("connected", "ECONNREFUSED")))
+    return rows
+
 
 
 # ── selftest ────────────────────────────────────────────────────────────────────────────────
@@ -623,12 +813,11 @@ def selftest() -> int:
     useless, and would look like security. That is why the granted-read assertion is here.
     """
     checks: list[tuple[str, bool]] = []
-    # FIXTURES MUST LIVE WHERE THE REAL THING LIVES. The first version of this test used
-    # `tempfile.mkdtemp()`, which on macOS returns a path under /var/folders — and the profile
-    # legitimately allows /var so a shell can run. So the "forbidden" read SUCCEEDED, the test
-    # went red, and the profile it was testing was in fact correct for production, where held-out
-    # specs sit under /Users/<me>/dev/EvoSkill and are denied. A guard proved against the wrong
-    # geometry is not proved. Fixtures therefore go under $HOME, the tree the profile denies.
+    # FIXTURES MUST LIVE WHERE THE REAL THING LIVES. `tempfile.mkdtemp()` on macOS returns a path
+    # under /var/folders, which the profile legitimately allows so a shell can run; a "forbidden"
+    # fixture there would be readable while the profile is correct for the repository under $HOME.
+    # A guard proved against the wrong geometry is not proved. Fixtures therefore go under $HOME,
+    # the tree the profile denies.
     tmp = Path(tempfile.mkdtemp(prefix=".evodisp_", dir=str(Path.home())))
     try:
         granted = tmp / "granted"
@@ -651,11 +840,10 @@ def selftest() -> int:
             checks.append(("GRANTED path is readable (guard is not vacuous)", ok_g is True))
             checks.append(("FORBIDDEN path is refused (guard actually guards)", ok_f is False))
 
-        # #250. THE CHECK WHOSE ABSENCE COST THE FIRST LIVE DISPATCH. Every other check here
-        # exercises READS under the profile; none of them exercised EXEC of the interpreter the
-        # dispatch actually invokes, so a profile that denied `sys.executable` passed 7/7 and
-        # then died at launch. Proving a guard against the wrong operation is the same error as
-        # proving it against the wrong geometry (the tempfile-under-/var case above).
+        # EXEC of the interpreter. Every other check here exercises READS under the profile; a
+        # profile that denied `sys.executable` would pass them all and then die at launch. Proving
+        # a guard against the wrong operation is the same error as proving it against the wrong
+        # geometry (the tempfile-under-/var case above).
         if _sandbox_exec_available():
             with tempfile.NamedTemporaryFile("w", suffix=".sb", delete=False) as fh:
                 fh.write(build_evolver_sandbox_profile(job))
@@ -663,21 +851,17 @@ def selftest() -> int:
             try:
                 r = subprocess.run(["sandbox-exec", "-f", _prof, sys.executable, "-c",
                                     "print('exec-ok')"], capture_output=True, text=True, timeout=60)
-                checks.append(("sys.executable can EXEC under the profile (#250)",
+                checks.append(("sys.executable can EXEC under the profile",
                                r.returncode == 0 and "exec-ok" in r.stdout))
             finally:
                 os.unlink(_prof)
 
-        checks.append(("unknown harness raises", _raises(lambda: dispatch(job, "nope"))))
-        checks.append(("claude_cli delegates to the script, does not reimplement",
-                       dispatch(job, "claude_cli")[:2] == ["bash", "scripts/tau3_evolver.sh"]))
         checks.append(("profile denies /Users before granting",
                        '(subpath "/Users")' in build_evolver_sandbox_profile(job)))
         # The trap is `file-read* (subpath "<repo>")` -- content on the whole tree. A `literal`
-        # grant on the root NODE is not the trap and is required for imports (#250b). Testing the
-        # intent, not the substring: my first version of this check failed the moment a legitimate
-        # repo grant appeared, which would have pressured me to weaken the check instead of the
-        # profile. Also assert positively that the held-out subtree is NOT granted.
+        # grant on the root NODE is not the trap and is required for imports. Testing the intent,
+        # not the substring, so a legitimate repo grant never pressures a weaker check. Also assert
+        # positively that the held-out subtree is NOT granted.
         _prof = build_evolver_sandbox_profile(job)
         _repo_s = str(Path(__file__).resolve().parents[2])
         checks.append(("profile does NOT grant CONTENT on the repo subtree (the reuse trap)",
@@ -686,6 +870,8 @@ def selftest() -> int:
                        "third_party" not in _prof))
         checks.append(("grants appear in the profile",
                        str(granted.resolve()) in build_evolver_sandbox_profile(job)))
+        if _sandbox_exec_available():
+            checks += _selftest_claude_dir(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -697,27 +883,76 @@ def selftest() -> int:
     return 1 if bad else 0
 
 
-def _raises(fn) -> bool:
+def _selftest_claude_dir(tmp: Path) -> list[tuple[str, bool]]:
+    """EXECUTED: the operator's config under ~/.claude cannot be
+    WRITTEN, the host's per-uid CLI temp root cannot be read or written, and the child's own
+    private CLI temp root beneath it can be. HOME points at a fixture for the whole block, so a
+    broken deny writes into the fixture, never into the real ~/.claude.
+
+    The per-uid-root fixture is created under $EVOSKILL_DISPATCH_SELFTEST_TMP when set (it must
+    lie under /tmp/claude-<uid>), else directly under that root; it is removed afterwards."""
+    out: list[tuple[str, bool]] = []
+    home = tmp / "home"
+    cl = home / ".claude"
+    (cl / "skills").mkdir(parents=True)
+    (cl / "settings.json").write_text("{}")
+    root = cli_uid_roots()[0]
+    parent = Path(os.environ.get("EVOSKILL_DISPATCH_SELFTEST_TMP") or root)
+    parent.mkdir(parents=True, exist_ok=True)
+    fx = Path(tempfile.mkdtemp(prefix="evodisp.", dir=str(parent))).resolve()
+    old_home = os.environ.get("HOME")
     try:
-        fn()
-    except Exception:
-        return True
-    return False
+        other = fx / "-other-session" / "tasks"
+        other.mkdir(parents=True)
+        (other / "t.output").write_text("SEALED TEST 12/40")
+        own = fx / "ev.selftest"
+        os.environ["HOME"] = str(home)
+        job = EvolverJob(epoch=1, work_dir=tmp / "work", prompt="p", model="m",
+                         log_path=tmp / "e.log", cli_tmpdir=own)
+        with tempfile.NamedTemporaryFile("w", suffix=".sb", delete=False) as fh:
+            fh.write(build_evolver_sandbox_profile(job))
+            prof = fh.name
+        try:
+            def sb(cmd: str) -> bool:
+                return subprocess.run(["sandbox-exec", "-f", prof, "/bin/sh", "-c", cmd],
+                                      capture_output=True, text=True, timeout=30).returncode == 0
+            out.append(("~/.claude/settings.json is NOT writable (hooks run in operator sessions)",
+                        not sb(f'echo x > "{cl / "settings.json"}"')
+                        and (cl / "settings.json").read_text() == "{}"))
+            out.append(("~/.claude/skills/ is NOT writable (user skills load in every session)",
+                        not sb(f'mkdir -p "{cl / "skills" / "evil"}"')
+                        and not (cl / "skills" / "evil").exists()))
+            out.append(("another session's task output under the per-uid root is NOT readable",
+                        not sb(f'cat "{other / "t.output"}"')))
+            out.append(("...nor writable", not sb(f'echo x >> "{other / "t.output"}"')
+                        and (other / "t.output").read_text() == "SEALED TEST 12/40"))
+            # Created the way the CLI creates it — mkdir of the missing leaves only. NOT
+            # `mkdir -p`: BSD mkdir -p re-mkdirs every EXISTING ancestor, and the kernel answers
+            # a write-denied ancestor with EPERM before EEXIST.
+            out.append(("the child's OWN CLI temp root is creatable, writable and readable",
+                        sb(f'mkdir "{own}" && mkdir "{own}/claude-1" && echo ok > '
+                           f'"{own}/claude-1/o" && cat "{own}/claude-1/o"')))
+        finally:
+            os.unlink(prof)
+    finally:
+        if old_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = old_home
+        shutil.rmtree(fx, ignore_errors=True)
+    return out
 
 
 def _cli() -> int:
-    """Emit a profile / run a preflight for a caller that is NOT python — i.e. the shell launcher.
+    """Emit a profile / run a preflight for a caller that is NOT python -- a shell launcher.
 
-    #294. `scripts/tau3_evolver.sh` needs the same containment the direct harness has, and the
-    one thing it must NOT do is build the profile itself. A second spelling of these rules is
-    #154's shape exactly: two implementations that agree today, drift silently, and the one that
-    matters is the one nobody tested. So the shell asks this module for the bytes.
+    A launcher must NOT build the profile itself: a second spelling of these rules would drift
+    silently from this one. So the shell asks this module for the bytes.
 
-    THE PROFILE WRAPS THE `claude` CHILD, NOT THE SCRIPT. The launcher READS THE SPLIT FILE to
-    run its own oracle-vs-split firewall (tau3_evolver.sh's exit-8 gate), and that file lists
-    every held-out id — the precise artifact the evolver's containment exists to hide. Sandboxing
-    the whole script would therefore require granting the launcher the thing the sandbox is for.
-    Launcher and evolver have opposite access needs; only the child gets confined.
+    THE PROFILE WRAPS THE `claude` CHILD, NOT THE LAUNCHER. A launcher may READ THE SPLIT FILE for
+    its own checks, and that file lists every held-out id -- the precise artifact the child's
+    containment exists to hide. Launcher and child have opposite access needs; only the child gets
+    confined.
     """
     import argparse
     ap = argparse.ArgumentParser(prog="evolver_dispatch")
@@ -733,10 +968,76 @@ def _cli() -> int:
     ap.add_argument("--grant", action="append", default=[], help="readable subtree; repeatable")
     ap.add_argument("--write", action="append", default=[], help="writable subtree; repeatable")
     ap.add_argument("--hide", action="append", default=[],
-                    help="#295: subtree to deny READ by name (e.g. the run dir); repeatable")
+                    help="subtree to deny READ by name (e.g. the run dir); repeatable")
     ap.add_argument("--no-write", action="append", default=[],
-                    help="#293: subtree to deny WRITE by name (e.g. the run dir); repeatable")
+                    help="subtree to deny WRITE by name (e.g. the run dir); repeatable")
+    ap.add_argument("--cli-tmpdir", default="",
+                    help="the claude child's CLAUDE_CODE_TMPDIR, granted read+write after "
+                         "the per-uid temp root is denied")
+    ap.add_argument("--mint-cli-tmpdir", metavar="TAG", default="",
+                    help="print a fresh CLAUDE_CODE_TMPDIR (/tmp/claude-<uid>/<TAG>.<hex>) and exit")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="the preflight probes a stand-in for the per-uid CLI temp root, "
+                         "never the real one")
+    ap.add_argument("--parent-session-env", action="store_true",
+                    help="print the NAMES (never values) of the parent-session variables in "
+                         "this environment, one per line, and exit")
+    # EGRESS. --egress-proxy-port switches the profile's egress section ON: deny all
+    # network-outbound, allow that loopback port and each --egress-local-port.
+    ap.add_argument("--egress-proxy-port", type=int, default=0,
+                    help="egress ENFORCED: the allowlist proxy's loopback port")
+    ap.add_argument("--egress-local-port", type=int, action="append", default=[],
+                    help="another loopback port the child may connect to (e.g. a local model "
+                         "proxy's); repeatable; needs --egress-proxy-port")
+    ap.add_argument("--egress-probe", metavar="PROFILE", default="",
+                    help="run the egress probes under this EMITTED profile and exit (9 on any "
+                         "failed probe); needs --egress-proxy-port")
+    ap.add_argument("--egress-probe-host", default="example.com",
+                    help="a NON-allowlisted hostname the proxy must refuse (never resolved)")
+    ap.add_argument("--egress-probe-ip", default="192.0.2.1",
+                    help="an off-host IPv4 literal the kernel must refuse (default: TEST-NET-1, so "
+                         "even a broken profile contacts no real host)")
+    ap.add_argument("--egress-probe-ip6", default="2001:db8::1",
+                    help="an off-host IPv6 literal the kernel must refuse (default: the "
+                         "documentation prefix)")
+    ap.add_argument("--egress-probe-out", default="", help="also write the probe rows as JSON")
     a = ap.parse_args()
+    if a.parent_session_env:
+        for n in parent_session_env_names():
+            print(n)
+        return 0
+    if a.egress_local_port and not a.egress_proxy_port:
+        print("REFUSING: --egress-local-port without --egress-proxy-port", file=sys.stderr)
+        return 64
+    if a.egress_probe:
+        if not a.egress_proxy_port:
+            print("--egress-probe needs --egress-proxy-port", file=sys.stderr)
+            return 64
+        if not _sandbox_exec_available():
+            print("REFUSING: sandbox-exec is unavailable; egress cannot be probed.",
+                  file=sys.stderr)
+            return 9
+        rows = egress_probes(Path(a.egress_probe), a.egress_proxy_port, a.egress_local_port,
+                             probe_host=a.egress_probe_host, probe_ip=a.egress_probe_ip,
+                             probe_ip6=a.egress_probe_ip6)
+        for r in rows:
+            print(f"  egress probe: [{'ok ' if r['ok'] else 'BAD'}] {r['probe']}: "
+                  f"expect {r['expect']}, got {r['got']}")
+        if a.egress_probe_out:
+            Path(a.egress_probe_out).write_text(json.dumps(rows, indent=1))
+        bad = [r for r in rows if not r["ok"]]
+        if bad:
+            print(f"EGRESS PROBES FAILED: {len(bad)} of {len(rows)} — egress is NOT enforced as "
+                  f"declared", file=sys.stderr)
+            return 9
+        return 0
+    if a.mint_cli_tmpdir:
+        try:
+            print(mint_cli_tmpdir(a.mint_cli_tmpdir))
+        except ValueError as e:
+            print(f"REFUSING: {e}", file=sys.stderr)
+            return 9
+        return 0
     if a.selftest or not (a.emit_profile or a.preflight):
         return selftest()
     if not (a.work_dir and a.log):
@@ -746,20 +1047,21 @@ def _cli() -> int:
         epoch=a.epoch, work_dir=Path(a.work_dir), prompt="", model="",
         log_path=Path(a.log),
         prompt_path=Path(a.prompt_path) if a.prompt_path else None,
-        # #299. DO NOT DROP A DECLARED GRANT BECAUSE THE PATH IS NOT THERE YET. The filter
-        # `if Path(g).exists()` silently discarded the CLI's own session-transcript directory,
-        # which the CLI CREATES at startup — so the grant that fixes #292 never reached the
-        # profile and the evolver died with the identical error, identical log length, as if the
-        # fix had not been written. A dropped grant is invisible: the only symptom was the
-        # "4 grant(s)" line still reading 4. SBPL does not require a path to exist.
+        # DO NOT DROP A DECLARED GRANT BECAUSE THE PATH IS NOT THERE YET: the CLI CREATES its own
+        # session-transcript directory at startup, and a dropped grant is invisible. SBPL does not
+        # require a path to exist.
         grants=[Path(g).resolve() for g in a.grant],
         writes=[Path(w).resolve() for w in a.write],
         hide=[Path(h).resolve() for h in a.hide],
-        no_write=[Path(w).resolve() for w in a.no_write])
+        no_write=[Path(w).resolve() for w in a.no_write],
+        cli_tmpdir=Path(a.cli_tmpdir) if a.cli_tmpdir else None,
+        dry_run=a.dry_run,
+        egress_ports=([a.egress_proxy_port] + list(a.egress_local_port)
+                      if a.egress_proxy_port else None))
     if not _sandbox_exec_available():
         # NEVER emit an empty profile: `sandbox-exec -f <empty>` is not "no sandbox", it is a
         # confusing failure, and returning success here would let the launcher believe it is
-        # contained. Refuse, and let the caller decide (#286's rule, applied to this entry point).
+        # contained. Refuse, and let the caller decide.
         print("REFUSING: sandbox-exec is unavailable, so the evolver cannot be contained.",
               file=sys.stderr)
         return 9
@@ -774,7 +1076,9 @@ def _cli() -> int:
                   "  only for a tree the evolver is entitled to). Do NOT widen to the repo: its\n"
                   "  split file lists every held-out id.", file=sys.stderr)
             return 9
-        print(f"preflight OK — {len(job.grants)} grant(s), {len(job.writes)} write target(s)")
+        print(f"preflight OK — {len(job.grants)} grant(s), {len(job.writes)} write target(s)"
+              + (" (dry run: the per-uid CLI temp root was probed on a stand-in, never listed)"
+                 if job.dry_run else ""))
     if a.emit_profile:
         out = Path(a.emit_profile)
         out.parent.mkdir(parents=True, exist_ok=True)

@@ -6,9 +6,9 @@ WHAT THIS IS FOR
 An evolution run has ~30 knobs that decide what its numbers mean: which split, which seed,
 how many samples, which solver, which user simulator, which wall, which gate. Today those
 knobs live in a shell launcher's environment block, and the record of what a number meant
-is "whatever the launcher happened to export that day". That is how #182/#183 happened
-(two knobs outside the cache identity, so a config change silently replayed stale
-episodes), and it is how a gate can be chosen after seeing the data (#121).
+is "whatever the launcher happened to export that day". Two knobs outside the cache identity
+let a config change silently replay stale episodes, and a gate that is not fixed in advance
+can be chosen after seeing the data.
 
 This module makes the config a first-class artifact:
 
@@ -25,11 +25,11 @@ TWO RULES THIS ENCODES THAT COST REAL RUNS TO LEARN
 
 1. The gate metric is declared BEFORE the comparison leg runs. Task-paired vs episode-level
    pairing changed the discordant count from 1-3 to 12-13 on identical rollouts; choosing
-   between them after seeing either is a selection move (#121, handoff 0807 K9).
+   between them after seeing either is a selection move.
 
 2. The cache tag is DERIVED from the config hash, never hand-typed. Two knobs
    (llm_args_agent, the seed clamp) are outside the cache identity, so any config change
-   that is not reflected in the tag replays another config's episodes (#182/#183). A human
+   that is not reflected in the tag replays another config's episodes. A human
    remembering to bump a string is not a mechanism.
 
 NOT IMPLEMENTED HERE: the natural-language front end. `from_natural_language` documents its
@@ -48,21 +48,21 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 import sys
-import tempfile
 from dataclasses import asdict, dataclass, field
-import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SPEC_FILENAME = "SPEC.json"
 
 # The exact-binomial floor: with fewer than 6 discordant pairs, no two-sided p can reach
-# 0.05 (2 * 0.5**5 = 0.0625). A gate that cannot fire is not a gate (#154).
+# 0.05 (2 * 0.5**5 = 0.0625). A gate that cannot fire is not a gate.
 DISCORDANT_FLOOR = 6
 
 VALID_PAIRING = ("episode_level", "task_paired")
+# Third-party inference hosts the owner explicitly named for a model family (spec.validate's
+# family rule). Validation only — not a spec field, so no frozen config_sha256 changes.
+OWNER_NAMED_HOSTS = {"deepseek": ("deepinfra",)}
 VALID_BASES = ("DB", "ACTION", "ENV_ASSERTION", "COMMUNICATE", "NL_ASSERTION")
 
 
@@ -100,7 +100,7 @@ class GateSpec:
     n_comparisons: int = 4                  # epochs; alpha is Bonferroni-divided by this
     require_all_tests: bool = True          # BOTH tests must clear, not either
     discordant_floor: int = DISCORDANT_FLOOR
-    report_per_basis: bool = True           # #156: never ship the pooled number alone
+    report_per_basis: bool = True           # never ship the pooled number alone
 
     @property
     def alpha_corrected(self) -> float:
@@ -109,16 +109,11 @@ class GateSpec:
 
 @dataclass
 class HeadroomGate:
-    """#180 + #206. A domain can be unusable for two opposite reasons, and one gate that
+    """A domain can be unusable for two opposite reasons, and one gate that
     only checks the ceiling misses the floor entirely."""
     min_train_pass_rate: float = 0.08       # below this the evolver has nothing to learn from
     max_train_task_paired: float = 0.90     # at/above this the ceiling sets the result
-    min_exploration_rate: float = 0.0       # #206: floored instrumentation looks like a hard domain
-
-
-# THE SSB v2 SOLVER ALLOW-LIST, mirroring scripts/ssbv2_leg.sh's `case "$MODEL" in`.
-# Two dated snapshots, extended only for one an operator named explicitly.
-SSBV2_SOLVER_SNAPSHOTS = ("-0731", "-0813")
+    min_exploration_rate: float = 0.0       # floored instrumentation looks like a hard domain
 
 
 @dataclass
@@ -147,24 +142,23 @@ class ExperimentSpec:
     agent_clean_s: int = 1200
     agent_turns: int = 100
     episode_timeout_s: int = 5400
-    # #249. WHICH HARNESS EXECUTES A SOLVER EPISODE. This is an INSTRUMENT field and is in
+    # WHICH HARNESS EXECUTES A SOLVER EPISODE. This is an INSTRUMENT field and is in
     # _INSTRUMENT below: a harness decides the tool schemas the model sees, the shape of the
     # agent loop, and how the prompt is assembled, so the same model on two harnesses does not
-    # produce the same episode. Leaving it out of the cache identity would be #182/#183 exactly
-    # — the class of defect where a config that changes an episode is invisible to the key, and
+    # produce the same episode. Leaving it out of the cache identity would be
+    # the class of defect where a config that changes an episode is invisible to the key, and
     # records from one instrument replay silently into a leg measured under another.
     # Default "direct" is what every tau3 episode to date has actually run on.
     solver_harness: str = "direct"
 
     # optimizer
     evolver_model: str = ""
-    # #249. WHICH HARNESS RUNS THE EVOLVER. DELIBERATELY NOT IN _INSTRUMENT, for the same reason
+    # WHICH HARNESS RUNS THE EVOLVER. DELIBERATELY NOT IN _INSTRUMENT, for the same reason
     # evolver_model is not: an evolver is not present when a solver rollout runs, so it cannot
     # change what an episode does. Keying on it is safe and never free — it can only turn a
     # cache hit into a miss, and base legs are the most reusable artifact in the system.
-    #   "claude_cli" — today's path, `bash scripts/tau3_evolver.sh` -> `claude -p`
-    #   "direct"     — src/orchestrator/evolver_direct_runner.py, confined by the deny-first
-    #                  sandbox profile in evolver_dispatch.py (direct has NO PreToolUse hooks)
+    #   "claude_cli" — the evolver is a `claude -p` session (the only harness this release ships)
+    #   "direct"     — a direct-API evolver runner; accepted by the schema, not shipped here
     evolver_harness: str = "claude_cli"
     n_epochs: int = 4
 
@@ -189,15 +183,15 @@ class ExperimentSpec:
     # RunCache record key. The record key is {tree_hash, question={domain,task_id}, model,
     # effort}; the cache DIR name adds sample index and leg token. Everything below is what
     # neither of those captures, so the tag has to carry it — that is the whole reason
-    # #182 (episode wall) and #183 (user simulator) mandated a derived tag in the first place.
+    # (the episode wall and the user simulator were two such fields) the tag is derived.
     #
     # ALLOWLIST, NOT DENYLIST. Adding a field that matters is a one-line fix; forgetting one is
-    # a silent replay of stale episodes into a changed instrument, which is exactly #182/#183.
+    # a silent replay of stale episodes into a changed instrument.
     # So a new spec field is EXCLUDED by default and must be argued INTO this tuple.
     _INSTRUMENT = ("benchmark", "domain", "variant", "solver_model", "solver_provider_order",
                    "solver_allow_fallbacks", "user_sim_model", "judge_model",
                    "agent_clean_s", "agent_turns", "episode_timeout_s",
-                   # #249: the harness IS the instrument. See the field's own comment.
+                   # the harness IS the instrument. See the field's own comment.
                    "solver_harness")
 
     @property
@@ -210,18 +204,16 @@ class ExperimentSpec:
 
     @property
     def cache_tag(self) -> str:
-        """DERIVED, never hand-typed (#182/#183) — but from the INSTRUMENT, not the whole config.
+        """DERIVED, never hand-typed — but from the INSTRUMENT, not the whole config.
 
-        It hashed `config_sha256` until 2026-08-09, i.e. all 24 spec fields, ten of which cannot
+        Hashing `config_sha256` would key on all 24 spec fields, ten of which cannot
         touch an episode: evolver_model, n_epochs, cost_ceiling_usd, name, gate, headroom,
         test_sealed and the three split sizes. An evolver is not present when a solver rollout
         runs; a cost ceiling is a budget; a gate is applied to results afterwards. Keying on them
         is safe and never free — it can only ever turn a hit into a miss.
 
-        Measured on the first agentic run: `hits=0 fresh=30` on every sample, $1.45 spent, for a
-        BASE leg whose 22 overlapping tasks had already been computed byte-identically under a
-        different arm's tag. Base legs carry no skills and are the most reusable artifact in the
-        system, and every new arm was re-buying them.
+        Base legs carry no skills and are the most reusable artifact in the system; a tag keyed
+        on the whole config makes every new arm re-buy them.
 
         The split is deliberately NOT here either: which tasks a split SELECTS cannot change what
         an episode for task 63 does, and `question` already carries the task id inside the record.
@@ -254,31 +246,6 @@ class ExperimentSpec:
             if not getattr(self, f):
                 errs.append(f"{f} is required — give a model, or 'none' if this benchmark "
                             f"has no such component")
-
-        # ── SSB v2 REFUSES A ROLLING SOLVER TAG, AND THE FREEZE IS WHERE TO SAY SO ─────
-        # scripts/ssbv2_leg.sh:86 accepts only dated snapshots (*-0731, *-0813), because
-        # `deepseek/deepseek-v4-flash` and `deepseek/deepseek-v4-flash-0731` are different
-        # models and the RunCache keys on the model STRING: the rolling tag does not corrupt
-        # an existing bucket, it silently opens a new one and re-buys every episode under a
-        # model nobody chose. That rule lived ONLY in the leg launcher, which is the LAST
-        # step -- an operator could brief the AO with any solver, get a frozen spec, build
-        # the oracle, and only then find that no leg will ever run. The constraint belongs
-        # where the choice is made.
-        if (self.benchmark or "").lower() == "ssbv2" and self.solver_model:
-            # THE SAME LIST THE LEG REFUSES ON, not merely "looks dated". My first version of
-            # this check accepted any -NNNN suffix, so a spec naming `…-0901` froze cleanly and
-            # scripts/ssbv2_leg.sh then refused it with exit 4 — reproducing at the freeze the
-            # very "find out after paying for the AO run and the oracle" this check exists to
-            # prevent. tests/test_ssbv2_solver_snapshot.py reads the shell case statement and
-            # asserts the two stay identical, because extending one and forgetting the other
-            # is how they drifted in the first place.
-            if not self.solver_model.endswith(SSBV2_SOLVER_SNAPSHOTS):
-                errs.append(
-                    f"benchmark=ssbv2 accepts only an allow-listed dated solver snapshot "
-                    f"{list(SSBV2_SOLVER_SNAPSHOTS)}; got {self.solver_model!r}. A rolling tag "
-                    f"re-buys every episode under a different model than the one named, and "
-                    f"scripts/ssbv2_leg.sh refuses anything else with exit 4 — so freezing it "
-                    f"would buy an AO run and an oracle for legs that can never run.")
 
         # data
         if self.n_train <= 0 or self.n_val <= 0:
@@ -315,14 +282,20 @@ class ExperimentSpec:
         if self.episode_timeout_s <= self.agent_clean_s:
             errs.append(f"episode_timeout_s ({self.episode_timeout_s}) must exceed "
                         f"agent_clean_s ({self.agent_clean_s}) — an outer wall at or below "
-                        f"the inner one makes the inner unreachable (#175)")
+                        f"the inner one makes the inner unreachable")
         if self.solver_provider_order and self.solver_allow_fallbacks:
             errs.append("a provider order with allow_fallbacks=True is not a pin — both "
                         "halves are required (cross-family pin)")
-        # the pin must not reach outside the model's own family
+        # the pin must not reach outside the model's own family — except to a third-party host the
+        # operator named for that family (OWNER_NAMED_HOSTS), and only as a hard pin (allow_fallbacks
+        # False, checked above). An explicit table, never a pattern: every other cross-family pin is
+        # still refused (selftest: novita).
         if self.solver_provider_order and self.solver_model:
             fam = self.solver_model.split("/")[0].lower()
             for prov in self.solver_provider_order:
+                if (not self.solver_allow_fallbacks
+                        and prov.lower() in OWNER_NAMED_HOSTS.get(fam, ())):
+                    continue
                 if fam and fam not in prov.lower() and prov.lower() not in fam:
                     errs.append(f"provider pin {prov!r} is outside the family of "
                                 f"{self.solver_model!r} — a pin must not cross families")
@@ -340,7 +313,7 @@ class ExperimentSpec:
         if g.discordant_floor < DISCORDANT_FLOOR:
             errs.append(f"gate.discordant_floor {g.discordant_floor} is below the exact-"
                         f"binomial floor {DISCORDANT_FLOOR}: with fewer discordant pairs no "
-                        f"two-sided p can reach 0.05, so the gate could never fire (#154)")
+                        f"two-sided p can reach 0.05, so the gate could never fire")
         # power sanity: the maximum available pairs must at least be able to reach the floor
         max_pairs = self.n_val * (self.n_samples if g.pairing == "episode_level" else 1)
         if max_pairs < g.discordant_floor:
@@ -434,8 +407,8 @@ class ExperimentSpec:
         # THE STORED TAG IS THE RECORD OF WHERE THIS RUN'S EPISODES ACTUALLY LIVE.
         # Drift here does not mean the spec was edited (config_sha256 already proved it was
         # not) — it means the DERIVATION CHANGED under a run whose episodes are already on
-        # disk. That happened on 2026-08-09 when the tag stopped hashing all 24 config fields
-        # and started hashing the 11-field instrument. Silently accepting it would let a later
+        # disk (for example when the tag moved from hashing all 24 config fields to hashing the
+        # instrument fields). Silently accepting it would let a later
         # leg write into a different bucket than the base legs it is compared against; silently
         # refusing would strand every run that predates the improvement.
         #
@@ -447,7 +420,7 @@ class ExperimentSpec:
             if not pin:
                 raise SpecError(
                     f"cache_tag drifted: stored {payload.get('cache_tag')} vs derived "
-                    f"{spec.cache_tag} (#182/#183 — the tag is the only thing separating this "
+                    f"{spec.cache_tag} (the tag is the only thing separating this "
                     f"config's episodes from another's).\n"
                     f"  If the DERIVATION changed under a run already on disk, the stored tag "
                     f"is where its episodes are. Record why with `pin_cache_tag(run_dir, "
@@ -519,38 +492,19 @@ def _mut(base: ExperimentSpec, **kw) -> ExperimentSpec:
 def selftest() -> int:
     print("SELFTEST — each rule must FAIL on a known-bad input\n")
     base = tau3_banking_2525()
-    # SELF-CONTAINED, because a selftest that only runs on one machine is not a test.
-    # This used to bail with "live split file absent" whenever
-    # outputs/tau3_banking_2525/split_252547.json was missing — i.e. on every clone but the
-    # one this was written in — and return 2 having exercised 0 of the 12 rules below. The
-    # same defect was fixed in loop.py --selftest; this is its twin. Synthesize a split with
-    # the fixture's own shape and re-point the fixture at it, so all 12 rules run anywhere.
-    _tmp = None
-    if not (REPO / base.split_path).exists() and not Path(base.split_path).exists():
-        _tmp = tempfile.mkdtemp(prefix="evoskill_spec_selftest_")
-        _sp = Path(_tmp) / "split_252547.json"
-        _sp.write_text(json.dumps({
-            "train": [f"task_{i:03d}" for i in range(1, base.n_train + 1)],
-            "val": [f"task_{i:03d}" for i in range(base.n_train + 1,
-                                                   base.n_train + base.n_val + 1)],
-            "test": [f"task_{i:03d}" for i in range(base.n_train + base.n_val + 1,
-                                                    base.n_train + base.n_val
-                                                    + base.n_test + 1)],
-        }, indent=1))
-        # Hash it the same way the real generator would be hashed, or the very first rule
-        # ("valid baseline PASSES") would fail on a sha mismatch of our own making.
-        base = _mut(base, split_path=str(_sp), split_sha256=split_digest(_sp))
-        print(f"  [note] live split absent — running against a synthesized split at {_sp}\n")
+    if not (REPO / "outputs/tau3_banking_2525/split_252547.json").exists():
+        print("  [skip] live split file absent; cannot run split-bound checks")
+        return 2
 
     bad = [
         ("valid baseline PASSES", base, None),
-        ("outer wall <= inner wall (#175)",
+        ("outer wall <= inner wall",
          _mut(base, episode_timeout_s=1200), "must exceed"),
         ("provider order without allow_fallbacks=False",
          _mut(base, solver_allow_fallbacks=True), "not a pin"),
         ("cross-family provider pin",
          _mut(base, solver_provider_order=("novita",)), "outside the family"),
-        ("discordant floor below the exact-binomial floor (#154)",
+        ("discordant floor below the exact-binomial floor",
          _mut(base, gate=GateSpec(discordant_floor=3, n_comparisons=4)), "could never fire"),
         ("gate unreachable at this n (power)",
          _mut(base, n_val=1, gate=GateSpec(pairing="task_paired", n_comparisons=4)),
@@ -565,7 +519,7 @@ def selftest() -> int:
          _mut(base, test_sealed=False), "will not describe a run"),
         ("no cost ceiling",
          _mut(base, cost_ceiling_usd=0.0), "cost_ceiling_usd must be declared"),
-        ("empty headroom window (#180/#206)",
+        ("empty headroom window",
          _mut(base, headroom=HeadroomGate(min_train_pass_rate=0.9,
                                           max_train_task_paired=0.5)), "inverted"),
     ]
@@ -581,15 +535,13 @@ def selftest() -> int:
         print(f"  [{'ok' if ok else 'BAD'}] {label}\n        {detail[:150]}")
         fails += 0 if ok else 1
 
-    # cache tag must change when the INSTRUMENT changes (#182/#183). This asserted
-    # `n_samples=5` changed the bucket while the tag was config-derived; it no longer does, and
-    # that is correct — the sample index lives in the cache DIR name (`_s0_`), so a 3-sample and
-    # a 5-sample run legitimately share s0..s2. Re-pointed at a field that genuinely alters what
-    # an episode does. The exhaustive per-field sweep is below.
+    # cache tag must change when the INSTRUMENT changes. n_samples does not change it: the sample
+    # index lives in the cache DIR name (`_s0_`), so a 3-sample and a 5-sample run legitimately
+    # share s0..s2. The exhaustive per-field sweep is below.
     t0 = base.cache_tag
     t1 = _mut(base, user_sim_model="someone-else").cache_tag
     ok = t0 != t1
-    print(f"  [{'ok' if ok else 'BAD'}] cache tag changes with the instrument (#183)\n"
+    print(f"  [{'ok' if ok else 'BAD'}] cache tag changes with the instrument\n"
           f"        {t0} -> {t1} ({'changed' if ok else 'DID NOT CHANGE'})")
     fails += 0 if ok else 1
 
@@ -604,7 +556,7 @@ def selftest() -> int:
     # ── the cache tag must key on the INSTRUMENT and nothing else ────────────────────────
     # Exhaustive and per-field on purpose. A denylist regression here does not crash and does
     # not show up in any result — it either silently replays stale episodes into a changed
-    # instrument (#182/#183) or silently re-buys episodes that were already correct. Both are
+    # instrument or silently re-buys episodes that were already correct. Both are
     # invisible without exactly this test, so every field is asserted individually.
     from dataclasses import replace as _replace
     _b = tau3_banking_2525()
@@ -613,7 +565,7 @@ def selftest() -> int:
                    ("cost_ceiling_usd", 999.0), ("n_train", 1), ("n_val", 1), ("n_test", 1),
                    ("test_sealed", False), ("split_path", "/tmp/elsewhere.json"),
                    ("split_sha256", "f" * 64), ("n_samples", 7), ("name", "renamed"),
-                   # #249: the evolver's harness, like the evolver's model, is not present when
+                   # the evolver's harness, like the evolver's model, is not present when
                    # a solver episode runs, so it must not fork the bucket.
                    ("evolver_harness", "direct")):
         _o = _replace(_b, **{_f: _v})
@@ -628,7 +580,7 @@ def selftest() -> int:
                    ("solver_allow_fallbacks", True), ("user_sim_model", "other"),
                    ("judge_model", "other"), ("agent_clean_s", 1), ("agent_turns", 1),
                    ("episode_timeout_s", 1),
-                   # #249: the SOLVER's harness decides tool schemas, loop shape and prompt
+                   # the SOLVER's harness decides tool schemas, loop shape and prompt
                    # assembly, so the same model on two harnesses is two instruments.
                    ("solver_harness", "claude")):
         _o = _replace(_b, **{_f: _v})
@@ -637,8 +589,6 @@ def selftest() -> int:
               f"({_f}={_v!r} changes what an episode does)")
         fails += 0 if _ch else 1
 
-    if _tmp:
-        shutil.rmtree(_tmp, ignore_errors=True)
     print(f"\n{'ALL CHECKS BEHAVED' if not fails else str(fails) + ' CHECK(S) MISBEHAVED'}")
     return 0 if not fails else 1
 

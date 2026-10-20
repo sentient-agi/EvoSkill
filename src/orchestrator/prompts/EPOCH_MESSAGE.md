@@ -1,0 +1,1 @@
+It is {utc_now} UTC; you have until {deadline_utc} UTC for this epoch, after which `/evo/staging/` is taken as it stands. You are at epoch {N}. Please analyze the solver rollouts, diagnose the pitfalls that may be fixed by a dedicated skill, and compose `skills_v{N}` under `/evo/staging/`.

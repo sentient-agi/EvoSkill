@@ -1,0 +1,96 @@
+{
+ "schema": "evoskill-infra/1",
+ "run": "ssbv2_fx_cc_run",
+ "solver": {
+  "model": "claude-sonnet-5",
+  "gateway": "anthropic_oauth",
+  "key_file": "/data/cc_token",
+  "key_variable": "CLAUDE_CODE_OAUTH_TOKEN",
+  "provider_order": [],
+  "provider_only": [],
+  "allow_fallbacks": false,
+  "require_parameters": false,
+  "quantizations": [],
+  "expect_provider": "firstParty",
+  "expect_served_model": "claude-sonnet-5",
+  "reasoning_effort": "none",
+  "harness": "claude_code"
+ },
+ "evolver": {
+  "model": "claude-opus-5-5",
+  "effort": "default",
+  "harness": "claude_cli",
+  "host": "daytona",
+  "sandbox": true,
+  "timeout_s": 7200
+ },
+ "ao": {
+  "model": "claude-sonnet-5",
+  "effort": "default",
+  "host": "daytona"
+ },
+ "claude_code": {
+  "version": "2.1.281",
+  "linux_x64_sha256": "56fe3da88458465fb27d7e9299dddb3fead55750fb9c2de795f233b5eea6dce1",
+  "token_file": "/data/cc_token",
+  "no_model_fallback": true
+ },
+ "claude_sandbox": {
+  "dockerfile": "scripts/daytona/Dockerfile.ssb_evolver",
+  "dockerfile_sha256": "7bd48b9761888054d5d283b2c333f4077b2fc9d934864b56650ec4b1ae91d7a4",
+  "base_dockerfile_sha256": "681a617ef3ce70ab8056dcd78dffcf9531ddb3c55fd4d2925ba6d0dc9d06e65d",
+  "snapshot_ref": null,
+  "libreoffice": "LibreOffice 25.2.3.2 520(Build:2)",
+  "resources": {
+   "cpu": 8,
+   "memory": 32,
+   "disk": 40
+  },
+  "egress": [
+   "api.anthropic.com"
+  ],
+  "ttl_minutes": 180
+ },
+ "leg_sandbox": {
+  "host": "daytona",
+  "dockerfile": "scripts/daytona/Dockerfile.ssb_leg",
+  "dockerfile_sha256": "681a617ef3ce70ab8056dcd78dffcf9531ddb3c55fd4d2925ba6d0dc9d06e65d",
+  "image_id": "x86daytona-681a617ef3ce",
+  "snapshot_ref": null,
+  "libreoffice": "LibreOffice 25.2.3.2 520(Build:2)",
+  "grading_openpyxl": "3.1.5",
+  "resources": {
+   "cpu": 8,
+   "memory": 32,
+   "disk": 40
+  },
+  "egress": [
+   "openrouter.ai"
+  ],
+  "max_sandboxes": 6,
+  "concurrency": 30,
+  "max_heavy_per_shard": 2,
+  "ttl_minutes": 300,
+  "shard_wall_min": 240,
+  "leg_timeout_s": 43200
+ },
+ "grader": {
+  "recalc_timeout_s": 900,
+  "datatable_uno_timeout_s": 900
+ },
+ "data": {
+  "root": "/data/spreadsheetbench-v2",
+  "overlay_patches_json": null,
+  "overlay_patches_sha256": null
+ },
+ "guards": {
+  "leg_spend_cap_usd": 40.0,
+  "run_spend_cap_usd": 200.0,
+  "min_account_balance_usd": 100.0
+ },
+ "other_models": {
+  "user_sim": "none",
+  "judge": "none"
+ },
+ "_note": "Test fixture: the INFRA.json shape of an SSB v2 run whose solver is Claude Code. Tests overwrite the paths they need."
+}

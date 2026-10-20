@@ -1,25 +1,15 @@
 #!/usr/bin/env python3
-"""The OPERATOR <-> AO conversation, as a durable artifact and as a Phoenix session.
+"""The OPERATOR <-> AO conversation, as one durable artifact.
 
-WHY THIS EXISTS (#301). On 2026-08-11 the maintainer asked, twice, "where's your conversation with AO?"
-and I answered that it was in Phoenix and REST-verified. That was half true and the wrong half
-was the half he asked about: the AO's *replies* were there (replayed from its stream-json log)
-and my *instructions* were not attached to anything. The mechanism of the error is the one this
-programme keeps re-learning -- I verified a PROXY (a span count) instead of the thing asked for
-(an attribute holding my words). A trace with only one side of a dialogue is not a record of a
-dialogue.
-
-The deeper cause was that the conversation had no home. It was scattered across four channels
-that never met:
+WHY THIS EXISTS. A conversation scattered across channels that never meet is not a record of a dialogue:
 
   * the message `prompt_author` composes and hands to the AO         (argv, then a file)
   * the AO's final reply                                             (its stream-json log)
   * questions the AO asks through `loop.ask()` and my answers        (BLOCKED_*/ANSWERS_* json)
-  * the intake clarification rounds                                  (BENCHMARK.json)
+  * the loop's own reports of each step                              (stdout)
 
-Four formats, four locations, no ordering between them. So there was nothing to point Phoenix at.
-This module is that home: ONE append-only JSONL per run, written by every channel, in speaking
-order, and an emitter that turns it into a Phoenix session you can read top to bottom.
+Four formats, four locations, no ordering between them. This module is that record's home: ONE append-only JSONL
+per run, written by every channel, in speaking order, readable top to bottom (`--markdown`).
 
 WHERE IT LIVES, AND WHY THAT MATTERS. `<run>.operator/CONVERSATION.jsonl` -- the operator
 directory, a SIBLING of the run dir. Same reasoning as ANSWERS/BLOCKED (#268): no agent job ever
@@ -44,7 +34,6 @@ into a declared HALT at the next step rather than an absence nobody notices.
 from __future__ import annotations
 
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -191,8 +180,8 @@ def exchanges(turns: list[dict]) -> list[dict]:
     WHY PAIR ON THE OPERATOR TURN. Every AO utterance in this system is a response to something
     the operator did — an invocation, an answer, a composed message. Even the AO ASKING a question
     is its response to being invoked. So an exchange opens on an operator turn and absorbs every
-    AO turn until the next one. This is what makes Phoenix's Sessions tab read as a dialogue
-    rather than as a pile of one-sided spans.
+    AO turn until the next one, so the transcript reads as a dialogue rather than as a pile of
+    one-sided turns.
 
     An AO turn with no operator turn before it (the transcript starting mid-run, or a replay of an
     older run) opens exchange 0 with an explicit placeholder rather than being silently attached
@@ -228,80 +217,9 @@ def exchanges(turns: list[dict]) -> list[dict]:
 def _join(turns: list[dict]) -> str:
     """Verbatim, with a channel header per turn so a reader can see WHICH channel each came from.
 
-    Never truncated here. Clipping, if any, happens once at the emitter with the limit stated.
+    Never truncated here.
     """
     return "\n\n".join(f"[{t['channel']}]\n{t['content']}" for t in turns)
-
-
-def emit(run_dir, project: str, endpoint: str = "http://localhost:6006",
-         session: str | None = None) -> tuple[int, int]:
-    """Emit the transcript to Phoenix as one session. Returns (n_exchanges, n_turns).
-
-    ONE LLM SPAN PER EXCHANGE, every span carrying the same `session.id`, which is the primitive
-    Phoenix threads a conversation on — the same choice `phoenix_stream_orchestrator.emit` made
-    for #247 and for the same reason. Both `llm.input_messages`/`llm.output_messages` AND the
-    flat `input.value`/`output.value` are set, because different Phoenix views read different
-    ones and a reader landing on either must see the same exchange.
-    """
-    from openinference.semconv.trace import SpanAttributes as SA
-    from opentelemetry import trace as otel_trace
-    from phoenix.otel import register as phoenix_register
-
-    turns = read(run_dir)
-    if not turns:
-        return 0, 0
-    xs = exchanges(turns)
-    sess = session or Path(run_dir).name
-
-    tp = phoenix_register(project_name=project, endpoint=f"{endpoint}/v1/traces",
-                          set_global_tracer_provider=False, batch=True)
-    tracer = tp.get_tracer("ao-conversation")
-
-    for i, x in enumerate(xs):
-        op_text = _join(x["ops"]) or "(no operator turn — the AO spoke first in this transcript)"
-        ao_text = _join(x["ao"]) or "(the AO has not replied to this yet)"
-        chans = "+".join(sorted({t["channel"] for t in x["ops"] + x["ao"]}))
-        ep = f"e{x['epoch']}" if x.get("epoch") is not None else "e-"
-        # A span END must not precede its start. Turns inside one exchange can share a ts_ns when
-        # they are written in the same millisecond, which would otherwise emit a zero-or-negative
-        # width span that Phoenix renders as a glitch.
-        t0, t1 = x["t0"], max(x["t1"], x["t0"] + 1_000_000)
-        span = tracer.start_span(f"{i + 1:02d} {ep} · {chans}", start_time=t0)
-        ctx = otel_trace.set_span_in_context(span)
-        try:
-            span.set_attribute(SA.OPENINFERENCE_SPAN_KIND, "LLM")
-            span.set_attribute(SA.SESSION_ID, str(sess))
-            span.set_attribute("llm.model_name", "agentic-orchestrator")
-            span.set_attribute("llm.input_messages.0.message.role", "user")
-            span.set_attribute("llm.input_messages.0.message.content", op_text)
-            span.set_attribute("llm.output_messages.0.message.role", "assistant")
-            span.set_attribute("llm.output_messages.0.message.content", ao_text)
-            span.set_attribute(SA.INPUT_VALUE, op_text)
-            span.set_attribute(SA.OUTPUT_VALUE, ao_text)
-            span.set_attribute("conversation.exchange", i + 1)
-            span.set_attribute("conversation.channels", chans)
-            span.set_attribute("conversation.n_operator_turns", len(x["ops"]))
-            span.set_attribute("conversation.n_ao_turns", len(x["ao"]))
-            if x.get("epoch") is not None:
-                span.set_attribute("conversation.epoch", x["epoch"])
-            # Each turn also gets its own child, so a long exchange stays navigable and the
-            # channel of an individual utterance is visible without reading the joined blob.
-            for j, t in enumerate(x["ops"] + x["ao"]):
-                c = tracer.start_span(f"{t['speaker']} · {t['channel']}", context=ctx,
-                                      start_time=max(t["ts_ns"], t0))
-                c.set_attribute(SA.OPENINFERENCE_SPAN_KIND, "CHAIN")
-                c.set_attribute("turn.speaker", t["speaker"])
-                c.set_attribute("turn.channel", t["channel"])
-                c.set_attribute(SA.INPUT_VALUE if t["speaker"] == "operator" else SA.OUTPUT_VALUE,
-                                t["content"])
-                for k, v in (t.get("meta") or {}).items():
-                    if isinstance(v, (str, int, float, bool)):
-                        c.set_attribute(f"turn.{k}", v)
-                c.end(end_time=max(t["ts_ns"], t0) + 1_000_000)
-        finally:
-            span.end(end_time=t1)
-    tp.force_flush()
-    return len(xs), len(turns)
 
 
 def render_markdown(run_dir) -> str:
@@ -322,9 +240,6 @@ def main() -> int:
     import argparse
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--run-dir", required=True)
-    ap.add_argument("--project", default="", help="emit to this Phoenix project")
-    ap.add_argument("--endpoint", default=os.environ.get("PHOENIX_ENDPOINT",
-                                                         "http://localhost:6006"))
     ap.add_argument("--markdown", action="store_true", help="print the transcript and exit")
     ap.add_argument("--say", nargs=3, metavar=("SPEAKER", "CHANNEL", "CONTENT"),
                     help="append one turn (CONTENT may be @path to read a file)")
@@ -341,17 +256,12 @@ def main() -> int:
     if a.markdown:
         print(render_markdown(a.run_dir))
         return 0
-    if not a.project:
-        turns = read(a.run_dir)
-        print(f"{len(turns)} turn(s), {len(exchanges(turns))} exchange(s) at "
-              f"{path_for(a.run_dir)}")
-        for t in turns:
-            print(f"  {t['ts']}  {t['speaker']:8s} {t['channel']:11s} "
-                  f"{t['content'][:90].splitlines()[0] if t['content'] else ''}")
-        return 0
-    n_x, n_t = emit(a.run_dir, a.project, a.endpoint)
-    print(f"emitted {n_x} exchange(s) / {n_t} turn(s) -> project {a.project!r}")
-    print(f"  view: {a.endpoint}/projects   (Sessions tab, session {Path(a.run_dir).name!r})")
+    turns = read(a.run_dir)
+    print(f"{len(turns)} turn(s), {len(exchanges(turns))} exchange(s) at "
+          f"{path_for(a.run_dir)}")
+    for t in turns:
+        print(f"  {t['ts']}  {t['speaker']:8s} {t['channel']:11s} "
+              f"{t['content'][:90].splitlines()[0] if t['content'] else ''}")
     return 0
 
 

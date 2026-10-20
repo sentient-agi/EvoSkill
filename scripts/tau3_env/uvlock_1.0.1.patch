@@ -1,0 +1,13 @@
+diff --git a/uv.lock b/uv.lock
+index 09f0b4a..7a133cd 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -2741,7 +2741,7 @@ wheels = [
+ 
+ [[package]]
+ name = "tau2"
+-version = "1.0.0"
++version = "1.0.1"
+ source = { editable = "." }
+ dependencies = [
+     { name = "addict" },

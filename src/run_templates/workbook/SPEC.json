@@ -1,0 +1,34 @@
+{
+ "_note": "ExperimentSpec fields of `evoskill run --task-type workbook` (the report's). src/run.py adds the run's name, split (the frozen plug-in's setup/split.json) and its sizes, n_epochs and n_samples from the instruction's Run size section, and the solver and evolver models; gate.n_comparisons is raised to n_epochs when the instruction asks for more epochs.",
+ "agent_clean_s": 1200,
+ "agent_turns": 45,
+ "benchmark": "ssbv2",
+ "cost_ceiling_usd": 200.0,
+ "domain": "spreadsheetbench-v2",
+ "episode_timeout_s": 10800,
+ "evolver_harness": "claude_cli",
+ "gate": {
+  "alpha": 0.05,
+  "discordant_floor": 6,
+  "n_comparisons": 4,
+  "pairing": "episode_level",
+  "report_per_basis": true,
+  "require_all_tests": true,
+  "tests": [
+   "episode_paired_sign",
+   "cluster_pass_count_sign"
+  ]
+ },
+ "headroom": {
+  "max_train_task_paired": 0.9,
+  "min_exploration_rate": 0.0,
+  "min_train_pass_rate": 0.08
+ },
+ "judge_model": "none",
+ "solver_allow_fallbacks": false,
+ "solver_harness": "claude_code",
+ "solver_provider_order": [],
+ "test_sealed": true,
+ "user_sim_model": "none",
+ "variant": ""
+}

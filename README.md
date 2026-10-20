@@ -1,423 +1,198 @@
 <div align="center">
     <img src="./assets/evoskill_logo.png" alt="EvoSkill" width="80%"/>
     <br>
-    <h1>EvoSkill v2: Agentic Skill Evolution Against a Frozen Instrument</h1>
+    <h1>EvoSkill v2: Fully Agentic Skill Evolution<br>from Benchmark Adaptation to a Stateful Evolver</h1>
 </div>
 
 <p align="center">
-  <a href="https://www.alphaxiv.org/abs/2603.02766"><img src="https://img.shields.io/badge/Paper-f73c6f?style=for-the-badge" alt="Paper"></a>
-  <a href="https://www.sentient.xyz/blog/evoskill-automated-skill-induction-from-agent-failures"><img src="https://img.shields.io/badge/Blog-f73c6f?style=for-the-badge" alt="Blog"></a>
+  <a href="https://arxiv.org/abs/2610.25931"><img src="https://img.shields.io/badge/arXiv-2610.25931-f73c6f?style=for-the-badge" alt="arXiv 2610.25931"></a>
+  <a href="https://openreview.net/forum?id=i4b4As7RFX"><img src="https://img.shields.io/badge/EvoSkill%20v1%20paper-f73c6f?style=for-the-badge" alt="EvoSkill v1 paper"></a>
   <a href="https://sentient.xyz"><img src="https://img.shields.io/badge/Built%20by-Sentient%20Labs-f73c6f?style=for-the-badge" alt="Built by Sentient Labs"></a>
   <a href="https://x.com/SentientAGI"> <img src="https://img.shields.io/badge/-SentientAGI-grey?logo=x&style=for-the-badge"/></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache 2.0-007ec6?style=for-the-badge" alt="License: Apache 2.0"></a>
 </p>
 
-<b>EvoSkill v2 is a system of three agents that improves a fourth thing you already have: your agent harness.</b> The <b>solver</b> does the task. The <b>evolver</b> reads the solver's failed rollouts and rewrites the skills the solver uses — short markdown files loaded into its context. The <b>agent orchestrator (AO)</b> turns a short prose brief into a complete, frozen experiment and drives the loop: rollout legs, evolver dispatch, verification gates, and a held-out test run once at the end.
+**EvoSkill v2 improves an agent by rewriting its skills** — folders, each a `SKILL.md` file and optional helper scripts, that Claude Code opens when a task matches the skill's description — and leaves the model and the harness as they are. It is three Claude Code agents:
 
-<b>None of the three replaces the harness you already run.</b> The solver and the evolver each execute inside one — Claude Code, our own direct harness, or another — and EvoSkill v2 is the layer above them. That is why it is three agents and not one.
+- **Benchmark adaptor (BA)** — runs once, before any skill exists. From your prose instruction, your data, your split and your grader, it writes a frozen plug-in that lists every task with its set, and a reference folder of training material.
+- **Solver** — attempts the tasks with the current skills: every task three times, each attempt in its own container, each scored by your grader.
+- **Evolver** — one Claude Code session with a bash tool for the whole run. Each epoch it is given every training attempt (session logs, working folders, scores), the reference folder, its earlier skills and its own notes; it reads what it chooses and writes the next skills. It never sees validation or held-out tasks.
 
-<b>EvoSkill v2</b> succeeds <b><a href="https://arxiv.org/abs/2603.02766">EvoSkill</a></b> (Alzubi et al., same team). Where v1 optimizes a program against a dataset, v2 adds the piece that makes the result trustworthy: <b>an orchestrator that freezes the measurement before any skill exists</b>, and is not allowed to change it afterwards. The evolver works inside that instrument and can never widen the training set, reinterpret which tasks count, or see held-out data.
-
-This release contains the minimal code to run skill evolution on two benchmarks: <b>τ³-bench banking</b> (multi-turn customer service, graded on final database state) and <b>SpreadsheetBench v2</b> (spreadsheet editing, graded cell-by-cell against a reference workbook).
+EvoSkill v2 succeeds [EvoSkill](https://openreview.net/forum?id=i4b4As7RFX) (Alzubi et al.), which lives on the `main` branch.
 
 <a id="results"></a>
 
 ## 📊 Results
 
-Two benchmarks, three configurations each: **no skills**, an **Opus 5 evolver** writing skills for a
-DeepSeek V4 Flash solver, and that **same DeepSeek V4 Flash model writing skills for itself**. Every
-task runs three times, because the task and the environment are stochastic and not only the model.
-Each held-out set ran once, after evolution had finished, under the version fixed in advance. Whiskers on the charts are one standard error, computed across tasks rather than across episodes, because the three samples of one task are not independent.
+We compare EvoSkill v2 with two other skill optimizers, [SkillOpt](https://arxiv.org/abs/2605.23904) and [SkillBoost](https://arxiv.org/abs/2607.26643), on two benchmarks, with the same solver for all three and Claude Sonnet 5.5 as every optimizer (two more τ³ runs use Haiku 5.5 as EvoSkill v2's evolver). Each method kept its own optimization loop. Every held-out task ran three times, once, after optimization ended. We ran each comparison twice. With **fine-grained ground truth**, EvoSkill v2's reference folder holds the training answers, and each baseline gets what the grader found wrong in each failed training attempt, as its own code passes it on: SkillOpt every wrong cell, SkillBoost only the first (on τ³, the database fields that differ from the expected database, or the expected tool calls not made). With **pass or fail only**, every optimizer's grading signal is whether each training attempt passed; each still reads the attempts themselves.
+
+**SpreadsheetBench v2** (Claude Sonnet 5.5 solver; 104 held-out tasks × 3 attempts). With fine-grained ground truth, EvoSkill v2's skills passed **126 of 312** held-out episodes, against 102 for SkillOpt and 101 for SkillBoost (81 with no skill). The gain is in Debugging, which the solver never passed without a skill (0 → 23 of 84), and in Template (25 → 47 of 120); Financial_Model stayed at 56 of 108. With pass or fail only, EvoSkill v2 passed 105, on par with SkillOpt's 107, with an evolver that cost **$0.53** against SkillOpt's $6.65.
 
 <div align="center">
-  <img src="./assets/results_spreadsheetbench_v2.png" alt="SpreadsheetBench v2 held-out test: episodes, pass@3 and all@3 for no skills, the Opus 5 evolver, and the same-model evolver" width="94%"/>
+  <img src="./assets/results_spreadsheetbench_v2.png" alt="SpreadsheetBench v2 held-out test: pass@1 per category and pass@1, pass@3 and all@3 overall, for no skill, SkillBoost, SkillOpt and EvoSkill v2, with fine-grained ground truth (left) and pass or fail only (right)" width="96%"/>
 </div>
 
-The gain concentrates in the one category that started at the floor. **Debugging went from 3 of 120
-episodes to 21**, while Financial_Model — the category the solver was already competent at — did not
-move at all (32 of 120 either way). That is the mechanism: a written rule supplies an approach where
-the agent had none, and adds little where it already had one.
-
-The less capable model, doing the evolver's work for itself, **reached the same episode total as the
-frontier model** (76 against 77 of 360). It was not as dependable: 10 tasks passed all three samples
-against 15, and it put its episodes in a different category (Debugging 14, Financial_Model 38).
+**τ³-bench banking** (Claude Haiku 5.5 solver; 31 held-out tasks × 3 attempts). EvoSkill v2's skills passed **48 of 93** held-out episodes with fine-grained ground truth, against 43 for SkillOpt and 36 for SkillBoost (26 with no skill), and 41 with pass or fail only, against 37 and 23 (for SkillOpt, the skill its code keeps on validation; its last skill passed 34 and 40). With the solver's own model, Haiku 5.5, as its evolver, EvoSkill v2 passed 46 and 33: a weaker model improving its own skills.
 
 <div align="center">
-  <img src="./assets/results_tau3_banking.png" alt="τ³ banking held-out test: episodes, pass@3 and all@3 for no skills, the Opus 5 evolver, and the same-model evolver" width="94%"/>
+  <img src="./assets/results_tau3_banking.png" alt="τ³-bench banking held-out test: pass@1, pass@3 and all@3 for no skill, SkillBoost, SkillOpt and EvoSkill v2 (Sonnet 5.5 or Haiku 5.5 evolver), with fine-grained ground truth (left) and pass or fail only (right)" width="90%"/>
 </div>
 
-On τ³ banking **neither configuration separates from the baseline**, and we report that as it came
-out. The skills did change behavior in the direction they were written for — episodes that never
-reached grading fell from 22 of 141 to 14 with the Opus 5 evolver and to 15 with the same-model one —
-but an agent that ends a stuck conversation still has to be right about the work. The remaining
-failures needed correct answers, and instructions did not supply them.
+**What the optimizer costs.** Claude Code's list-price estimate for the optimizer alone, over the whole run; the solver's attempts are not included.
 
-The two results are one finding rather than a win and a loss: this method turns non-attempts into
-attempts, and that pays only where an attempt was the thing missing.
+| Optimizer | SSB v2, fine-grained | SSB v2, pass or fail | τ³, fine-grained | τ³, pass or fail |
+|---|---:|---:|---:|---:|
+| SkillBoost | $13.95 | $13.66 | $6.98 | $8.64 |
+| SkillOpt | **$8.56** | $6.65 | $5.55 | $6.22 |
+| EvoSkill v2 | $12.84 | **$0.53** | **$0.99** | $1.55 |
+| EvoSkill v2, Haiku 5.5 evolver | — | — | $1.87 | **$0.73** |
 
-**What a run costs.** These are billed figures, metered per call by the provider rather than
-estimated from a price table. A three-epoch evolution is 1,080 solver episodes — 60 training and 60
-validation tasks at three samples each, over three epochs — and came to about **$27** with the Opus 5
-evolver and about **$25** with the same-model one. The held-out test leg adds 360 episodes, about
-**$10**. Per episode the three configurations land within a third of a cent of each other — $0.0258
-with no skills, $0.0253 and $0.0229 evolved — so the skills change what the solver does, not what it
-spends. The evolver and the AO sit outside these totals: both run inside a coding subscription,
-billed by the seat and not by the call.
+Each configuration ran once. On SpreadsheetBench v2, EvoSkill v2's pass-or-fail run used Claude Code 2.1.293 and every other run 2.1.281, so costs across that line are not directly comparable. The [tech report](https://arxiv.org/abs/2610.25931) gives the per-epoch scores and how each baseline was run.
+
+## 🧭 How it works
+
+<div align="center">
+  <img src="./assets/architecture.png" alt="EvoSkill v2: before the run, the user's instruction, data, split and grader go to the benchmark adaptor, which writes a frozen plug-in and a reference folder; each epoch, the solver attempts the tasks, the user's grader scores them, and the evolver reads the training attempts and scores and writes the next skills; validation scores are recorded but never shown to the evolver; after the last epoch, the last epoch's skills run once on the held-out tasks" width="96%"/>
+</div>
+
+1. **Adapt (once).** The BA reads your instruction, data, split and grader on a throwaway machine whose network reaches only the model API, and writes the plug-in and the reference folder. The plug-in and the grader are frozen and hashed; nothing later may change them.
+2. **Roll out.** The solver attempts every validation task, and every training task except in the last epoch (no evolver turn follows it), three times with the current skills, each attempt in its own container. Your grader scores the solver's working directory at exit.
+3. **Evolve.** The evolver reads the training attempts and their scores and writes the next skill set. Its container receives only the training attempts, the skill sets and the BA's reference folder; the reference folder is uploaded as the BA wrote it, so check that it holds no validation or held-out material.
+4. **Measure.** Validation scores are recorded at every epoch and never shown to the evolver. Every epoch's skills are kept; none is rejected on a score.
+5. **Test once.** After the last epoch, the last epoch's skills run once on the held-out tasks, three attempts each.
+
+**Four design choices** set EvoSkill v2 apart from the optimizers we compared with (the [tech report](https://arxiv.org/abs/2610.25931) argues each):
+
+- **The evolver is an agent with a bash tool.** SkillOpt's optimizer is a sequence of single model calls. EvoSkill v2's evolver runs Python over the attempts, recalculates a workbook, and can test an explanation of a failure before writing it into a skill.
+- **The evolver is stateful.** SkillBoost's optimizer starts a new agent session every round; EvoSkill v2's evolver is one session for the whole run: its notes, its scripts, every earlier epoch's attempts and every skill set it wrote stay available, so a later turn can keep, revert or combine anything tried so far.
+- **Several attempts per task.** The solver does not pass or fail a task the same way every time; with three attempts the evolver can tell a failure that repeats from one that does not.
+- **Every epoch's skills are accepted.** Keep-or-reject checks on one attempt per task decide on gaps within that run-to-run variation; EvoSkill v2 keeps every skill set and tests the last epoch's.
 
 ## 🧪 Supported benchmarks
 
-<table>
-  <thead>
-    <tr>
-      <th>Benchmark</th>
-      <th>Support</th>
-      <th>Notes</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><a href="https://github.com/sierra-research/tau2-bench">τ³-bench</a> — banking</td>
-      <td>✅</td>
-      <td>Multi-turn, simulated customer. Graded on final database state; one zeroed component zeroes the episode.</td>
-    </tr>
-    <tr>
-      <td><a href="https://github.com/RUCKBReasoning/SpreadsheetBench-2">SpreadsheetBench v2</a></td>
-      <td>✅</td>
-      <td>All-or-nothing cell comparison over the ranges each task names. Needs the Docker images below.</td>
-    </tr>
-    <tr>
-      <td>Other τ³ domains (retail, airline, telecom)</td>
-      <td>🛠️</td>
-      <td>The adapter is domain-parameterised, but only banking ships with a frozen split and a verified base leg.</td>
-    </tr>
-  </tbody>
-</table>
+| Benchmark | Tasks used | Notes |
+|---|---|---|
+| [SpreadsheetBench v2](https://huggingface.co/datasets/KAKA22/SpreadsheetBench-v2) | 218: 57 training, 57 validation, 104 held-out | Debugging, Financial_Model and Template. Graded cell by cell against the reference workbook after a LibreOffice recalculation. A byte overlay repairs five malformed input workbooks. |
+| [τ³-bench](https://github.com/sierra-research/tau2-bench) banking | 70: 19 training, 20 validation, 31 held-out | Graded on the bank's final database state or on the expected tool calls. The simulated customer is GPT-6 Luna through OpenRouter. Runs on a data root built from tau2-bench commit `363133a`, with its document-embeddings cache. |
+| Your benchmark | — | Bring a prose instruction, the data, a split and a grader (below). The solver harness supports workbook-editing tasks and τ³-style conversations; another kind of task needs its own harness branch. |
 
-## 🎨 Features
+## 🛠️ Installation
 
-<table>
-  <thead>
-    <tr>
-      <th>Capability</th>
-      <th>Status</th>
-      <th>Explanation</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><b>Prose brief → frozen experiment</b></td>
-      <td>✅</td>
-      <td>
-        The AO reads your repository, resolves what the brief means, cites the file and line behind each answer, and freezes the split, models, budgets and scorer. The τ³ brief we ship is 413 words in five sections.
-      </td>
-    </tr>
-    <tr>
-      <td><b>It refuses rather than guesses</b></td>
-      <td>✅</td>
-      <td>
-        Faced with a contradiction, an impossible split, or vagueness where a number belongs, the AO leaves the field empty and puts the question back to you. Sizing numbers decide what a study can detect, so it will not pick them for you.
-      </td>
-    </tr>
-    <tr>
-      <td><b>Evolver containment</b></td>
-      <td>✅</td>
-      <td>
-        The evolver is kernel-confined away from held-out task specs via <code>sandbox-exec</code>, and is given no validation or held-out data and no score for its own output. macOS only — see <a href="#platform-notes">Platform notes</a>.
-      </td>
-    </tr>
-    <tr>
-      <td><b>Comparability gate</b></td>
-      <td>✅</td>
-      <td>
-        <code>compare_runs()</code> refuses to compare two runs unless 15 instrument fields plus the split hash, sealed-test flag and sample count all match. An absent field is not a match, and a non-varying treatment raises rather than returning a result.
-      </td>
-    </tr>
-    <tr>
-      <td><b>Resumable epochs + replay cache</b></td>
-      <td>✅</td>
-      <td>
-        Every rollout is content-addressed and replayable, so a killed run resumes without re-buying episodes. The cache identity includes the model, the wall, the user-simulator and the skill version.
-      </td>
-    </tr>
-    <tr>
-      <td><b>Human gates that are not automatable</b></td>
-      <td>✅</td>
-      <td>
-        The loop halts twice per epoch — once on the AO-authored evolver prompt, once on the evolved skills — and requires a written receipt with the sha256 of what you read.
-      </td>
-    </tr>
-    <tr>
-      <td><b>Phoenix tracing</b></td>
-      <td>✅</td>
-      <td>
-        Optional. Live evolver spans and AO session replay into a local Phoenix server. Everything degrades gracefully without it.
-      </td>
-    </tr>
-    <tr>
-      <td><b>Harness-selectable solver and evolver</b></td>
-      <td>🛠️</td>
-      <td>
-        The containment layer is built and proved for <code>direct</code> and <code>claude</code>; full spec wiring is not finished.
-      </td>
-    </tr>
-    <tr>
-      <td><b>Linux parity</b></td>
-      <td>🛠️</td>
-      <td>
-        Containment relies on macOS <code>sandbox-exec</code>. Linux runs today only via a recorded opt-out.
-      </td>
-    </tr>
-  </tbody>
-</table>
+**Requirements**
 
-## Table of Contents
-
-- [Results](#results)
-- [Installation](#installation)
-- [Quickstart](#quickstart)
-- [Bootstrap epoch 1](#bootstrap-epoch-1-base-legs-oracle-declarations)
-- [Drive the epoch](#drive-the-epoch)
-- [Model routing](#model-routing)
-- [Platform notes](#platform-notes)
-- [How it works](#how-it-works)
-- [Tests](#tests)
-- [Layout](#layout)
-- [Citation](#citation)
-- [License](#license)
-
----
-
-## Installation
-
-**Requirements:**
-
-- Linux or macOS. Python **3.12+**. [`uv`](https://docs.astral.sh/uv/).
-- **Docker** — native on Linux; on macOS use [colima](https://github.com/abiosoft/colima). Give it as many CPUs as you can spare: `colima start --cpu 12 --memory 14` or larger, and keep `/Users` shared (the default). At 8 CPUs we measured heavy oversubscription at the default concurrency.
-- **Claude Code CLI** (`npm install -g @anthropic-ai/claude-code`) and a **Claude subscription** — run `claude login`. The AO and the evolver run through the `claude` binary.
-- An **OpenRouter API key** (`OPENROUTER_API_KEY`) for the solver model.
-- `git`.
-
-Copy `.env.example` to `.env` and fill in your keys.
-
-> **An `ANTHROPIC_API_KEY` will NOT work for the AO or the evolver.** `subscription_env()` in `src/orchestrator/quota_scope.py` deliberately removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` from every `claude` child running a Claude-family model. That is not an oversight (#307): the quota gate reads the subscription window, so a child silently spending API credit would leave the gate guarding a budget the run does not use. There are two entry points and therefore two mechanisms — `subscription_env()` covers the AO front door and the loop, and `scripts/tau3_evolver.sh` (the hand-run evolver path, which is not Python and never called it) unsets the same three itself. The key is still needed for solver models that reach Anthropic through a gateway.
-
-**Setup:**
+- **A macOS host** with Python **3.12+** and [`uv`](https://docs.astral.sh/uv/). The host only drives the run, but the plug-in freeze runs the BA's plug-in under macOS `sandbox-exec`, so a Linux host is not supported yet.
+- **[Daytona](https://www.daytona.io/)** (`DAYTONA_API_KEY`): everything that needs isolation runs on one 8 vCPU / 32 GiB Daytona machine per run, plus a short-lived one for the BA. A local Docker backend is planned.
+- **Claude access** for the three Claude Code agents: a Claude subscription token (`claude setup-token`, saved to a file with mode `600`), or an `ANTHROPIC_API_KEY`. If a session hits its usage limit, the run waits for the limit to reset and continues. Claude Code itself (a pinned Linux build) is downloaded and checked against its sha256 before the first attempt.
+- **τ³ only:** an OpenRouter API key, for the simulated customer and the solver's knowledge-base search, and once to build the document-embeddings cache.
+- The benchmark data: [SpreadsheetBench v2](https://huggingface.co/datasets/KAKA22/SpreadsheetBench-v2), or tau2-bench at commit `363133a` (see [`third_party/README.md`](third_party/README.md)).
 
 ```bash
 # EvoSkill v2 lives on the `v2` branch; `main` is EvoSkill v1.
 git clone -b v2 https://github.com/sentient-agi/EvoSkill.git EvoSkill && cd EvoSkill
-uv sync                          # main venv
-uv sync --extra phoenix          # optional: Phoenix tracing at :6006
+uv sync --extra daytona
+cp .env.example .env                                # DAYTONA_API_KEY; OPENROUTER_API_KEY for τ³
+export EVOSKILL_CC_TOKEN_FILE=~/.claude_token       # or: export ANTHROPIC_API_KEY=...
 ```
 
-**1. Vendor the benchmark repos.** Clone-don't-vendor policy; exact pins and clone commands live in `third_party/README.md`.
+## 🚀 Run an experiment
 
-- `tau3-bench` — the banking domain: tasks, code, and the venv every episode runs in (`uv sync --extra knowledge` for `rank_bm25`).
-- `tau2-bench` — the v1.0.0 engine pin. Only needed if you set `TAU2_BENCH_ROOT` to point episodes at it instead; a plain τ³ run never launches it, so its venv is **optional**.
+A run starts from **your instruction**: a page of prose that describes the benchmark to the BA, the way you would brief a colleague. It covers five things:
 
-**2. Build the Docker images.** SpreadsheetBench v2 only — a τ³ banking run uses none of them.
+1. **Benchmark, data and split**: what the tasks are, how the data is laid out, and which tasks go to training, validation and the held-out set.
+2. **What the solver gets and must produce**: e.g. an input workbook and the path to save the edited one.
+3. **The grader**: your `grade(task, snapshot)` and what it reads.
+4. **The environment**: the image the solver and the grader run in.
+5. **Run size**: epochs and attempts per task, e.g. `3 epochs · 3 samples per task` (our runs). A run without it is refused.
+
+The instruction also decides what the evolver may see. In our runs with fine-grained ground truth the reference folder held the training tasks' answers; say so in the instruction if the evolver should not get them, and the BA leaves them out.
+
+`examples/ssbv2/` and `examples/tau3_banking/` hold the instructions, splits and graders we used. Hand them over with the data. The BA sees the data folder as `/data/<its folder name>`, and the example instructions name `/data/spreadsheetbench-v2` and `/data/tau3_data_363133a`, so `--data` must be a folder with that name:
 
 ```bash
-docker build -t evoskill-solver-sandbox:latest docker/solver-sandbox/
-docker build -t ssb-verifier:latest docker/ssb-verifier/     # grading image
-bash scripts/build_ssb_solver_lo.sh                          # ssb-solver-lo:latest
+# SpreadsheetBench v2: --data is the dataset's spreadsheetbench-v2 folder
+uv run evoskill run --task-type workbook --instruction examples/ssbv2/instruction.md \
+    --data /path/to/spreadsheetbench-v2 --split examples/ssbv2/split.json \
+    --grader examples/ssbv2/grader.py --run-dir runs/ssb
+
+# τ³-bench banking: build the data root once, then run (Haiku 5.5 solver, Sonnet 5.5 evolver by default)
+uv run python scripts/tau3_make_data_root.py --dest /path/to/tau3_data_363133a
+uv run python scripts/tau3_build_embeddings_cache.py --root /path/to/tau3_data_363133a
+uv run evoskill run --task-type tau3 --instruction examples/tau3_banking/instruction.md \
+    --data /path/to/tau3_data_363133a --split examples/tau3_banking/split.json \
+    --grader examples/tau3_banking/grader.py --run-dir runs/tau3
 ```
 
-`build_ssb_solver_lo.sh` builds its own base, then runs ~12 acceptance checks **inside** the built container — `soffice` present, `python3-uno` importable, the pinned `openpyxl`/`pandas`/`numpy` not shadowed, and a real formula → recalculated-value round trip. It refuses to hand over an image that fails any of them. If you already hold the frozen 2026-07-15 base tagged `ssb-solver:no-libreoffice-0715`, it is used and checked by ID — that is the reproduce-the-published-numbers path, not a build requirement.
+`evoskill run` goes through five steps, and the run needs no further input:
 
-**3. Point `SSBV2_ROOT` at your SpreadsheetBench v2 checkout** (SSB v2 only). Give it the directory containing the category dirs' parent: either `<root>/data/spreadsheetbench-v2/…` or `<root>/spreadsheetbench-v2/…` resolves — the loader tries both.
+1. **init**: writes the run's settings (`SPEC.json`, `INFRA.json`, `RUNTIME.json`) and reads the run size from the instruction.
+2. **adapt**: the BA builds the plug-in and the reference folder; the plug-in and your grader are frozen and hashed.
+3. **base**: the solver's no-skill attempts on the training, validation and held-out tasks.
+4. **evolve**: the epochs: evolver turn, then the solver's attempts with the new skills.
+5. **test**: the last epoch's skills on the held-out tasks; then the run's machine is deleted.
 
-```bash
-export SSBV2_ROOT=/path/to/SpreadsheetBench-v2
+Run the same command again to resume a stopped run; a step whose result is complete is skipped, and a changed input is refused. `--stop-after <step>` stops after a step, `--dry-run` prints every check and command without running anything, `evoskill status --run-dir runs/ssb` shows where a run is, and `evoskill stop --run-dir runs/ssb` stops it without ending the evolver's session. `--solver-model`, `--evolver-model` and `--adaptor-model` choose the models (Claude Sonnet 5.5 for all three on `workbook`; on `tau3` a Haiku 5.5 solver, a Sonnet 5.5 evolver and adaptor), and `--concurrency` the solver attempts in flight (default 30).
 
-# Check it before going further. A wrong root does not raise: it warns per
-# category and yields an EMPTY task list, which reads downstream as a run with
-# nothing in it rather than as a misconfiguration.
-uv run python -c "
-import os
-from pathlib import Path
-from src.agent_profiles.ssbv2_agent.dataset import load_ssbv2
-tr, va, te = load_ssbv2(Path(os.environ['SSBV2_ROOT']))
-assert tr and va and te, 'SSBV2_ROOT is wrong — 0 tasks loaded'
-print(f'SSBV2_ROOT OK: {len(tr)} train / {len(va)} val / {len(te)} test')"
+**Your grader** is one function. The BA reads it, but neither it nor the evolver can change it:
+
+```python
+def grade(task, snapshot: Path) -> float:
+    """task: one row of the plug-in (id, category, instruction, inputs, answer_files, grading, split).
+    snapshot: the solver's working directory at the end of the attempt.
+    (On τ³ it also holds the bridge's record of the conversation and the final database.)
+    Return a score from 0 to 1; 0.999 or more is a pass. If grade() raises, times out
+    or returns anything else, the attempt is graded once more; a second failure records
+    it as grader_failed, which the reported pass counts treat as not passed."""
 ```
 
-Everything below runs through `uv run`, because `uv sync` installs the `evoskill` and `evoskill-loop` entry points into `.venv/bin` without putting them on your PATH. `source .venv/bin/activate` once instead if you prefer, and drop the prefix.
-
----
-
-## Quickstart
-
-The interface is a conversation with the AO. Write a short prose brief and hand it over:
-
-```bash
-cat > brief.txt <<'EOF'
-Evolve a skill library for the banking domain of tau3-bench.
-Solver is deepseek-v4-flash-0731, pinned to the native DeepSeek provider.
-Three epochs. Hold out a test split and do not touch it.
-EOF
-
-uv run evoskill new --brief brief.txt \
-    --root-hint third_party/tau3-bench \
-    --run-dir outputs/my_run \
-    --benchmark tau3
-```
-
-The AO reads the repository, resolves what the brief means, asks you about anything it refuses to pick on its own (split sizes, budgets), and freezes the experiment.
-
-Headless: `--script` takes a **path** to a JSON file of pre-recorded answers, not inline JSON —
-
-```bash
-echo '{"seed": 801, "n_samples": 3}' > script.json && … --script script.json
-```
-
-> **Write down the split filename it prints.** The freeze receipt names the split it wrote — `split_<n_train><n_val><n_test>.json`, e.g. `split_325.json` for 3/2/5 — and every bootstrap step below needs that exact name. It is **not** `split.json`.
-
-### Bootstrap epoch 1: base legs, oracle, declarations
-
-The driver measures an epoch against a no-skills **base** comparator, and it does not run that comparator for you. The base legs are yours, so that what everything is compared against was launched and read by a person.
-
-```bash
-export EVOSKILL_ENV_FILE=$PWD/.env                                # holds OPENROUTER_API_KEY
-export EVOSKILL_TAU3_SPLIT=$PWD/outputs/my_run/split_325.json     # EXACT name from the receipt
-export EVOSKILL_TAU3_RUN_DIR=outputs/my_run
-export EVOSKILL_TAU3_CACHE_TAG=<cache tag from the freeze receipt>
-export EVOSKILL_SOLVER_MODEL=<solver model from the receipt>      # same model as the evolved legs
-
-scripts/tau3_leg_b2525.sh my_run_base_train train BASE
-scripts/tau3_leg_b2525.sh my_run_base_val   val   BASE
-
-# The evolver's ground-truth oracle (train tasks only, by construction):
-EVOSKILL_TAU3_ORACLE_SPLIT=$PWD/outputs/my_run/split_325.json \
-EVOSKILL_TAU3_ORACLE_DIR=$PWD/outputs/my_run/oracle \
-    uv run python scripts/make_tau3_oracle.py   # then --verify
-```
-
-All three `EVOSKILL_TAU3_*` exports **and `EVOSKILL_SOLVER_MODEL`** are mandatory. The launcher refuses without them rather than defaulting, because a defaulted cache tag would mix this run's episodes into another run's cache bucket.
-
-When both base result JSONs exist, declare them once in `outputs/my_run/RUNTIME.json` — the driver reads it on every invocation:
-
-```json
-{
- "base_leg": "outputs/my_run/my_run_base_train.json",
- "base_leg_val": "outputs/my_run/my_run_base_val.json",
- "digest_caches": [".cache/<the cache_dirs recorded in the base train JSON>"],
- "oracle": "outputs/my_run/oracle"
-}
-```
-
-`digest_caches` must be copied from the `cache_dirs` field of the base **train** result JSON — the runner records the real directory names there, and the driver refuses to re-derive them.
-
-<details>
-<summary><b>The same bootstrap for SpreadsheetBench v2</b> — same shape, different launcher, three extra rules</summary>
-
-<br>
-
-`SSBV2_ROOT` must be exported for *every* later `evoskill-loop` invocation too — the loop passes it to the evolver's leak hook as the held-out data root.
-
-`EVOSKILL_CACHE_DIR` is required by the leg launcher here. Its default is a per-tag dir that is empty for a new tag, so leaving it unset silently re-buys every episode. The loop sets its own per-epoch value when it launches legs itself, so exporting it later is harmless but does nothing.
-
-`EVOSKILL_SOLVER_MODEL` is mandatory for **both** leg launchers, and on SSB v2 it must be a **dated snapshot** (`…-0731`, `…-0813`): the replay cache keys on the model string, so a rolling tag re-buys every episode under a model nobody chose. `scripts/ssbv2_leg.sh` refuses one with exit 4, and the freeze refuses it earlier — `ExperimentSpec.validate()` rejects an undated solver on this benchmark, so you find out before paying for the AO run and the oracle.
-
-```bash
-export EVOSKILL_CACHE_DIR=$PWD/.cache/<cache tag from the freeze receipt>_cache
-export EVOSKILL_SOLVER_MODEL=<solver model from the freeze receipt>
-export EVOSKILL_TAU3_RUN_DIR=outputs/my_ssb_run                      # the loop's var names
-export EVOSKILL_TAU3_SPLIT=$PWD/outputs/my_ssb_run/split_325.json    # predate SSB v2
-
-scripts/ssbv2_leg.sh my_ssb_run_base_train train ""   # "" = no skills = BASE
-scripts/ssbv2_leg.sh my_ssb_run_base_val   val   ""
-
-EVOSKILL_SSBV2_ORACLE_SPLIT=$PWD/outputs/my_ssb_run/split_325.json \
-EVOSKILL_SSBV2_ORACLE_DIR=$PWD/outputs/my_ssb_run/oracle \
-    uv run python scripts/make_ssbv2_oracle.py        # then --verify
-```
-
-Its `RUNTIME.json` additionally names the launcher, and `digest_caches` holds exactly **one** directory (SSB v2 uses a single cache dir, not τ³'s per-sample dirs):
-
-```json
-{
- "leg_script": "scripts/ssbv2_leg.sh",
- "base_leg": "outputs/my_ssb_run/my_ssb_run_base_train.json",
- "base_leg_val": "outputs/my_ssb_run/my_ssb_run_base_val.json",
- "digest_caches": [".cache/<cache tag>_cache"],
- "oracle": "outputs/my_ssb_run/oracle"
-}
-```
-
-</details>
-
-### Drive the epoch
-
-```bash
-uv run evoskill-loop --run-dir outputs/my_run --epoch 1 --drive --step \
-    --note "first epoch"
-```
-
-Each `--drive --step` invocation advances one or more steps of the epoch — evidence surface, AO-authored evolver prompt, evolver dispatch, evolved legs, verification gates — and stops at the first HALT, question, or operator gate. Run it repeatedly and read what it printed before continuing. `--drive` without `--step` deliberately exits with code 64.
-
-Expect to be stopped **twice at the human gate**: once to read the AO-authored evolver prompt, and once more to read the evolved skills. Each time, write `outputs/my_run/e1_PROOFREAD.json` with what you checked plus the sha256 of the prompt (and, the second time, of the staging dir). The gate is deliberately not automatable; the HALT message names the exact keys it wants.
-
----
-
-## Model routing
-
-- **DeepSeek-family solver models** are hard-pinned to the native DeepSeek provider (`order=["deepseek"], allow_fallbacks=false`) at every dispatch site. Third-party hosts serve these models with measurably different quality; the pin is enforced, not advisory.
-- **DeepSeek-family models through the `claude` CLI** additionally require the local proxy: `python scripts/cc_proxy.py` (default `127.0.0.1:8100`), then `ANTHROPIC_BASE_URL=http://127.0.0.1:8100`. The dispatch guard (`scripts/lib/deepseek_pin_guard.sh`) refuses to launch without it.
-
-## Platform notes
-
-- **Evolver containment uses `sandbox-exec`** (macOS only) to kernel-confine the evolver away from held-out task specs. On Linux the dispatch refuses by default. The opt-out is `"evolver_sandbox": false` in the run's `RUNTIME.json` — a recorded decision, which is why it lives in the run's declaration rather than in the environment. Setting `EVOSKILL_EVOLVER_SANDBOX=0` in your shell has **no effect** on a driven epoch: the loop rebuilds that variable from the `RUNTIME.json` value on every dispatch, so an export is silently overwritten. It applies only when you run `scripts/tau3_evolver.sh` by hand.
-- **The AO front door is a SEPARATE gate.** `evoskill new --brief` and the loop's prompt-authoring step both refuse on a host without `sandbox-exec` — which is every Linux host. `"evolver_sandbox": false` does **not** lift this; that key is read only for the evolver dispatch. The opt-out here is `EVOSKILL_AO_ALLOW_UNCONTAINED=1`, and it is a real trade: the AO then runs uncontained, regaining write access to the run directory — including `ANSWERS_e{N}.json` and `e{N}_PROOFREAD.json`, the files a later step reads back as the operator's own answers. Set it as a recorded decision, not a reflex. **On Linux it is the only way through**, for the brief front door and every driven epoch alike.
-- **Phoenix tracing is optional.** Without a running Phoenix instance the loop's traces-in-phoenix check reports `UNMEASURED` and everything else runs.
-- `caffeinate` (macOS sleep inhibitor) is used when present, skipped on Linux.
-
-## How it works
-
-<div align="center">
-  <img src="./assets/architecture.png" alt="EvoSkill v2 architecture: the engineer writes a brief, the AO fixes the instrument and drives every epoch, the solver runs training and validation, the evolver reads only the training digests and writes skills, all on top of your existing harness" width="94%"/>
-</div>
-
-One epoch is five stages, and the separation between them is the point:
-
-1. **Freeze** — the AO turns the brief into an experiment: split, models, budgets, scorer. This happens once, before any skill exists, and nothing downstream may change it.
-2. **Roll out** — the solver attempts every training task, three times by default, because the task and the environment are stochastic and not only the model.
-3. **Evolve** — the evolver reads one digest per training task (the reference specification, whether retrieval returned what the answer depends on, and every sample's verdict and full transcript) and writes skills. It never sees validation or held-out data, and never receives a score for its own output.
-4. **Measure** — a validation run reports the new library's score. It **measures**; it does not filter. Every skill edit is promoted, because a bad edit produces the negative examples the next epoch learns from.
-5. **Test once** — after the last epoch, the held-out set runs a single time.
-
-## Tests
-
-```bash
-uv run pytest
-```
-
-## Layout
+**What a run folder holds** (for a run folder named `ssb`)
 
 ```
-src/orchestrator/   AO front door (cli), v2 epoch loop, evolver dispatch + containment
-src/harness/        direct + claude executors, seat pool, admission, liveness, fleet
-src/cache/          rollout replay cache + cache-environment guard
-src/agent_profiles/ solver agents (ssbv2_agent, tau2_agent = τ³ adapter) + skill_evolver
-src/evaluation/     parallel evaluation driver
-scripts/            leg launchers, evolver launcher, digest builders, split makers
-docker/             solver sandbox, SSB solver images, SSB verifier (grading)
-third_party/        vendored benchmark repos (gitignored; see its README)
+runs/ssb/
+  RUN.json                                 your inputs, hashed, and the run size
+  SPEC.json  INFRA.json  RUNTIME.json      the run's settings; SPEC.json is frozen and hashed before the first epoch
+  setup/                                   the plug-in, tasks.json, split.json and your grader, hashed
+  reference/                               the evolver's training material
+  skills_v1/ … skills_v3/                  the skill set after each evolver turn
+  evo_e0/ … evo_e2/                        what the evolver received at each turn
+  ssb_base_{train,val,test}.json           per-leg results: every task, every attempt
+  ssb_v{1,2,3}_val.json  ssb_v{1,2}_train.json  ssb_v3_test.json
+```
+
+## 📁 Layout
+
+```
+src/orchestrator/          epoch loop, run spec, plug-in runner, the loop's side of the evolver session
+src/orchestrator/prompts/  the evolver's appended system prompt and per-epoch message
+src/run.py                 the evoskill command
+scripts/daytona/           machine host, leg driver, evolver container and session, BA launcher, images
+scripts/cc_solver/         the solver's Claude Code session
+scripts/tau3_cc/           the bridge between Claude Code and τ³-bench's orchestrator
+examples/                  instructions, splits and graders for SpreadsheetBench v2 and τ³ banking
 ```
 
 ## Citation
 
-EvoSkill v2 builds on [EvoSkill](https://arxiv.org/abs/2603.02766). If you use it in your research, please cite:
-
 ```bibtex
-@misc{alzubi2026evoskillautomatedskilldiscovery,
-      title={EvoSkill: Automated Skill Discovery for Multi-Agent Systems}, 
-      author={Salaheddin Alzubi and Noah Provenzano and Jaydon Bingham and Weiyuan Chen and Tu Vu},
+@misc{huang2026evoskillv2,
+      title={EvoSkill v2: Fully Agentic Skill Evolution from Benchmark Adaptation to a Stateful Evolver},
+      author={Dastin Huang and Baran Nama and Salaheddin Alzubi},
       year={2026},
-      eprint={2603.02766},
+      eprint={2610.25931},
       archivePrefix={arXiv},
       primaryClass={cs.AI},
-      url={https://arxiv.org/abs/2603.02766}, 
+      url={https://arxiv.org/abs/2610.25931},
+}
+```
+
+EvoSkill v2 builds on EvoSkill:
+
+```bibtex
+@inproceedings{alzubi2026evoskill,
+      title={EvoSkill: Automated Skill Discovery for Agents},
+      author={Salaheddin Alzubi and Noah Provenzano and Christian Alexander Calvo and Jaydon Bingham and Weiyuan Chen and Himanshu Tyagi and Dastin Huang and Tu Vu},
+      booktitle={The First Workshop on Agent Skills (Agent Skills '26) at the ACM Conference on AI and Agentic Systems (CAIS 2026)},
+      year={2026},
+      url={https://openreview.net/forum?id=i4b4As7RFX}
 }
 ```
 

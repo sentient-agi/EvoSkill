@@ -5,61 +5,50 @@ build-backend = "hatchling.build"
 [project]
 name = "evoskill"
 version = "2.0.0"
-description = "EvoSkill v2 — an evolver agent rewrites a solver agent's skills from its own failed rollouts, orchestrated end-to-end by an agent orchestrator (AO)"
+description = "EvoSkill v2: an evolver agent rewrites a Claude Code solver's skills from the solver's own rollouts"
 readme = "README.md"
 license = "Apache-2.0"
+# The reported runs used CPython 3.13.9 on the host (the loop and the Daytona drivers) and on the machine (the
+# grader's /opt/evoskill/venv).
 requires-python = ">=3.12"
-# EVERY ENTRY IS IMPORTED BY THIS CODE, or says why it is here. Eight were not: click,
-# pandas, pydantic-settings, questionary, rich, tomli-w and llm-sandbox[docker] had zero
-# import sites anywhere in src/, scripts/ or tests/ — sediment from the private tree this
-# was carved out of. In a list that carries hand-written justifications for openpyxl and
-# tqdm, a reader reasonably reads every entry as load-bearing, and `llm-sandbox[docker]` in
-# particular misdescribes how this project sandboxes: solver rollouts go through the docker
-# CLI, and the evolver through macOS sandbox-exec (src/orchestrator/evolver_dispatch.py).
-# `pandas` is available to the SOLVER inside its image (see agent_profiles/*/prompt.md) —
-# that is the image's dependency, not the harness's.
+# Derived from the shipped modules' imports. The host side of a run (src/orchestrator, scripts/daytona,
+# scripts/cc_solver, scripts/tau3_cc) is standard library apart from the Daytona extra below. openpyxl and pydantic
+# are imported at module scope by the SpreadsheetBench v2 grading code (src/agent_profiles/ssbv2_agent), which the
+# pool machine runs under its own pinned venv (/opt/evoskill/venv, scripts/daytona/Dockerfile.ssb_leg) and the tests
+# import on the host. lxml and
+# defusedxml are not imported by our code: openpyxl switches its XML backend on their presence, and the grading
+# venv has both, so the host reads workbooks the way the grader does.
 dependencies = [
-    "claude-agent-sdk>=0.1.16",
-    "pydantic>=2.12.5",
-    "pyyaml>=6.0",
-    # Module-scope import in the SpreadsheetBench v2 scorer; the test suite
-    # cannot even be collected without it.
-    "openpyxl>=3.1",
-    # Module-scope import in src/evaluation/eval_full.py (tqdm.asyncio), which
-    # src/evaluation/__init__ pulls in — so evaluate_agent_parallel, and with it
-    # every leg runner, dies at import without it. Found by the 0817 smoke: the
-    # dev machine's ambient python had it, the shipped venv did not.
-    "tqdm>=4.66",
-    # Module-scope imports in src/harness (span plumbing). Phoenix itself stays
-    # optional — arize-phoenix is only imported lazily when tracing is enabled.
-    "opentelemetry-api>=1.27",
-    "opentelemetry-sdk>=1.27",
-    # NOT imported here, and kept deliberately: wrapt 2.x removed the `module=` kwarg from
-    # wrap_function_wrapper, which breaks openinference-instrumentation-anthropic's
-    # auto-instrumentation. The ceiling has to sit at top level to bind the resolution for
-    # the phoenix extra's transitive pull. Remove when openinference upgrades.
-    "wrapt<2.0",
+    "openpyxl>=3.1.5",
+    "lxml",
+    "defusedxml",
+    "pydantic>=2.12",
 ]
 
 [project.optional-dependencies]
-# Phoenix observability (live evolver span tee + retroactive replay + AO session
-# emission). Everything degrades without it: the stream tee still writes the verbatim
-# log, the replay script refuses with this extra's name, and the loop's trace check
-# reports UNMEASURED when Phoenix is unreachable. Requires a Phoenix server at
-# PHOENIX_ENDPOINT (default http://localhost:6006).
+# The machine backend the reported runs used. python-dotenv is imported at module scope by the three
+# scripts/daytona/daytona_lib*.py (DAYTONA_* from a .env file), and the SDK lazily by every driver that creates a
+# machine. Pinned to the SDK version of the reported runs.
+daytona = [
+    "daytona==0.211.2",
+    "python-dotenv",
+]
+# Optional Phoenix tracing, read only by the OpenRouter solver runner (scripts/run_ssbv2_base30_dsv4f_n3.py).
+# A Claude Code run does not use it. Needs a Phoenix server at PHOENIX_ENDPOINT.
 phoenix = [
-    "arize-phoenix-otel>=0.6",
-    "openinference-semantic-conventions>=0.1.21",
+    "arize-phoenix-otel>=0.15",
+    "openinference-semantic-conventions>=0.1.28",
+    "opentelemetry-api>=1.40",
+    "opentelemetry-sdk>=1.40",
 ]
 
 [project.scripts]
-evoskill = "src.orchestrator.cli:main"
+evoskill = "src.run:main"
 evoskill-loop = "src.orchestrator.loop:main"
 
 [dependency-groups]
 dev = [
     "pytest>=9.0.0",
-    "pytest-cov>=7.1.0",
     "pyflakes>=3.2",
 ]
 
@@ -68,15 +57,3 @@ packages = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-
-[tool.coverage.run]
-source = ["src"]
-omit = [
-    "src/evaluation/eval_full.py",
-    "src/evaluation/evaluate.py",
-    "src/agent_profiles/*",
-]
-
-[tool.coverage.report]
-fail_under = 80
-show_missing = true

@@ -3,10 +3,11 @@
 
 Design notes that matter:
 
-  KEY SELECTION. OPENROUTER_API_KEY is read from the environment; if unset, it
-  is read from the file named by EVOSKILL_OR_KEY_FILE. The key value is never
-  printed; the [KEY] line shows the last 4 chars so first-tick monitoring can
-  confirm which key is live.
+  OPENROUTER KEY: OPENROUTER_API_KEY from the environment (a leg inside a
+  sandbox gets it injected as a process env var only, never as a file), else
+  the repository's .env. Prefer a key with a monthly spend cap: it is the
+  runaway backstop. The key value is never printed; the [KEY] line shows the
+  last 4 chars so a watcher can confirm which key is live.
 
   NATIVE-PINNED. Standing directive: EVERY DeepSeek model (flash included) needs
   BOTH provider_order=["deepseek"] AND allow_fallbacks=False. Without the pin,
@@ -35,25 +36,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# Key selection. Never echoed — only the last 4 chars, in the [KEY] line below.
-if os.environ.get("OPENROUTER_API_KEY"):
-    _WHICH_KEY = "env"
-else:
-    _KEYFILE = os.environ.get("EVOSKILL_OR_KEY_FILE")
-    if not _KEYFILE:
-        raise SystemExit("set OPENROUTER_API_KEY (or point EVOSKILL_OR_KEY_FILE at a key file)")
-    _KEY = Path(_KEYFILE)
-    if not _KEY.exists():
-        raise SystemExit(f"key file not found at {_KEY}")
-    os.environ["OPENROUTER_API_KEY"] = _KEY.read_text().strip()
-    _WHICH_KEY = "file"
+# The OpenRouter key. Never echoed — only the last 4 chars, in the [KEY] line below.
+# Inside a sandbox there is no .env, and the key must never be written to a file there, so
+# the driver injects it as a process env var only.
+_WHICH_KEY = "env"
+if not os.environ.get("OPENROUTER_API_KEY", "").strip():
+    import re as _re
+    _WHICH_KEY = ".env"
+    _ENV = Path(__file__).resolve().parent.parent / ".env"
+    _m = _re.search(r"^OPENROUTER_API_KEY=(\S+)", _ENV.read_text(), _re.M) if _ENV.is_file() else None
+    if not _m:
+        raise SystemExit(f"OPENROUTER_API_KEY is set neither in the environment nor in {_ENV}")
+    os.environ["OPENROUTER_API_KEY"] = _m.group(1)
 
 os.environ["EVOSKILL_SANDBOX"] = "docker"
 # SOLVER IMAGE — selectable, and RECORDED (header line + result JSON).
 #
 # This was a hardcoded "ssb-solver". Two reasons it is now both:
 #
-#   Selectable, because 2026-08-02 added `ssb-solver-lo` (identical baseline plus
+#   Selectable, because `ssb-solver-lo` exists (the same baseline plus
 #   LibreOffice Calc + python3-uno). Forking this script for the second arm would
 #   fork every other design note in it too.
 #
@@ -65,16 +66,11 @@ os.environ["EVOSKILL_SANDBOX"] = "docker"
 #   result JSON, which is the only place a later reader can recover it from.
 #   Verify a dir before reusing it: scripts/ssbv2_solver_env_report.py --cache ...
 SOLVER_IMAGE = os.environ.get("EVOSKILL_DOCKER_IMAGE", "ssb-solver")
-# imported, never redeclared: the marker must name the image the SCORER actually runs.
-from src.agent_profiles.ssbv2_agent.scorer import GRADING_IMAGE  # noqa: E402
 os.environ["EVOSKILL_DOCKER_IMAGE"] = SOLVER_IMAGE
 os.environ.setdefault("EVOSKILL_BASH_TIMEOUT", "600")
 os.environ["EVOSKILL_STREAM"] = "1"
 os.environ.setdefault("EVOSKILL_STREAM_SILENCE_TIMEOUT", "45")
-# --- #138: THE WALL IS NOW DERIVED FROM THE TURN CAP, NOT HARDCODED ----------
-# The comment below used to say the wall "must scale with the turn budget" and
-# then hardcoded 3600. Stating a rule beside a constant that violates it is how it
-# stayed broken through a 40->45 cap raise.
+# --- THE WALL IS DERIVED FROM THE TURN CAP, NOT HARDCODED -----------------------
 #
 # WHY THE WALL MUST NOT BIND. There are two independent stop conditions and only
 # one of them is the experiment:
@@ -94,10 +90,19 @@ os.environ.setdefault("EVOSKILL_STREAM_SILENCE_TIMEOUT", "45")
 # the worst case a healthy rollout can reach: cap turns, each taking at most the
 # inactivity timeout. 45 x 120s = 5400s, against observed maxima of 2010s at
 # concurrency 10 and 2592s at 30.
+# NOTE: on THIS runner's path the liveness watchdog never runs. Nothing
+# between here and the executor calls src/harness/liveness.run_with_liveness (only the SSB v1
+# agent does), so EVOSKILL_LIVENESS / INACTIVITY / CLEAN_BUDGET / TOTAL_WALL below are recorded
+# but inert, and a model call that keeps streaming can hold its rollout for over an hour with no
+# new response. What bounds a single model call now is the executor's per-call
+# deadline (EVOSKILL_LLM_CALL_DEADLINE / EVOSKILL_LLM_CALL_MAX, printed in the header): a cut
+# call is infra, never a score. The watchdog is deliberately NOT wired in here: its CLEAN_BUDGET
+# (1800 s, a cacheable 0) would bind on healthy long rollouts that every earlier leg of this
+# design ran without it, i.e. it would change the measured condition.
 # Liveness FIRST, because the wall is derived from it. Reading
 # EVOSKILL_INACTIVITY_TIMEOUT with its own "120" fallback before the setdefault
 # below would put the same constant in two places, so raising one would silently
-# leave the other — the identical two-copies defect as #147's four walls.
+# leave the other.
 os.environ.setdefault("EVOSKILL_LIVENESS", "1")
 os.environ.setdefault("EVOSKILL_INACTIVITY_TIMEOUT", "120")
 _CAP = int(os.environ.get("EVOSKILL_TURN_BUDGET", "40"))
@@ -108,10 +113,9 @@ os.environ.setdefault("EVOSKILL_SOLVER_TIMEOUT_SECONDS", str(_WALL))
 # the line above installs it with setdefault, so any launcher that exports
 # EVOSKILL_SOLVER_TIMEOUT_SECONDS overrides it -- the sealed-test launcher exports 10800
 # against a derived 5400. Every place that CHECKS, PRINTS or RECORDS the wall must read this
-# value, not `_WALL`: on 2026-08-06 all three read `_WALL`, so the legs announced "wall=5400s"
-# while running under 10800s, the result JSONs recorded solver_wall_s=5400 (a 2x false
-# provenance claim about a one-shot sealed test), and the cached-replay guard flagged a
-# 5572s SUCCESS as a wall kill, which alone blocked a leg from reporting.
+# value, not `_WALL`: reading `_WALL` would announce "wall=5400s" while running under 10800s, record
+# solver_wall_s=5400 in the result JSONs (a false provenance claim), and make the cached-replay guard
+# flag a 5572s SUCCESS as a wall kill.
 _EFF_WALL = int(os.environ["EVOSKILL_SOLVER_TIMEOUT_SECONDS"])
 os.environ.setdefault("EVOSKILL_CLEAN_BUDGET", "1800")
 # Same derivation, same reason — the liveness total wall must not undercut the
@@ -121,9 +125,8 @@ os.environ.setdefault("EVOSKILL_MAX_CLEAN_GAP", "120")
 
 # Phoenix. Setting PHOENIX_PROJECT_NAME alone does NOTHING — nothing reads it
 # unless init_tracing() actually registers the OTEL provider, and this script
-# used to only set the env var. Result: the 2026-07-30 base30 run was launched
-# and reported as "phoenix on" while emitting ZERO spans (no such project exists
-# in Phoenix). Registration must also happen HERE, before the agent/SDK imports
+# would otherwise only set the env var: a run reported as "phoenix on" would emit
+# ZERO spans. Registration must also happen HERE, before the agent/SDK imports
 # below, because instrumentation patches at import time. Fail-soft: init_tracing
 # swallows its own errors, so a dead Phoenix server never blocks a run — which
 # is exactly why the silent-no-op was survivable and went unnoticed.
@@ -138,23 +141,53 @@ from src.cache.run_cache import RunCache, CacheConfig                  # noqa: E
 from src.harness.seats import SeatPool                                 # noqa: E402
 from src.harness.rollout_ledger import failure_ledger, summarise        # noqa: E402
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if "SSBV2_ROOT" not in os.environ:
-    raise SystemExit("SSBV2_ROOT must point to your SpreadsheetBench v2 checkout")
-SSBV2_ROOT = Path(os.environ["SSBV2_ROOT"])
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SSBV2_ROOT = Path(os.environ.get("SSBV2_ROOT") or PROJECT_ROOT.parent / "SpreadsheetBench-v2")
 
-# USER DIRECTIVE 2026-08-01: "DSV4F" means the DATED 0731 SNAPSHOT by default,
+# "DSV4F" means the DATED 0731 SNAPSHOT by default,
 # not the rolling deepseek-v4-flash. Still env-driven so another snapshot is a
 # launch-flag change rather than a fork of this script. Dated snapshots are
 # separate model IDs on OpenRouter, and the model IS part of the RunCache file
 # key — so two snapshots coexist in one cache dir without colliding, and equally
 # never replay for each other.
 MODEL = os.environ.get("EVOSKILL_SOLVER_MODEL", "deepseek/deepseek-v4-flash-0731")
-PROVIDER_ORDER = ["deepseek"]      # native pin (standing directive)
+# PROVIDER: from the environment, so a spec naming another provider does not run on DeepSeek's own
+# endpoint with every log saying "pinned".
+# Now: EVOSKILL_SOLVER_PROVIDER_ORDER wins; the legacy dated snapshots (-0731, -0813) keep the
+# native default; any other DeepSeek-family model with no explicit provider REFUSES (exit 4).
+from src.harness.direct.options import (ProviderPinMissing, provider_extra_from_env,
+                                        resolve_solver_provider_order, is_legacy_native_pin_model)
+try:
+    PROVIDER_ORDER = resolve_solver_provider_order(MODEL)
+except ProviderPinMissing as _e:
+    print(f"REFUSING: {_e}", flush=True)
+    raise SystemExit(4)
+PROVIDER_EXTRA = provider_extra_from_env()
+# What the router must report back for every fresh call; any other value refuses the leg.
+# Unset = not checked (legacy behaviour). A non-legacy DeepSeek model REQUIRES both.
+EXPECT_PROVIDER = os.environ.get("EVOSKILL_SOLVER_EXPECT_PROVIDER", "").strip()
+EXPECT_MODEL = os.environ.get("EVOSKILL_SOLVER_EXPECT_MODEL", "").strip()
+if not is_legacy_native_pin_model(MODEL) and "deepseek" in MODEL.lower() and not (
+        EXPECT_PROVIDER and EXPECT_MODEL):
+    print("REFUSING: a non-legacy DeepSeek solver needs EVOSKILL_SOLVER_EXPECT_PROVIDER and "
+          "EVOSKILL_SOLVER_EXPECT_MODEL (the served provider and model are asserted per leg)",
+          flush=True)
+    raise SystemExit(4)
 ALLOW_FALLBACKS = False
-# The agent has no allow_fallbacks kwarg; it reads this env var (parity fix
-# added to ssb_v2_agent.py 2026-07-30 — SSB v2 had NO way to hard-pin before).
+# The agent has no allow_fallbacks kwarg; it reads this env var.
 os.environ["EVOSKILL_SOLVER_ALLOW_FALLBACKS"] = "0"
+# RUNTIME ENVIRONMENT RECORD. A leg run on a Daytona x86 sandbox is a different
+# comparability class from the Mac's aarch64 docker legs (image, LibreOffice build, openpyxl
+# where grading runs, CPU). None of that is in the cache key, so the launcher writes it to a
+# JSON file and names it here; it is embedded verbatim as "runtime_env" in every result file
+# this run writes (canonical, PARTIAL, PROVIDER_VIOLATION). Unset = legacy (no field).
+_RUNTIME_ENV_FILE = os.environ.get("EVOSKILL_RUNTIME_ENV_FILE", "").strip()
+RUNTIME_ENV = None
+if _RUNTIME_ENV_FILE:
+    try:
+        RUNTIME_ENV = json.loads(Path(_RUNTIME_ENV_FILE).read_text())
+    except Exception as _e:  # noqa: BLE001 — a named-but-unreadable record must not be skipped
+        raise SystemExit(f"EVOSKILL_RUNTIME_ENV_FILE unreadable ({_RUNTIME_ENV_FILE}): {_e}")
 # TURN BUDGET. Overridable because the 40-turn cap turned out to be BINDING and
 # category-specific: in the epoch-2 phase 65/360 rollouts died at exactly 40 turns
 # — Financial_Model 40/120, Debugging 25/120, Template 0/120 — while
@@ -174,8 +207,7 @@ TAG = _TAG_EARLY   # already resolved above so Phoenix could register pre-import
 # One cache dir can safely serve MANY phases: tree_hash keys on the skills dir
 # + solver prompt, so each skill version occupies its own bucket and no phase
 # can replay another's rollouts. Sharing it means a crashed or killed phase
-# resumes for free instead of re-paying. (Safe only since the 0731 RunCache
-# write-race fix, #116 — do not share a cache dir on older checkouts.)
+# resumes for free instead of re-paying (RunCache writes are race-free).
 CACHE_DIR = Path(os.environ.get("EVOSKILL_CACHE_DIR",
                                 PROJECT_ROOT / ".cache" / f"ssbv2_{TAG}_cache"))
 # Base legs point at an EMPTY dir (asserted empty below). A skill leg points at
@@ -187,71 +219,118 @@ EMPTY_SKILLS = (Path(_SKILLS_OVERRIDE) if _SKILLS_OVERRIDE
                 else PROJECT_ROOT / ".cache" / f"ssbv2_{TAG}_skills")
 TASKS_CACHE = PROJECT_ROOT / ".cache" / f"ssbv2_{TAG}_tasks"
 OUT = PROJECT_ROOT / "outputs" / "ssbv2_base30" / f"{TAG}.json"
+# Written into CACHE_DIR by a leg whose fresh calls failed the served-provider/model check;
+# its presence makes every later run on that dir refuse (see main()). No `.json` suffix, for the
+# same reason as CACHE_ENV: digest builders sweep `*.json` as records.
+PROVIDER_VIOLATION_MARKER = "PROVIDER_VIOLATION"
 
 
-def _docker_scripts_sha12() -> str:
-    """One hash over every file bind-mounted into the grading container."""
-    import hashlib
-    from src.agent_profiles.ssbv2_agent.scorer import _DATATABLE_DOCKER_SCRIPTS_DIR
-    root = Path(_DATATABLE_DOCKER_SCRIPTS_DIR)
-    h = hashlib.sha256()
-    # SOURCE ONLY. __pycache__/*.pyc are interpreter- and run-dependent, so hashing them
-    # would make this marker differ between two machines running identical code and fire
-    # a cache-environment mismatch that means nothing. Caught by the first test of this
-    # function, which reported a changed hash after mutating a .pyc.
-    for f in sorted(root.rglob("*")):
-        if not f.is_file() or f.suffix == ".pyc" or "__pycache__" in f.parts:
-            continue
-        h.update(f.relative_to(root).as_posix().encode())
-        h.update(f.read_bytes())
-    return h.hexdigest()[:12]
+def provider_violations(expect_provider: str, expect_model: str, served_providers: dict,
+                        served_models: dict, n_fresh: int, requested_model: str = "",
+                        gen_check: dict | None = None) -> list[str]:
+    """Every reason the leg's FRESH calls fail the served provider/model assertion ([] = pass).
 
+    Module-level and pure so the rule is testable without a live leg.
 
-def _probe_grading_image() -> dict:
-    """Identity of the image that produces the VERDICT, not the answer.
+    WHAT EACH SIGNAL CAN PROVE (measured on the pinned DeepInfra route, one call):
+    the streamed chunks report `provider: "DeepInfra"` (per call, reliable) but
+    `model: "deepseek/deepseek-v4.1-flash"` -- the REQUESTED rolling slug, echoed back -- while
+    GET /api/v1/generation for the same id reports `deepseek/deepseek-v4.1-flash-20260910`.
+    So the per-call `served_models` count can only confirm "no other slug served this call";
+    the dated snapshot is visible ONLY through /generation, checked here on a sample
+    (`gen_check`, see check_generations). Requiring the stream echo to equal the dated
+    snapshot -- the first version of this check -- refused every correctly-served leg.
 
-    assert_cache_env covered the solver image and the scorer SOURCE, which is only half of
-    what decides a score. The grading container (ssb-verifier:latest) runs LibreOffice to
-    recalculate formulas before openpyxl reads them under data_only=True -- so its identity
-    and its LibreOffice version change verdicts on exactly the tasks this benchmark is
-    about, while leaving the cache key untouched. README instructs rebuilding that image
-    (scripts/build_ssb_solver_lo.sh), so this is a routine operator action, not a corner
-    case: rebuild it, get a different LibreOffice, and cached rows scored by the old one sit
-    alongside new rows scored by the new one with nothing recording the difference.
-
-    Soft on purpose. A missing verifier is already fatal at scoring time with a clear
-    message (RecalculationFailed); refusing here would break `--dry-run`-style inspection
-    on a machine that has not built it yet. What must not happen is silently recording
-    NOTHING, so the absent case is recorded as an explicit sentinel and still becomes part
-    of the marker -- a run that could not identify its grader is a different environment
-    from one that could.
+    Failure shapes:
+      * a provider other than the expected one on any fresh call (stream, every call);
+      * some fresh responses reported NO provider / NO model (counts sum below n_fresh):
+        an unverified call is not a verified one, and a plain set-difference passed it;
+      * a stream-echoed model outside {requested slug, expected snapshot};
+      * any /generation lookup naming another model or provider;
+      * fresh calls made but NO /generation lookup succeeded: the snapshot is unverified.
+    n_fresh 0 (a fully replayed leg) has nothing to verify. Unset expectations check nothing,
+    which keeps legacy legs unchanged.
     """
-    import subprocess
-    out = {"grading_image": GRADING_IMAGE, "grading_image_id": "ABSENT",
-           "grading_libreoffice": "ABSENT"}
-    # `docker image inspect` resolves the SAME image `docker run` would. `docker images`
-    # filtered by tag can return several rows (retags, dangling layers), and taking [0] is
-    # a guess about which one the scorer will actually execute.
-    idq = subprocess.run(["docker", "image", "inspect", GRADING_IMAGE, "--format", "{{.Id}}"],
-                         capture_output=True, text=True)
-    iid = (idq.stdout or "").strip().removeprefix("sha256:")[:12]
-    if idq.returncode != 0 or not iid:
-        return out
-    out["grading_image_id"] = iid
-    ver = subprocess.run(
-        ["docker", "run", "--rm", "--entrypoint", "cat", GRADING_IMAGE,
-         "/etc/evoskill_libreoffice_version"],
-        capture_output=True, text=True, timeout=300)
-    if ver.returncode == 0 and ver.stdout.strip():
-        out["grading_libreoffice"] = ver.stdout.strip()
-    else:
-        # Pre-2026-08-18 images do not carry the file. Fall back to asking soffice.
-        alt = subprocess.run(
-            ["docker", "run", "--rm", "--entrypoint", "soffice", GRADING_IMAGE, "--version"],
-            capture_output=True, text=True, timeout=300)
-        if alt.returncode == 0 and alt.stdout.strip():
-            out["grading_libreoffice"] = alt.stdout.strip().splitlines()[0]
+    out: list[str] = []
+    n_fresh = int(n_fresh or 0)
+    if expect_provider:
+        if set(served_providers) - {expect_provider}:
+            out.append(f"served providers {served_providers} != only {expect_provider!r}")
+        seen = sum(int(v) for v in served_providers.values())
+        if seen < n_fresh:
+            out.append(f"{n_fresh - seen} of {n_fresh} fresh responses reported no provider "
+                       f"(unverified; expected {expect_provider!r})")
+    if expect_model:
+        accept = {expect_model} | ({requested_model} if requested_model else set())
+        if set(served_models) - accept:
+            out.append(f"served models (stream echo) {served_models} not within {sorted(accept)}")
+        seen = sum(int(v) for v in served_models.values())
+        if seen < n_fresh:
+            out.append(f"{n_fresh - seen} of {n_fresh} fresh responses reported no model "
+                       f"(unverified; expected {expect_model!r})")
+    if (expect_model or expect_provider) and n_fresh > 0:
+        gc = gen_check or {}
+        mism = gc.get("mismatches") or []
+        if mism:
+            out.append(f"/generation: {len(mism)} of {gc.get('n_ok', '?')} looked-up calls were "
+                       f"served by another model/provider, e.g. {mism[:3]}")
+        if expect_model and not int(gc.get("n_ok") or 0):
+            out.append(f"served snapshot UNVERIFIED: {n_fresh} fresh responses but no "
+                       f"/generation lookup succeeded (sampled {gc.get('n_sampled', 0)})")
     return out
+
+
+def _even_sample(seq: list, n: int) -> list:
+    """Up to n items spread evenly over seq, first and last included (chronological coverage:
+    a router repoint late in the leg must still land in the sample)."""
+    if n <= 0 or not seq:
+        return []
+    if len(seq) <= n:
+        return list(seq)
+    if n == 1:
+        return [seq[-1]]
+    step = (len(seq) - 1) / (n - 1)
+    return [seq[round(i * step)] for i in range(n)]
+
+
+def check_generations(ids: list[str], expect_provider: str, expect_model: str, api_key: str,
+                      n: int = 60, get=None, sleep=None) -> dict:
+    """Look up an even sample of generation ids on /api/v1/generation (free) and report which
+    model/provider OpenRouter recorded for each. `get(url, params, headers)` is injectable for
+    tests; each id is retried (stats can lag a few seconds behind the call)."""
+    import time as _time
+    from collections import Counter
+    if get is None:
+        import httpx as _httpx
+
+        def get(url, params, headers):
+            return _httpx.get(url, params=params, headers=headers, timeout=20)
+    sleep = sleep or _time.sleep
+    sample = _even_sample(list(ids), int(n))
+    rows, failed = [], []
+    for gid in sample:
+        rec = None
+        for attempt in range(5):
+            try:
+                r = get("https://openrouter.ai/api/v1/generation", {"id": gid},
+                        {"Authorization": f"Bearer {api_key}"})
+                if r.status_code == 200:
+                    d = (r.json() or {}).get("data") or {}
+                    rec = {"id": gid, "model": d.get("model"), "provider": d.get("provider_name")}
+                    break
+            except Exception:  # noqa: BLE001 — a lookup failure is recorded, never raised
+                pass
+            sleep(min(2 ** attempt, 10))
+        if rec is None:
+            failed.append(gid)
+        else:
+            rows.append(rec)
+    mism = [r for r in rows if (expect_model and r["model"] != expect_model)
+            or (expect_provider and r["provider"] != expect_provider)]
+    return {"n_fresh_ids": len(ids), "n_sampled": len(sample), "n_ok": len(rows),
+            "models": dict(Counter(r["model"] for r in rows)),
+            "providers": dict(Counter(r["provider"] for r in rows)),
+            "mismatches": mism[:20], "failed_ids": failed[:20], "n_failed": len(failed)}
 
 
 def _probe_solver_image() -> dict:
@@ -264,8 +343,7 @@ def _probe_solver_image() -> dict:
 
     The soffice flag is the fact this whole run turns on: without it the solver
     cannot evaluate the formulas it is graded on (openpyxl returns None for any
-    uncached formula), which is the condition every SSB v2 number before
-    2026-08-02 was produced under.
+    uncached formula).
     """
     import subprocess
     idq = subprocess.run(["docker", "images", "--format", "{{.ID}}", SOLVER_IMAGE],
@@ -307,6 +385,15 @@ async def main() -> int:
             print(f"  [SKILL] {n}: {meta.get('description', '')[:100]}", flush=True)
     elif leftover:
         raise SystemExit(f"base skills dir not empty: {leftover}")
+    # A cache dir that a PROVIDER-VIOLATING leg wrote into is quarantined: every
+    # rollout is cached the moment it finishes, but the served-provider check runs only at the
+    # END of the leg, so the violating calls' records are already in the dir. The cache key
+    # carries no served provider, so a relaunch would replay them and pass its own check (it
+    # makes no fresh call for them). Refuse instead; a person decides what to do with the dir.
+    _viol_marker = CACHE_DIR / PROVIDER_VIOLATION_MARKER
+    if _viol_marker.exists():
+        raise SystemExit(f"REFUSING: {_viol_marker} exists — an earlier leg in this cache dir was "
+                         f"served by an unexpected provider/model. Move the dir aside deliberately.")
     acquire_task_lock(TASKS_CACHE)
 
     train, val, test = load_ssbv2(SSBV2_ROOT, n_train=80, n_val=60)
@@ -378,8 +465,7 @@ async def main() -> int:
     # "test". Every phase of the 0801 evolution therefore logged
     # `origin={'train': 35, 'val': 21, 'test': 64}` while running strictly on
     # train+val — a false contamination alarm sitting in the permanent record of
-    # a run whose test split is under seal. Verified 2026-08-02: split.json's
-    # test list and those phases' task sets are disjoint.
+    # a run whose test split is under seal.
     origin = {"train": 0, "val": 0, "test": 0}
     if split_file:
         _by_split = {}
@@ -408,17 +494,26 @@ async def main() -> int:
           flush=True)
     print(f"  model={MODEL} pin={PROVIDER_ORDER} fallbacks={ALLOW_FALLBACKS} budget={BUDGET}",
           flush=True)
+    if PROVIDER_EXTRA or EXPECT_PROVIDER or EXPECT_MODEL:
+        print(f"  provider_extra={PROVIDER_EXTRA} expect_provider={EXPECT_PROVIDER or '-'} "
+              f"expect_model={EXPECT_MODEL or '-'} thinking_effort={THINKING_EFFORT!r}", flush=True)
     print(f"  seed={SEED} origin={origin} concurrency={CONCURRENCY}", flush=True)
     print(f"  cache={CACHE_DIR.name} (fresh; budget is NOT in the cache key)", flush=True)
     # RECORD THE WALL, for the same reason solver_image is recorded: it is an
     # axis absent from the cache key that can change what gets measured. A
     # binding wall kills rollouts and they score 0.0, so a reader comparing two
-    # legs needs to know each leg's wall. Derived from the turn cap (#138).
+    # legs needs to know each leg's wall. Derived from the turn cap.
     print(f"  wall={_EFF_WALL}s IN FORCE"
           + (f" (derived default was {_WALL}s = cap {_CAP} x inactivity {_INACT}s, "
              f"OVERRIDDEN by EVOSKILL_SOLVER_TIMEOUT_SECONDS)" if _EFF_WALL != _WALL
              else f" (derived: cap {_CAP} x inactivity {_INACT}s)")
           + " — a hang guard, and it must NEVER bind before the turn cap", flush=True)
+    # The per-call bound: the one that actually catches a hung or runaway model
+    # call on this path. Read from the executor (its single source of truth), never re-defaulted.
+    from src.harness.direct import executor as _ex_cfg
+    print(f"  llm_call_deadline={_ex_cfg.LLM_CALL_DEADLINE_S:.0f}s per attempt, "
+          f"{_ex_cfg.LLM_CALL_MAX_S:.0f}s per call (EVOSKILL_LLM_CALL_DEADLINE / _MAX; a cut "
+          f"attempt is infra: discarded and resampled, never a response)", flush=True)
     # Image + tree_hash on adjacent lines, deliberately: the second does not
     # cover the first, and putting them side by side is what makes that visible
     # in a log someone reads six weeks from now.
@@ -458,18 +553,16 @@ async def main() -> int:
 
     # THREE AXES THAT CHANGE A ROLLOUT AND ARE NOT IN THE CACHE KEY.
     #
-    # Found 2026-08-02, the hard way. `cache.set`/`get_n` below pass sdk+model
-    # only, never `system_prompt` — and NONE of the 15 SSB v2 runners ever did —
+    # Without `system_prompt` in the call, `cache.set`/`get_n` pass sdk+model only,
     # so `_get_tree_hash` takes its FALLBACK branch and hashes
     # `solver/prompt.txt` + `officeqa_agent/prompt.md`, two files unrelated to
-    # this benchmark. Consequence: every SSB v2 cache dir in the repo lives in
-    # the same bucket, `bfb5bd90d1e0`, whatever the SSB v2 solver prompt says.
+    # this benchmark: every SSB v2 cache dir would live in one bucket, whatever
+    # the SSB v2 solver prompt says.
     # The docker image and the turn budget were never in the key either.
     #
     # So a run that swapped the solver image (no formula engine -> LibreOffice)
     # and pointed at an existing cache dir would replay the old environment's
-    # rollouts and report them as the new one's. Nothing would error. On
-    # 2026-08-02 only an unrelated choice of a fresh dir prevented exactly that.
+    # rollouts and report them as the new one's. Nothing would error.
     #
     # `system_prompt` is now passed to every cache call (below), which makes the
     # documented mechanism real. The marker covers what a cache key structurally
@@ -477,21 +570,10 @@ async def main() -> int:
     from src.cache.cache_env import assert_cache_env, sha12
     from src.agent_profiles.ssbv2_agent import get_solver_prompt
     CACHE_SYS = get_solver_prompt()
-    _grader = _probe_grading_image()
-    print(f"  grader={_grader['grading_image']} ({_grader['grading_image_id']}) "
-          f"libreoffice={_grader['grading_libreoffice']}", flush=True)
     assert_cache_env(CACHE_DIR, {
         "solver_image": _img["image"],
         "solver_image_id": _img["image_id"],
         "solver_formula_engine": _img["soffice"],
-        # the GRADING half — see _probe_grading_image
-        "grading_image_id": _grader["grading_image_id"],
-        "grading_libreoffice": _grader["grading_libreoffice"],
-        # THE BIND-MOUNTED SCRIPTS ARE PART OF THE GRADER. docker_scripts/ is mounted into
-        # the grading container (the =TABLE() UNO fix runs from there), so editing one
-        # changes verdicts while leaving the image id, the scorer hash, and therefore the
-        # whole marker byte-identical.
-        "grading_scripts_sha256_12": _docker_scripts_sha12(),
         "turn_budget": BUDGET,
         "model": MODEL,
         "solver_prompt_sha256_12": sha12(CACHE_SYS),
@@ -513,13 +595,26 @@ async def main() -> int:
         # THE SCORER IS AN AXIS TOO, and it is the one that bit hardest.
         # `inline_score` is computed at rollout time and CACHED with the trace, so
         # a cached record carries a verdict produced by whatever scorer was live
-        # then. On 2026-08-03 `_force_iterative_calc` was changed from an
-        # openpyxl round-trip (which blanked the cached values of 143 of 169
-        # rollouts, forcing LibreOffice to re-solve whole models) to a zip-level
-        # patch that preserves them. Same rollouts, different verdicts, and
-        # nothing in the key could tell the two apart.
+        # then (e.g. `_force_iterative_calc` as an openpyxl round-trip blanks the
+        # cached values, a zip-level patch preserves them: same rollouts, different
+        # verdicts), and nothing else in the key could tell the two apart.
         "scorer_sha256_12": sha12(
             (PROJECT_ROOT / "src/agent_profiles/ssbv2_agent/scorer.py").read_text()),
+        # PROVIDER AXES, non-legacy models only: the provider is invisible in the
+        # records (the key holds the model string, not who served it), so two runs pinned to
+        # different providers would otherwise share and replay one bucket. Legacy -0731/-0813
+        # dirs keep their exact marker so every existing cache still replays.
+        **({} if is_legacy_native_pin_model(MODEL) else {
+            "provider_order": ",".join(PROVIDER_ORDER or []),
+            "provider_extra": json.dumps(PROVIDER_EXTRA, sort_keys=True),
+            "allow_fallbacks": "0",
+            # The EXPECTED served snapshot/provider too. The key holds the ROLLING
+            # model id; the served-model check covers fresh calls only. Without these axes a
+            # later leg expecting a newer snapshot (after the router repoints the rolling id)
+            # would replay records served by the old one and report them as the new one's.
+            "expect_provider": EXPECT_PROVIDER,
+            "expect_model": EXPECT_MODEL,
+        }),
     }, label=TAG)
 
     scores: dict[int, list] = {i: [None] * N_SAMPLES for i in range(len(items))}
@@ -576,7 +671,7 @@ async def main() -> int:
     # files — see the assert_cache_env comment above. Passing it means a prompt
     # edit now rotates the bucket, as the docs have always claimed it did.
     ck = {"sdk": "direct", "model": MODEL, "system_prompt": CACHE_SYS}
-    # #138: rollouts the WALL killed rather than the turn cap. Collected here
+    # Rollouts the WALL killed rather than the turn cap. Collected here
     # because the trace is only in scope at the scoring site — the ledger cannot
     # see it (the coroutine returns None). A leg with any entry is not a
     # measurement: the wall is a hang guard and must not decide an outcome.
@@ -622,33 +717,37 @@ async def main() -> int:
             # question JSON (eval_run_ground_truth contextvar).
             # sample_idx is REQUIRED here: this gather runs all N samples of a
             # task concurrently, and without it they share one workspace and one
-            # output file (see task_ws_name). The 2026-07-30 and first 0731 runs
-            # predate this and are corrupt.
+            # output file (see task_ws_name).
             tr = await solver.run(q, tag=f"{TAG} {i+1}/{len(items)} [s{s+1}]", sample_idx=s)
             # Exact, not heuristic: Agent.run converts its wall-clock TimeoutError
             # into a partial trace carrying is_error plus a parse_error that names
             # the timeout. Matching on duration_ms would be a proxy, and a proxy
             # breaks the moment the wall changes.
             _why = str(getattr(tr, "parse_error", "") or "")
-            if getattr(tr, "is_error", False) and "timed out" in _why.lower():
+            _wall = bool(getattr(tr, "is_error", False) and "timed out" in _why.lower())
+            if _wall:
                 wall_killed.append((i, s, _why))
             scores[i][s] = tr.inline_score if tr.inline_score is not None else 0.0
             # Use the harness's own flag, NOT a num_turns >= BUDGET proxy. A
             # rollout that ANSWERS on turn 40 has num_turns == 40 but was never
-            # truncated, so the proxy over-counts exhaustion (22 vs 20 on the
-            # 0731b base leg, 8 vs 7 on the skill leg). Same >=-vs-> boundary
-            # error as #110: at equality the two readings disagree, so the
-            # comparison operator IS the measurement.
+            # truncated, so the proxy over-counts exhaustion: at equality the two
+            # readings disagree, so the comparison operator IS the measurement.
             exhausted[i][s] = bool(getattr(tr, "budget_exhausted", False))
+            # A WALL KILL IS NEVER CACHED: a cached kill would be replayed by every relaunch (the
+            # cache-hit check above flags it again), so every relaunch would fail the same way. The
+            # wall is a hang guard,
+            # not an outcome; left uncached, a relaunch re-runs exactly this rollout. Its score
+            # still lands in `scores` for the PARTIAL file, which consumers gate on INCOMPLETE.
+            if _wall:
+                return
             cache.set(q, tr, sample_idx=s, **ck)
 
-    # ONE ROLLOUT'S EXCEPTION MUST NOT DESTROY THE OTHER 359. (#140)
+    # ONE ROLLOUT'S EXCEPTION MUST NOT DESTROY THE OTHERS.
     #
-    # Measured 2026-08-03: `test_skills_v4` died at 64/360 when a provider 503
-    # survived the retry budget and propagated out of `one()` -> gather -> main.
-    # A bare gather cancels every sibling on the first exception, so ~30 in-flight
-    # rollouts were lost and NO result JSON was written. The 64 completed ones were
-    # recoverable only because each cached record carries `trace.inline_score`.
+    # A provider 503 that survives the retry budget propagates out of `one()` -> gather -> main.
+    # A bare gather cancels every sibling on the first exception: every in-flight
+    # rollout is lost and NO result JSON is written (the completed ones survive only
+    # because each cached record carries `trace.inline_score`).
     #
     # `return_exceptions=True` is necessary but NOT sufficient, and the naive
     # version is a trap in both directions:
@@ -683,12 +782,63 @@ async def main() -> int:
                 print(f"  [SEATS] leave() failed: {e} (PID reap will reclaim)",
                       flush=True)
 
-    # ---- FAILURE LEDGER (#140) ------------------------------------------------
+    # ---- FAILURE LEDGER ---------------------------------------------------------
     # See src/harness/rollout_ledger.py for why a tolerant gather is only safe
     # when paired with this: failures must stay distinguishable from real zeros.
     tid = [json.loads(gt).get("task_id", "?") if gt.startswith("{") else "?"
            for _q, gt, _c in items]
     failures = failure_ledger(idx, results, scores, killed=wall_killed)
+
+    # SERVED PROVIDER / MODEL: the executor counts what the
+    # router reported for every FRESH call in this process; replayed records make no call.
+    # Computed BEFORE the failure branch so a PARTIAL leg carries it too, and so a violating
+    # partial leg quarantines its cache dir like a complete one.
+    from src.harness.direct import executor as _ex
+    served_providers = dict(getattr(_ex, "_PROVIDER_AUDIT", {}) or {})
+    served_models = dict(getattr(_ex, "_MODEL_AUDIT", {}) or {})
+    _fresh = list(getattr(_ex, "_FRESH_RESPONSES", []) or [])
+    _gen_ids = [g for g in _fresh if g]
+    # The dated snapshot is visible only via /generation (see provider_violations), so an
+    # expected model is checked on an even sample of this leg's fresh calls. Free; ~0.3 s each.
+    gen_check = None
+    if (EXPECT_MODEL or EXPECT_PROVIDER) and _gen_ids:
+        _n_chk = int(os.environ.get("EVOSKILL_GEN_CHECK_N", "60"))
+        gen_check = check_generations(_gen_ids, EXPECT_PROVIDER, EXPECT_MODEL,
+                                      os.environ["OPENROUTER_API_KEY"], n=_n_chk)
+        print(f"  [GENERATION CHECK] {gen_check['n_ok']}/{gen_check['n_sampled']} looked up: "
+              f"models {gen_check['models']} providers {gen_check['providers']} "
+              f"(failed lookups {gen_check['n_failed']})", flush=True)
+    violations = provider_violations(EXPECT_PROVIDER, EXPECT_MODEL, served_providers,
+                                     served_models, len(_fresh), requested_model=MODEL,
+                                     gen_check=gen_check)
+    served_block = {
+        "expect_provider": EXPECT_PROVIDER or None, "expect_model": EXPECT_MODEL or None,
+        # served_models = the model string the STREAM echoed (the requested slug for a rolling
+        # id); the served dated snapshot is in generation_check.models.
+        "served_providers": served_providers, "served_models": served_models,
+        "generation_check": gen_check,
+        "fresh_responses": len(_fresh), "fresh_responses_without_id": len(_fresh) - len(_gen_ids),
+        # A SAMPLE (first/last 25) so a reader can spot-check calls via /api/v1/generation;
+        # the full list goes to the sidecar written just below.
+        "generation_ids_sample": (_gen_ids[:25] + _gen_ids[25:][-25:]),
+        "provider_violations": violations,
+        "runtime_env": RUNTIME_ENV,
+        # The per-call deadline resamples a cut attempt, which is an intervention
+        # on the measured solver: its bounds and how often it fired go into every result file.
+        "llm_call_deadline": {
+            "attempt_s": _ex.LLM_CALL_DEADLINE_S, "call_s": _ex.LLM_CALL_MAX_S,
+            **dict(getattr(_ex, "_CALL_DEADLINE_AUDIT", {}) or {})},
+    }
+    print(f"  [LLM CALL DEADLINE] {served_block['llm_call_deadline']}", flush=True)
+    try:
+        OUT.with_suffix(".generation_ids.json").write_text(json.dumps(_gen_ids))
+    except OSError as _e:
+        print(f"  [WARN] generation-id sidecar not written: {_e}", flush=True)
+    if violations:
+        (CACHE_DIR / PROVIDER_VIOLATION_MARKER).write_text(json.dumps({
+            "tag": TAG, "violations": violations, "served_providers": served_providers,
+            "served_models": served_models, "fresh_responses": len(_fresh)}, indent=1) + "\n")
+        print(f"  [QUARANTINE] wrote {CACHE_DIR / PROVIDER_VIOLATION_MARKER}", flush=True)
 
     if failures:
         print("\n" + "!" * 68, flush=True)
@@ -720,6 +870,8 @@ async def main() -> int:
             # walking the cache. Not a result — every consumer must gate on
             # INCOMPLETE.
             "per_task_partial": {str(i): v for i, v in scores.items()},
+            "task_ids": tid,
+            **served_block,
         }, indent=1))
         print(f"\nwrote {part}", flush=True)
         print("NOT writing the canonical result JSON: a leg with failed rollouts is "
@@ -740,8 +892,16 @@ async def main() -> int:
     print(f"TURN CAP: {n_ex}/{len(flat)} rollouts exhausted the {BUDGET}-turn budget"
           f" ({n_ex/len(flat):.0%}) — the base rate partly measures this cap")
     print("=" * 68, flush=True)
-    OUT.write_text(json.dumps({
+    # A VIOLATING leg does not get the canonical path. A leg launcher copies OUT to
+    # the loop's run dir whenever it exists, and val_selection / the heartbeat read OUT's
+    # presence as "complete, measured leg" -- the PARTIAL rule's exact reasoning. So the
+    # numbers go to a suffixed file marked INVALID, and the exit code stays 5.
+    dest = OUT if not violations else OUT.with_suffix(".PROVIDER_VIOLATION.json")
+    dest.write_text(json.dumps({
+        **({"INVALID": True} if violations else {}),
         "model": MODEL, "provider_order": PROVIDER_ORDER, "budget": BUDGET,
+        "provider_extra": PROVIDER_EXTRA, "allow_fallbacks": ALLOW_FALLBACKS,
+        **served_block,
         "n_samples": N_SAMPLES, "seed": SEED, "origin": origin,
         "sample_pass": npass, "sample_total": len(flat), "all3": all3,
         "pass3": pass3, "n": len(items),
@@ -753,7 +913,7 @@ async def main() -> int:
         "solver_image": _img["image"], "solver_image_id": _img["image_id"],
         "solver_formula_engine": _img["soffice"],
         "solver_prompt_sha256_12": sha12(CACHE_SYS),
-        # #304: the orchestrator's _v_leg_loaded_promoted proves delivery by reading
+        # The orchestrator's _v_leg_loaded_promoted proves delivery by reading
         # this field; without it a leg can run against the wrong library and still
         # report a clean pass rate. None (not ".") when no override was given.
         "skills_dir": _SKILLS_OVERRIDE or None,
@@ -766,32 +926,20 @@ async def main() -> int:
             + (f"; OVERRIDDEN to {_EFF_WALL} via EVOSKILL_SOLVER_TIMEOUT_SECONDS"
                if _EFF_WALL != _WALL else "")),
         "concurrency": CONCURRENCY, "tag": TAG,
-        # ── THE EXCLUSION LEDGER, RECORDED. ─────────────────────────────────────────
-        # These five fields are what invariants.check_no_infra_exclusions (and the
-        # orchestrator step that calls it) read to decide whether this leg's denominator
-        # moved. Until now ONLY the tau3 runner wrote them, so on SSB v2 the check had
-        # no evidence either way -- first it answered an affirmative "0 excluded" over
-        # nothing, and when that was fixed to SKIP, the orchestrator's SKIP-is-a-failure
-        # rule turned it into a hard halt that no SSB v2 operator could satisfy. Neither
-        # is acceptable, and neither was necessary: the runner already HAS these numbers.
-        # Recording them makes the property actually measured on both benchmarks, which
-        # is what the check was for.
-        "episodes_dispatched": len(idx),
-        "episodes_scored": sum(1 for x in flat if x is not None),
-        "episodes_excluded_infra": len(failures),
-        "episodes_timeout_scored_zero": len(wall_killed),
-        "tasks_fully_unscored": [str(i) for i, v in scores.items()
-                                 if all(x is None for x in v)],
-        # The dirs this leg ACTUALLY used, so downstream steps read them instead of
-        # re-deriving names (#194; the tau3 runner records cache_dirs for the same reason).
-        "cache_dir": CACHE_DIR.name, "tasks_cache": str(TASKS_CACHE),
         "per_task": {str(i): v for i, v in scores.items()},
         # Same list the failure ledger labels with, computed once, so a PARTIAL
         # file and its eventual canonical result can never disagree about which
         # task index is which task id.
         "task_ids": tid,
     }, indent=1))
-    print(f"written {OUT}", flush=True)
+    print(f"written {dest}", flush=True)
+    print(f"SERVED: providers {served_providers or '{}'} | models {served_models or '{}'} | "
+          f"fresh responses {len(_fresh)} ({len(_fresh) - len(_gen_ids)} without a generation id)",
+          flush=True)
+    if violations:
+        print("REFUSING THE LEG: " + "; ".join(violations), flush=True)
+        print(f"NOT written: {OUT} (canonical path is reserved for a verified leg)", flush=True)
+        return 5
     return 0
 
 

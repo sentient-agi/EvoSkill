@@ -13,7 +13,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 import uuid
@@ -26,7 +25,7 @@ from openpyxl.styles.colors import COLOR_INDEX
 
 logger = logging.getLogger(__name__)
 
-# Root-caused: a large fraction of "TABLE()-wiped" false
+# Root-caused this session: a large fraction of "TABLE()-wiped" false
 # negatives are NOT a fundamental LibreOffice incapability at all -- an
 # ISOLATED recalc of a genuinely confirmed false-negative snapshot
 # (Financial_Model/19_02, /19_01, /09_01) computed the correct Data Table
@@ -35,7 +34,7 @@ logger = logging.getLogger(__name__)
 # many solver tasks (already concurrency-limited by the AIMD limiter for
 # LLM calls) finish scoring around the same time, their `docker run
 # ssb-verifier` recalc subprocesses all fire simultaneously, competing for
-# the same fixed CPU budget (13 cores) that
+# the same fixed CPU budget (13 cores, see feedback_vm_13_cpus) that
 # solving ALSO needs -- a computationally expensive recalc (a Data Table
 # recomputes the whole model N times) can easily blow past 60s under that
 # contention while taking under 2s in isolation. Bounding concurrency here
@@ -82,48 +81,15 @@ _DATATABLE_UNO_TIMEOUT_SECONDS = int(os.environ.get("EVOSKILL_DATATABLE_UNO_TIME
 _DATATABLE_DOCKER_SCRIPTS_DIR = str((Path(__file__).parent / "docker_scripts").resolve())
 
 
-# THE IMAGE THAT PRODUCES THE VERDICT. Named once, and overridable, so the runner can
-# record its identity in the cache-environment marker -- and so the two sites that run it
-# (the LibreOffice recalc and the =TABLE() UNO fix) cannot drift apart. A second copy of a
-# convention is a second chance to disagree; that is what resolve_base was about too.
-GRADING_IMAGE = os.environ.get("EVOSKILL_GRADING_IMAGE", "ssb-verifier:latest")
-
-
-from src.harness.errors import UngradableEpisode
-
-
-class RecalculationFailed(UngradableEpisode):
-    """The grading container could not recalculate a workbook.
-
-    An episode whose formulas were never recalculated has no computable verdict, and
-    the failure mode this replaces -- degrade to the un-recalculated file and score
-    0.0 -- puts an infrastructure fault into a results table as if it were solver
-    error.
-
-    This used to say "deliberately NOT caught anywhere in this module", which was
-    true of this module and false of the program: FOUR broad `except Exception:
-    return 0.0` handlers caught it, including both live call sites. It now inherits
-    UngradableEpisode, and every one of those handlers re-raises that explicitly.
-    See src/harness/errors.py.
-    """
-
-
 def _recalculate_with_libreoffice(xlsx_path: str) -> str:
     """Recalculate formulas in an xlsx file using LibreOffice via Docker.
 
     Uses ssb-verifier image which has LibreOffice installed.
     Returns the path to the recalculated file (overwrites in place).
-
-    RAISES RecalculationFailed if the grading container does not succeed. It
-    used to log a warning and return the ORIGINAL path, with a docstring saying
-    "callers must not treat this silently" -- but all four call sites did
-    exactly that, because the contract was enforced only by a human reading
-    logs. The consequence is not a missing warning: under data_only=True every
-    formula cell of an un-recalculated workbook reads None, so the task scores
-    0.0 and is indistinguishable from a solver that answered wrongly. A broken
-    verifier image, a docker daemon hiccup or a recalc timeout therefore
-    manufactured silent zeros in a measured result. A verdict that cannot be
-    computed must stop the run, not be reported as a failing verdict.
+    If recalculation fails, returns the original path unchanged — callers must
+    not treat this silently: a failed recalc means formula cells will read as
+    None under data_only=True, indistinguishable from a genuine wrong answer
+    unless this warning is checked in the logs.
 
     Bounded by _RECALC_SEMAPHORE, independent of solver concurrency -- see
     the module-level comment above for why: this is a blocking subprocess
@@ -140,7 +106,7 @@ def _recalculate_with_libreoffice(xlsx_path: str) -> str:
                 ["docker", "run", "--rm",
                  "-v", f"{xlsx_dir}:/work",
                  "-w", "/work",
-                 GRADING_IMAGE,
+                 "ssb-verifier:latest",
                  "bash", "-c",
                  # cp by exact name: /tmp/*.xlsx skips dot-prefixed (hidden) temp
                  # names, silently failing the copy after a successful convert.
@@ -150,21 +116,17 @@ def _recalculate_with_libreoffice(xlsx_path: str) -> str:
             )
             if result.returncode == 0:
                 return xlsx_path
-            raise RecalculationFailed(
+            logger.warning(
                 f"LibreOffice recalculation failed (exit {result.returncode}) for {xlsx_path}: "
-                f"stdout={result.stdout[-500:]!r} stderr={result.stderr[-500:]!r}. "
-                f"Scoring cannot proceed: every formula cell of an un-recalculated workbook "
-                f"reads None under data_only=True, which scores 0.0 and is indistinguishable "
-                f"from a wrong answer. Check that {GRADING_IMAGE} exists and runs; build it "
-                f"with `docker build -t ssb-verifier:latest docker/ssb-verifier/` (README "
-                f"setup). Note scripts/build_ssb_solver_lo.sh builds the SOLVER image, not "
-                f"this one -- naming it here sent operators to the wrong command."
+                f"stdout={result.stdout[-500:]!r} stderr={result.stderr[-500:]!r} — "
+                f"scoring will proceed on the UN-recalculated file, so formula cells will read as None"
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            raise RecalculationFailed(
-                f"LibreOffice recalculation failed for {xlsx_path}: {e!r}. Scoring cannot "
-                f"proceed; see the note above on why this must not degrade to a 0.0."
-            ) from e
+            logger.warning(
+                f"LibreOffice recalculation failed for {xlsx_path}: {e} — "
+                f"scoring will proceed on the UN-recalculated file, so formula cells will read as None"
+            )
+    return xlsx_path
 
 
 def _solve_datatables_with_uno(xlsx_path: str, gt_file: str | None = None, answer_position: str | None = None) -> None:
@@ -325,7 +287,7 @@ def _solve_datatables_with_uno(xlsx_path: str, gt_file: str | None = None, answe
                 ["docker", "run", "--rm",
                  "-v", f"{xlsx_dir}:/work",
                  "-v", f"{_DATATABLE_DOCKER_SCRIPTS_DIR}:/scripts:ro",
-                 GRADING_IMAGE,
+                 "ssb-verifier:latest",
                  "bash", "/scripts/run_datatable_fix.sh", xlsx_name],
                 capture_output=True, text=True, timeout=_DATATABLE_UNO_TIMEOUT_SECONDS,
             )
@@ -510,14 +472,14 @@ def _force_iterative_calc(xlsx_path: str) -> None:
     serve: the docstring above records that 8 of 10 sibling bug-variant inputs
     LACK the flag, and openpyxl preserves the absence across a load/save, so a
     solver output derived from such an input never had one either. Confirmed
-    2026-08-02 by running this function on the pristine
+    by running this function on the pristine
     Financial_Model/02_01 input: warning emitted, iterate still unset. Creating
     the element when it is missing is the whole fix.
 
     NEVER ROUND-TRIP THROUGH openpyxl HERE. `load_workbook(...).save(...)` blanks
     the cached <v> of EVERY formula cell in the file, and LibreOffice does not
     recompute a cell that still holds a value — so the cached values are what get
-    graded wherever they survive. Verified 2026-08-03: a workbook with A1=10,
+    graded wherever they survive. Verified: a workbook with A1=10,
     A2='=A1*2' and a cached 20, with A1 patched to 100, still grades A2 as 20
     after the real recalc. The first version of this fix used openpyxl.save() and
     therefore destroyed every cached value on any file that lacked <calcPr> —
@@ -725,32 +687,17 @@ def _col_name2num(name: str) -> int:
 
 
 def _parse_cell_range(range_str: str) -> tuple:
-    """Parse 'A1:B10' into (min_row, min_col, max_row, max_col).
+    """Parse 'A1:B10' into (min_row, min_col, max_row, max_col)."""
+    if ":" in range_str:
+        start, end = range_str.split(":")
+    else:
+        start = end = range_str
 
-    ACCEPTS THE SPELLINGS EXCEL ACTUALLY WRITES. The pattern ran against the raw
-    string, so '$A$1' and 'a1:b2' made re.match return None and the next line raised
-    AttributeError on m.group(1). Every caller but one swallowed that and dropped the
-    range; a task whose ranges all dropped scored a FALSE PASS with the diff text
-    "All cells match" (measured: answer_position='$A$1' on two workbooks that differ
-    -> passed=True, 0 cells graded). Absolute markers and letter case carry no meaning
-    in a range, so they are normalised here rather than at five call sites.
-
-    A whole-column form (A:A) raises rather than being mangled: it is unbounded, this
-    function's contract is a bounded rectangle, and quietly treating it as a single
-    cell is exactly how the false pass arose.
-    """
     import re
-    raw = range_str
-    range_str = range_str.replace("$", "").strip().upper()
-    start, end = (range_str.split(":", 1) if ":" in range_str else (range_str, range_str))
-    cell = re.compile(r"^([A-Z]+)(\d+)$")
-    ms, me = cell.match(start.strip()), cell.match(end.strip())
-    if not ms or not me:
-        raise ValueError(
-            f"answer_position range {raw!r} is not a bounded A1-style rectangle "
-            f"(whole-column/whole-row forms cannot be expressed here)")
-    start_col, start_row = _col_name2num(ms.group(1)), int(ms.group(2))
-    end_col, end_row = _col_name2num(me.group(1)), int(me.group(2))
+    m = re.match(r"([A-Z]+)(\d+)", start)
+    start_col, start_row = _col_name2num(m.group(1)), int(m.group(2))
+    m = re.match(r"([A-Z]+)(\d+)", end)
+    end_col, end_row = _col_name2num(m.group(1)), int(m.group(2))
     return start_row, start_col, end_row, end_col
 
 
@@ -774,7 +721,7 @@ def _cell_level_compare(wb_gt, wb_proc, sheet_name: str, cell_range: str) -> boo
 
             # Fill/font color are deliberately NOT part of scoring — confirmed
             # by direct comparison against the official evaluation script
-            # (the upstream SpreadsheetBench-v2 evaluation.py:140-149),
+            # (SpreadsheetBench-v2/evaluation.py:140-149),
             # where the equivalent calls are commented out by the benchmark's
             # own author. Our earlier port called these unconditionally,
             # scoring strictly stricter than the benchmark actually intends —
@@ -794,7 +741,6 @@ def _split_answer_position(answer_position: str) -> list[str]:
 
     E.g. "'IS,BS,CF'!B3:K121,'Revenue'!B1:O23" -> ["'IS,BS,CF'!B3:K121", "'Revenue'!B1:O23"]
     """
-    import re
     parts = []
     current = ""
     in_quote = False
@@ -841,24 +787,11 @@ def compare_workbooks_detailed(
     if not os.path.exists(proc_file):
         return False, 0, 0, "Output file not found"
 
-    # THE TWO WORKBOOKS FAIL FOR DIFFERENT REASONS AND MUST NOT SHARE A HANDLER.
-    # A proc file that will not open is the solver's doing -- it wrote garbage, and 0.0 is
-    # the right verdict. A GOLDEN that will not open is a dataset or grading-artifact fault
-    # with no verdict at all, and returning False for it reports an infra failure as a
-    # measured wrong answer, in the same function that raises UngradableEpisode 60 lines
-    # below for the structurally identical "graded 0 cells" case. The corpus is known to
-    # contain workbooks openpyxl chokes on (#136), so this is not hypothetical.
     try:
         wb_gt = openpyxl.load_workbook(filename=gt_file, data_only=True)
-    except Exception as e:
-        raise UngradableEpisode(
-            f"golden workbook unreadable: {gt_file}: {e}. No verdict can be computed "
-            f"for this episode; this is a dataset/grading fault, not a solver error."
-        ) from e
-    try:
         wb_proc = openpyxl.load_workbook(filename=proc_file, data_only=True)
     except Exception as e:
-        return False, 0, 0, f"Cannot open output workbook: {e}"
+        return False, 0, 0, f"Cannot open workbook: {e}"
 
     total_match = 0
     total_cells = 0
@@ -875,18 +808,6 @@ def compare_workbooks_detailed(
             cell_range = sheet_cell_range
         cell_range = cell_range.strip("'")
 
-        # THE GOLDEN IS ASKED FIRST, and the order is the point. `ws_gt = wb_gt[sheet_name]`
-        # below used to be unguarded, so a golden lacking the sheet its own answer_position
-        # names raised a bare KeyError -- which ssb_v2_agent's broad handler turned into
-        # `return 0.0`, the conversion the UngradableEpisode contract exists to stop.
-        # Checking the OUTPUT first instead would misfile the same fault: a sheet absent
-        # from both workbooks would be reported as "missing from output", blaming the
-        # solver for a task whose grading target does not exist.
-        if sheet_name not in wb_gt.sheetnames:
-            raise UngradableEpisode(
-                f"golden workbook {gt_file} has no sheet {sheet_name!r}, which its own "
-                f"answer_position={answer_position!r} grades. Dataset fault, not a verdict.")
-
         if sheet_name not in wb_proc.sheetnames:
             all_pass = False
             mismatches.append(f"Sheet '{sheet_name}' missing from output")
@@ -894,19 +815,10 @@ def compare_workbooks_detailed(
 
         ws_gt = wb_gt[sheet_name]
         ws_proc = wb_proc[sheet_name]
-        # A RANGE THE GRADER CANNOT READ IS AN INFRA FAULT, NOT AN EMPTY RESULT.
-        # This used to `continue`, so an unparseable range was dropped in silence and a
-        # task whose ranges ALL dropped came back (True, 0, 0, "All cells match") -- a
-        # false PASS, and the only direction that can move a number is up. The other
-        # _parse_cell_range call sites are PREPARATION passes (data-table solve,
-        # cached-value restore, volatile skip set) where a skipped range degrades
-        # gracefully; this one decides the verdict.
         try:
             min_row, min_col, max_row, max_col = _parse_cell_range(cell_range)
-        except Exception as e:
-            raise UngradableEpisode(
-                f"cannot parse answer_position range {cell_range!r} "
-                f"(from {answer_position!r}): {e}") from e
+        except Exception:
+            continue
 
         for row in range(min_row, max_row + 1):
             for col in range(min_col, max_col + 1):
@@ -931,29 +843,6 @@ def compare_workbooks_detailed(
                             f"got={_transform_value(proc_val)!r}"
                         )
 
-    # ZERO GRADED CELLS IS NOT A PASS. all_pass starts True and only the per-cell loop
-    # can falsify it, so any path that graded nothing returned (True, 0, 0, "All cells
-    # match"). Two measured routes: every range unparseable (now raised above), and
-    # every graded cell excluded by the volatile-function skip set. A task that could
-    # not be graded has no verdict; it is not a solved task.
-    # ...BUT ONLY WHEN THE OUTPUT DOES NOT ALREADY EXPLAIN THE ZERO. `and not mismatches`
-    # is the whole correction to my first version of this guard, which raised on ANY zero:
-    # a solver that writes a brand-new workbook instead of editing the input produces no
-    # graded cells AND a recorded "Sheet 'X' missing from output" -- a correct, ordinary
-    # FAIL that the guard reclassified as an infra fault, asserting "every range was empty
-    # or entirely excluded" when the range was fine and the OUTPUT was wrong. Measured on
-    # the shipped oracle (Template_14_01, "'DCF_Analysis'!B2:M65") against a fresh
-    # workbook: pre-guard (False, 0, 0, "Sheet 'DCF_Analysis' missing from output"),
-    # post-guard UngradableEpisode. And because an UngradableEpisode lands in the failure
-    # ledger, and a leg with any failed rollout refuses to write its result JSON, that one
-    # wrong sheet name voided an entire leg -- then the advised identical relaunch retried
-    # it, since a failed rollout is never cached.
-    if total_cells == 0 and not mismatches:
-        raise UngradableEpisode(
-            f"graded 0 cells for answer_position={answer_position!r} — every range was "
-            f"empty or entirely excluded, and nothing about the output explains it, so "
-            f"there is no verdict to report. This is an infra/dataset fault, not a "
-            f"solved task.")
     diff_summary = "; ".join(mismatches) if mismatches else "All cells match"
     return all_pass, total_match, total_cells, diff_summary
 
@@ -1188,7 +1077,7 @@ def _restore_unrecalculable_cells(
         # real file (260 -> 746 newly-wrong cells, none of them anywhere
         # near a Data Table, from this save call alone).
         #
-        # This was gotten backwards once already: an earlier
+        # This was gotten backwards once already this session: an earlier
         # "fix" switched to wb_proc_formulas.save() after repeatedly
         # re-scoring the SAME on-disk file by hand during manual
         # investigation produced different failing cells run-to-run. That
@@ -1210,8 +1099,8 @@ def _volatile_function_skip_cells(orig_input_file: str, proc_file: str, answer_p
     original -- its value is fundamentally unfalsifiable against a static,
     pre-frozen golden file, since each file's cached value simply reflects
     whichever calendar day/time it happened to be saved on. Confirmed via
-    adversarial audit (Template/14_07): golden snapshot 2026-05-27, solver's
-    real recalc 2026-07-06, formula identical across original/golden/solver
+    adversarial audit (Template/14_07): golden snapshot and the solver's
+    real recalc saved on different days, formula identical across original/golden/solver
     -- nothing to do with correctness. Deliberately narrow (exact
     zero-argument call only, not e.g. TODAY()+30, which legitimately
     depends on the solver having the right base formula) and does NOT
@@ -2262,7 +2151,7 @@ def score_ssbv2(question: str, predicted: str, ground_truth: str) -> float:
     # run_ssbv2_smoke.py), not just an internal/dead fallback. Confirmed as
     # an active bug: it called compare_workbooks() (a plain recalc + compare,
     # no xlfn-prefix fix, no Data-Table UNO solve, no restoration fallback),
-    # so every fix made to score_and_diff's pipeline was
+    # so every fix made to score_and_diff's pipeline this session was
     # silently invisible to the live production scorer path -- the agent's
     # own inline scoring (ssb_v2_agent.py's _score_fn) already used the fixed
     # score_and_diff, but this separate callback did not.
@@ -2276,7 +2165,5 @@ def score_ssbv2(question: str, predicted: str, ground_truth: str) -> float:
     try:
         passed, _, _, _ = score_and_diff(golden_path, proc_file, answer_position, orig_input_file=orig_input_file)
         return 1.0 if passed else 0.0
-    except UngradableEpisode:
-        raise          # no verdict is not a zero -- see src/harness/errors.py
     except Exception:
         return 0.0

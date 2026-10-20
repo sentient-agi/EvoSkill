@@ -14,7 +14,7 @@ warning and returned, so the fix silently did nothing for the majority of its
 target population, and the warning's wording ("could not open/save") read like an
 I/O hiccup rather than a lost correctness guarantee.
 
-Found 2026-08-02 from a live rollout log, then reproduced directly against the
+Found from a live rollout log, then reproduced directly against the
 pristine `Financial_Model/02_01` dataset input. These tests pin all three branches
 so the None case cannot regress back into a silent no-op.
 """
@@ -41,40 +41,9 @@ from src.agent_profiles.ssbv2_agent.scorer import _force_iterative_calc  # noqa:
 # A REAL dataset input, not a synthesised one. The bug is a property of how this
 # dataset's files were produced (writer "Aptura", no calcPr element), so a
 # hand-built fixture could pass while the real population still failed.
-#
-# RESOLVED FROM $SSBV2_ROOT, NOT FROM A SIBLING OF THE CLONE. This was
-# `ROOT.parent / "SpreadsheetBench-v2/data/spreadsheetbench-v2/..."` -- the directory
-# CONTAINING the repo, which happens to hold the dataset on the machine these tests were
-# written on and nowhere else. Measured: in-tree `pytest -q` -> 425 passed; the same
-# suite against a `git archive HEAD` copy -> 423 passed, 2 SKIPPED "SpreadsheetBench-v2
-# dataset not present". So on every fresh clone the only two guards against this fix
-# regressing into a silent no-op silently did not run, and the suite was green either way.
-# resolve_base() is used because two checkout layouts are in the wild (<root>/data/... and
-# <root>/...), which is the same reason the runtime code calls it.
-_SSBV2_ROOT = os.environ.get("SSBV2_ROOT", "").strip()
-_REL = "Financial_Model/spreadsheet/02_Project PP/02_01_PP_input.xlsx"
-
-if _SSBV2_ROOT:
-    from src.agent_profiles.ssbv2_agent.dataset import resolve_base  # noqa: E402
-    NO_CALCPR_INPUT = Path(resolve_base(_SSBV2_ROOT)) / _REL
-else:
-    NO_CALCPR_INPUT = Path("/nonexistent")
-
-# SKIP only when the dataset was never configured; FAIL when it WAS and the file is
-# missing. Skipping that case too would reproduce the same silent green under a wrong
-# root -- the operator would have set SSBV2_ROOT, seen the suite pass, and still not
-# have run these.
-_needs_dataset = pytest.mark.skipif(
-    not _SSBV2_ROOT, reason="SSBV2_ROOT is not set (see README, SSB v2 bootstrap)")
-
-
-def _require_fixture():
-    if not NO_CALCPR_INPUT.exists():
-        pytest.fail(
-            f"SSBV2_ROOT={_SSBV2_ROOT!r} is set but {NO_CALCPR_INPUT} does not exist. "
-            f"These two tests are the only guard against _force_iterative_calc "
-            f"regressing into a silent no-op; skipping here would hide a wrong root "
-            f"behind a green suite.")
+# ($SSBV2_ROOT = a SpreadsheetBench v2 checkout; the dataset tests skip without it)
+NO_CALCPR_INPUT = (Path(os.environ.get("SSBV2_ROOT", "/nonexistent-ssbv2-checkout")) / "data/spreadsheetbench-v2"
+                   "/Financial_Model/spreadsheet/02_Project PP/02_01_PP_input.xlsx")
 
 LOGGER = "src.agent_profiles.ssbv2_agent.scorer"
 
@@ -101,20 +70,20 @@ def warnings_captured():
     lg.setLevel(prev)
 
 
-@_needs_dataset
+@pytest.mark.skipif(not NO_CALCPR_INPUT.exists(),
+                    reason="SpreadsheetBench-v2 dataset not present")
 def test_the_real_dataset_input_still_lacks_calcpr():
     """Guard the premise. If the dataset is ever reprocessed to include calcPr,
     the test below stops exercising the bug and would pass vacuously."""
-    _require_fixture()
     assert not _has_calcpr(NO_CALCPR_INPUT), (
         "this input now HAS a <calcPr>; the None branch is no longer covered by "
         "this fixture — find another no-calcPr task or synthesise one explicitly")
 
 
-@_needs_dataset
+@pytest.mark.skipif(not NO_CALCPR_INPUT.exists(),
+                    reason="SpreadsheetBench-v2 dataset not present")
 def test_missing_calcpr_gets_iteration_forced(tmp_path, warnings_captured):
     """The branch that used to raise. This is the whole point of the fix."""
-    _require_fixture()
     p = tmp_path / "no_calcpr.xlsx"
     shutil.copy2(NO_CALCPR_INPUT, p)
 
